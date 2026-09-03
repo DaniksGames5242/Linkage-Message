@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Linkage Message</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Auth screen -->
+  <div id="auth-screen">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="dot"></div>
+        <h1>Linkage Message</h1>
+      </div>
+      <p class="sub">Введите ник, чтобы войти в чат</p>
+
+      <form id="auth-form">
+        <div class="field">
+          <label for="nickname">Ваш ник</label>
+          <input id="nickname" type="text" maxlength="24" autocomplete="off" placeholder="Например, Danik" required />
+        </div>
+        <button class="primary" type="submit" id="auth-submit">Войти</button>
+        <div class="auth-error" id="auth-error"></div>
+      </form>
+
+      <div class="auth-hint">
+        Авторизация анонимная (Firebase Auth). Ник сохраняется в этом браузере.
+      </div>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="hidden">
+    <div id="sidebar-backdrop" class="hidden"></div>
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <div class="me">
+          <div class="avatar" id="me-avatar">?</div>
+          <div>
+            <div class="me-name" id="me-name">—</div>
+            <div class="me-status">в сети</div>
+          </div>
+        </div>
+        <button class="icon-btn" id="logout-btn" title="Выйти">⏻</button>
+      </div>
+
+      <form id="new-room-form">
+        <input id="new-room-input" type="text" maxlength="32" placeholder="Название комнаты…" autocomplete="off" />
+        <button type="submit">+</button>
+      </form>
+
+      <div id="room-list">
+        <div class="empty-rooms">Комнат пока нет.<br />Создайте первую выше ↑</div>
+      </div>
+    </aside>
+
+    <section id="chat">
+      <div id="empty-state">
+        <div class="dot"></div>
+        <div>Выберите комнату слева<br />или создайте новую</div>
+      </div>
+
+      <div id="chat-header" class="hidden">
+        <div class="room-hash" id="chat-room-hash">#</div>
+        <div>
+          <div id="chat-title">—</div>
+          <div id="chat-sub">—</div>
+        </div>
+      </div>
+
+      <div id="messages" class="hidden"></div>
+
+      <form id="composer" class="hidden">
+        <textarea id="msg-input" rows="1" placeholder="Написать сообщение…" autocomplete="off"></textarea>
+        <button type="submit" id="send-btn">➤</button>
+      </form>
+    </section>
+  </div>
+
+  <script src="firebase-config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
