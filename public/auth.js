@@ -103,7 +103,7 @@ export function watchAuthState(onChange) {
 
 export async function logout() {
   await signOut(auth);
-  location.reload();
+  window.location.href = "/login";
 }
 
 export async function touchPresence(uid) {

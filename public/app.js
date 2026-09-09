@@ -1,15 +1,5 @@
-import { configLooksEmpty, auth } from "./firebase.js";
-import {
-  requestOtp,
-  confirmOtp,
-  resetOtpState,
-  fetchMyProfile,
-  usernameAvailable,
-  completeProfile,
-  watchAuthState,
-  logout,
-  touchPresence,
-} from "./auth.js";
+import { configLooksEmpty } from "./firebase.js";
+import { fetchMyProfile, usernameAvailable, watchAuthState, logout, touchPresence } from "./auth.js";
 import { searchUser, addContact, listenContacts, getProfile } from "./contacts.js";
 import { ensureChat, listenMyChats, listenMessages, sendMessage } from "./chats.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications } from "./settings.js";
@@ -30,31 +20,7 @@ const AVATAR_EMOJIS = ["😀", "😎", "🐱", "🐶", "🦊", "🐼", "🌟", "
 
 // ---------- DOM refs ----------
 
-const screenPhone = document.getElementById("screen-phone");
-const screenOtp = document.getElementById("screen-otp");
-const screenProfile = document.getElementById("screen-profile");
 const appEl = document.getElementById("app");
-
-const phoneForm = document.getElementById("phone-form");
-const phoneInput = document.getElementById("phone-input");
-const phoneSubmit = document.getElementById("phone-submit");
-const phoneError = document.getElementById("phone-error");
-
-const otpForm = document.getElementById("otp-form");
-const otpInput = document.getElementById("otp-input");
-const otpSubmit = document.getElementById("otp-submit");
-const otpError = document.getElementById("otp-error");
-const otpSub = document.getElementById("otp-sub");
-const otpBack = document.getElementById("otp-back");
-const otpResend = document.getElementById("otp-resend");
-
-const profileForm = document.getElementById("profile-form");
-const displaynameInput = document.getElementById("displayname-input");
-const usernameInput = document.getElementById("username-input");
-const usernameHint = document.getElementById("username-hint");
-const profileSubmit = document.getElementById("profile-submit");
-const profileError = document.getElementById("profile-error");
-const avatarPicker = document.getElementById("avatar-picker");
 
 const sidebar = document.getElementById("sidebar");
 const meAvatar = document.getElementById("me-avatar");
@@ -104,17 +70,10 @@ const notifPreview = document.getElementById("notif-preview");
 const settingsNotifSave = document.getElementById("settings-notif-save");
 const settingsNotifError = document.getElementById("settings-notif-error");
 
-if (configLooksEmpty) {
-  phoneError.textContent = "Firebase не настроен: заполните public/firebase-config.js своими ключами проекта.";
-  phoneSubmit.disabled = true;
-}
-
 // ---------- State ----------
 
 let currentUser = null;
 let myProfile = null;
-let pendingPhone = null;
-let selectedSetupEmoji = null;
 let selectedSettingsEmoji = null;
 
 let chats = [];
@@ -129,11 +88,6 @@ let unsubMessages = null;
 let unsubContacts = null;
 let chatsInitialized = false;
 let presenceInterval = null;
-
-function showScreen(el) {
-  [screenPhone, screenOtp, screenProfile, appEl].forEach((s) => s.classList.add("hidden"));
-  el.classList.remove("hidden");
-}
 
 // ---------- Avatar pickers ----------
 
@@ -164,135 +118,29 @@ function buildAvatarPicker(container, currentColor, currentEmoji, onSelect) {
   });
 }
 
-// ---------- 1. Phone entry ----------
+// ---------- Auth state ----------
+// This page assumes an authenticated user with a completed profile.
+// Anything else redirects to /login, which owns the phone/OTP/profile-setup flow.
 
-phoneForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (configLooksEmpty) return;
-  phoneError.textContent = "";
-  phoneSubmit.disabled = true;
-  try {
-    pendingPhone = await requestOtp(phoneInput.value);
-    otpSub.textContent = `Код отправлен на ${pendingPhone}`;
-    otpInput.value = "";
-    showScreen(screenOtp);
-    startResendCooldown();
-  } catch (err) {
-    console.error(err);
-    phoneError.textContent = "Не удалось отправить код: " + (err.message || err);
-  } finally {
-    phoneSubmit.disabled = false;
-  }
-});
-
-// ---------- 2. OTP ----------
-
-otpForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  otpError.textContent = "";
-  otpSubmit.disabled = true;
-  try {
-    await confirmOtp(otpInput.value.trim());
-    // onAuthStateChanged takes over from here
-  } catch (err) {
-    console.error(err);
-    otpError.textContent = "Неверный код. Попробуйте снова.";
-  } finally {
-    otpSubmit.disabled = false;
-  }
-});
-
-otpBack.addEventListener("click", () => {
-  resetOtpState();
-  pendingPhone = null;
-  showScreen(screenPhone);
-});
-
-let resendTimer = null;
-function startResendCooldown() {
-  let seconds = 60;
-  otpResend.disabled = true;
-  otpResend.textContent = `Отправить код повторно (${seconds}с)`;
-  clearInterval(resendTimer);
-  resendTimer = setInterval(() => {
-    seconds -= 1;
-    if (seconds <= 0) {
-      clearInterval(resendTimer);
-      otpResend.disabled = false;
-      otpResend.textContent = "Отправить код повторно";
-    } else {
-      otpResend.textContent = `Отправить код повторно (${seconds}с)`;
-    }
-  }, 1000);
+function goToLogin() {
+  window.location.href = "/login";
 }
 
-otpResend.addEventListener("click", async () => {
-  if (!phoneInput.value) return;
-  otpError.textContent = "";
-  try {
-    pendingPhone = await requestOtp(phoneInput.value);
-    startResendCooldown();
-  } catch (err) {
-    otpError.textContent = "Не удалось отправить код: " + (err.message || err);
-  }
-});
-
-// ---------- 3. Profile setup ----------
-
-const checkUsernameDebounced = debounce(async (raw) => {
-  const uname = normalizeUsername(raw);
-  if (!isValidUsername(uname)) {
-    usernameHint.textContent = "3-20 символов: латиница, цифры, _";
-    usernameHint.className = "field-hint";
-    return;
-  }
-  const available = await usernameAvailable(uname);
-  usernameHint.textContent = available ? "Юзернейм свободен" : "Уже занят";
-  usernameHint.className = "field-hint " + (available ? "ok" : "bad");
-}, 400);
-
-usernameInput.addEventListener("input", () => checkUsernameDebounced(usernameInput.value));
-
-profileForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  profileError.textContent = "";
-  profileSubmit.disabled = true;
-  try {
-    await completeProfile({
-      uid: currentUser.uid,
-      phoneNumber: currentUser.phoneNumber,
-      username: usernameInput.value,
-      displayName: displaynameInput.value,
-      avatarEmoji: selectedSetupEmoji,
-    });
-    myProfile = await fetchMyProfile(currentUser.uid);
-    enterApp();
-  } catch (err) {
-    console.error(err);
-    profileError.textContent = err.message || "Не удалось сохранить профиль";
-  } finally {
-    profileSubmit.disabled = false;
-  }
-});
-
-// ---------- Auth state ----------
-
-if (!configLooksEmpty) {
+if (configLooksEmpty) {
+  goToLogin();
+} else {
   watchAuthState(async (user) => {
     if (!user) {
       currentUser = null;
       myProfile = null;
       cleanupSubscriptions();
-      showScreen(screenPhone);
+      goToLogin();
       return;
     }
     currentUser = user;
     myProfile = await fetchMyProfile(user.uid);
     if (!myProfile) {
-      const color = colorForUid(user.uid);
-      selectedSetupEmoji = null;
-      buildAvatarPicker(avatarPicker, color, null, (emoji) => (selectedSetupEmoji = emoji));
-      showScreen(screenProfile);
+      goToLogin();
       return;
     }
     enterApp();
@@ -311,7 +159,7 @@ function cleanupSubscriptions() {
 // ---------- Main app ----------
 
 function enterApp() {
-  showScreen(appEl);
+  appEl.classList.remove("hidden");
   renderMe();
   listenContactsList();
   listenChatsList();
