@@ -8,43 +8,17 @@
 </head>
 <body>
 
-  <!-- 1. Email + password -->
-  <div id="screen-email" class="auth-screen">
-    <div class="auth-card" id="email-card">
+  <div id="screen-auth" class="auth-screen">
+    <div class="auth-card" id="auth-card">
       <div class="auth-logo">
         <div class="dot"></div>
         <h1>Linkage Message</h1>
       </div>
-      <p class="sub" id="email-sub">Войдите в свой аккаунт</p>
+      <p class="sub" id="auth-sub">Войдите в свой аккаунт</p>
 
-      <form id="email-form">
-        <div class="field">
-          <label for="email-input">Email</label>
-          <input id="email-input" type="email" placeholder="you@example.com" autocomplete="email" required />
-        </div>
-        <div class="field">
-          <label for="password-input">Пароль</label>
-          <input id="password-input" type="password" placeholder="Минимум 6 символов" autocomplete="current-password" required />
-        </div>
-        <button class="primary" type="submit" id="email-submit">Войти</button>
-        <div class="auth-error" id="email-error"></div>
-      </form>
-
-      <button type="button" class="switch-mode-btn" id="switch-mode-btn">Ещё нет аккаунта? Зарегистрируйтесь</button>
-    </div>
-  </div>
-
-  <!-- 2. Profile setup (first login) -->
-  <div id="screen-profile" class="auth-screen hidden">
-    <div class="auth-card">
-      <div class="auth-logo">
-        <div class="dot"></div>
-        <h1>Создайте профиль</h1>
-      </div>
-      <p class="sub">Придумайте юзернейм и имя, которые увидят другие</p>
-
-      <form id="profile-form">
-        <div class="field avatar-upload-field">
+      <form id="auth-form">
+        <!-- Register-only fields -->
+        <div class="field avatar-upload-field hidden" id="register-avatar-field">
           <div class="avatar-upload" id="avatar-upload">
             <div class="avatar avatar-xl" id="setup-avatar-preview">?</div>
             <button type="button" class="avatar-camera-btn" id="setup-avatar-pick-btn" title="Загрузить фото">
@@ -54,18 +28,40 @@
           <input type="file" id="setup-avatar-input" accept="image/*" class="hidden" />
           <button type="button" class="link-btn" id="setup-avatar-remove-btn" hidden>Удалить фото</button>
         </div>
-        <div class="field">
-          <label for="displayname-input">Имя</label>
-          <input id="displayname-input" type="text" maxlength="40" placeholder="Например, Даник" required />
+
+        <div class="field hidden" id="nickname-field">
+          <label for="nickname-input">Ник</label>
+          <input id="nickname-input" type="text" maxlength="40" autocomplete="off" />
         </div>
+
         <div class="field">
-          <label for="username-input">Юзернейм</label>
-          <input id="username-input" type="text" maxlength="20" placeholder="danik_games" autocomplete="off" required />
-          <div class="field-hint" id="username-hint">3-20 символов: латиница, цифры, _</div>
+          <label for="username-input">Имя пользователя</label>
+          <input id="username-input" type="text" maxlength="20" autocomplete="username" required />
+          <div class="field-hint hidden" id="username-hint"></div>
         </div>
-        <button class="primary" type="submit" id="profile-submit">Продолжить</button>
-        <div class="auth-error" id="profile-error"></div>
+
+        <div class="field">
+          <label for="password-input">Пароль</label>
+          <div class="password-field">
+            <input id="password-input" type="password" autocomplete="current-password" required />
+            <button type="button" class="password-toggle" id="password-toggle"></button>
+          </div>
+        </div>
+
+        <!-- Register-only field -->
+        <div class="field hidden" id="confirm-password-field">
+          <label for="confirm-password-input">Подтвердите пароль</label>
+          <div class="password-field">
+            <input id="confirm-password-input" type="password" autocomplete="new-password" />
+            <button type="button" class="password-toggle" id="confirm-password-toggle"></button>
+          </div>
+        </div>
+
+        <button class="primary" type="submit" id="auth-submit">Войти</button>
+        <div class="auth-error" id="auth-error"></div>
       </form>
+
+      <button type="button" class="switch-mode-btn" id="switch-mode-btn">Ещё нет аккаунта? Зарегистрируйтесь</button>
     </div>
   </div>
 

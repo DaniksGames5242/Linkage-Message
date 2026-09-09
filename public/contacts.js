@@ -7,45 +7,48 @@ import {
   collection,
   onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { normalizeEmail, isValidEmail, normalizeUsername, isValidUsername } from "./utils.js";
+import { normalizeUsername, isValidUsername } from "./utils.js";
 
-// Returns { uid, profile } | null. Tries email first if it looks like one, else username.
+// Returns { uid, profile } | null - looks a user up by username.
 export async function searchUser(rawQuery, myUid) {
   const raw = (rawQuery || "").trim();
   if (!raw) return null;
 
-  const email = isValidEmail(raw) ? normalizeEmail(raw) : null;
-  let targetUid = null;
+  const uname = normalizeUsername(raw);
+  if (!isValidUsername(uname)) return null;
 
-  if (email) {
-    const emailSnap = await getDoc(doc(db, "emails", email));
-    if (emailSnap.exists()) targetUid = emailSnap.data().uid;
-  } else {
-    const uname = normalizeUsername(raw);
-    if (isValidUsername(uname)) {
-      const unameSnap = await getDoc(doc(db, "usernames", uname));
-      if (unameSnap.exists()) targetUid = unameSnap.data().uid;
-    }
-  }
+  const unameSnap = await getDoc(doc(db, "usernames", uname));
+  if (!unameSnap.exists()) return null;
+  const targetUid = unameSnap.data().uid;
 
-  if (!targetUid) return null;
   if (targetUid === myUid) return { uid: targetUid, profile: null, self: true };
 
   const profileSnap = await getDoc(doc(db, "users", targetUid));
   if (!profileSnap.exists()) return null;
-  const profile = profileSnap.data();
 
-  if (email && profile.privacy?.findByEmail === "nobody") {
-    return null;
-  }
-
-  return { uid: targetUid, profile };
+  return { uid: targetUid, profile: profileSnap.data() };
 }
 
 export async function addContact(myUid, contactUid) {
   await setDoc(doc(db, "users", myUid, "contacts", contactUid), {
     addedAt: serverTimestamp(),
   });
+}
+
+export async function setContactAlias(myUid, contactUid, { firstName, lastName }) {
+  await setDoc(
+    doc(db, "users", myUid, "contacts", contactUid),
+    {
+      firstName: (firstName || "").trim().slice(0, 40),
+      lastName: (lastName || "").trim().slice(0, 40),
+    },
+    { merge: true }
+  );
+}
+
+export function contactDisplayName(contact, fallbackProfile) {
+  const alias = [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim();
+  return alias || fallbackProfile?.displayName || "—";
 }
 
 export function listenContacts(myUid, onChange) {
@@ -57,7 +60,10 @@ export function listenContacts(myUid, onChange) {
         return s.exists() ? { uid, profile: s.data() } : null;
       })
     );
-    onChange(profiles.filter(Boolean));
+    const aliasByUid = new Map(snap.docs.map((d) => [d.id, d.data()]));
+    onChange(
+      profiles.filter(Boolean).map((entry) => ({ ...entry, alias: aliasByUid.get(entry.uid) || null }))
+    );
   });
 }
 

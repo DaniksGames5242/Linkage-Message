@@ -1,92 +1,91 @@
 import { configLooksEmpty } from "./firebase.js";
+import { registerAccount, loginAccount, fetchMyProfile, usernameAvailable, watchAuthState } from "./auth.js";
+import { addPersonalNotice } from "./notify.js";
 import {
-  registerWithEmail,
-  loginWithEmail,
-  fetchMyProfile,
-  usernameAvailable,
-  completeProfile,
-  watchAuthState,
-} from "./auth.js";
-import { colorForUid, debounce, normalizeUsername, isValidUsername, resizeImageToDataUrl } from "./utils.js";
+  colorForUid,
+  debounce,
+  normalizeUsername,
+  isValidUsername,
+  resizeImageToDataUrl,
+  attachPasswordToggle,
+  describeDevice,
+} from "./utils.js";
 
-const screenEmail = document.getElementById("screen-email");
-const screenProfile = document.getElementById("screen-profile");
-const emailCard = document.getElementById("email-card");
-
-const emailSub = document.getElementById("email-sub");
-const emailForm = document.getElementById("email-form");
-const emailInput = document.getElementById("email-input");
-const passwordInput = document.getElementById("password-input");
-const emailSubmit = document.getElementById("email-submit");
-const emailError = document.getElementById("email-error");
+const authCard = document.getElementById("auth-card");
+const authSub = document.getElementById("auth-sub");
+const authForm = document.getElementById("auth-form");
+const authSubmit = document.getElementById("auth-submit");
+const authError = document.getElementById("auth-error");
 const switchModeBtn = document.getElementById("switch-mode-btn");
 
-const profileForm = document.getElementById("profile-form");
-const displaynameInput = document.getElementById("displayname-input");
+const registerAvatarField = document.getElementById("register-avatar-field");
+const nicknameField = document.getElementById("nickname-field");
+const nicknameInput = document.getElementById("nickname-input");
 const usernameInput = document.getElementById("username-input");
 const usernameHint = document.getElementById("username-hint");
-const profileSubmit = document.getElementById("profile-submit");
-const profileError = document.getElementById("profile-error");
+const passwordInput = document.getElementById("password-input");
+const confirmPasswordField = document.getElementById("confirm-password-field");
+const confirmPasswordInput = document.getElementById("confirm-password-input");
 
 const avatarPreview = document.getElementById("setup-avatar-preview");
 const avatarPickBtn = document.getElementById("setup-avatar-pick-btn");
 const avatarInput = document.getElementById("setup-avatar-input");
 const avatarRemoveBtn = document.getElementById("setup-avatar-remove-btn");
 
+attachPasswordToggle(passwordInput, document.getElementById("password-toggle"));
+attachPasswordToggle(confirmPasswordInput, document.getElementById("confirm-password-toggle"));
+
 if (configLooksEmpty) {
-  emailError.textContent = "Firebase не настроен: заполните public/firebase-config.js своими ключами проекта.";
-  emailSubmit.disabled = true;
+  authError.textContent = "Firebase не настроен: заполните public/firebase-config.js своими ключами проекта.";
+  authSubmit.disabled = true;
 }
 
-let currentUser = null;
 let mode = "login";
 let selectedAvatarImage = null;
 
-function showScreen(el) {
-  [screenEmail, screenProfile].forEach((s) => s.classList.add("hidden"));
-  el.classList.remove("hidden");
-}
-
-// ---------- 1. Email + password ----------
-
 function applyMode() {
-  emailSubmit.textContent = mode === "register" ? "Зарегистрироваться" : "Войти";
-  emailSub.textContent = mode === "register" ? "Создайте аккаунт по email" : "Войдите в свой аккаунт";
-  switchModeBtn.textContent =
-    mode === "register" ? "Уже есть аккаунт? Войдите" : "Ещё нет аккаунта? Зарегистрируйтесь";
-  emailError.textContent = "";
+  const isRegister = mode === "register";
+  registerAvatarField.classList.toggle("hidden", !isRegister);
+  nicknameField.classList.toggle("hidden", !isRegister);
+  confirmPasswordField.classList.toggle("hidden", !isRegister);
+  nicknameInput.required = isRegister;
+  confirmPasswordInput.required = isRegister;
+
+  authSubmit.textContent = isRegister ? "Зарегистрироваться" : "Войти";
+  authSub.textContent = isRegister ? "Создайте аккаунт" : "Войдите в свой аккаунт";
+  switchModeBtn.textContent = isRegister ? "Уже есть аккаунт? Войдите" : "Ещё нет аккаунта? Зарегистрируйтесь";
+  authError.textContent = "";
+  usernameHint.classList.add("hidden");
 }
 
 switchModeBtn.addEventListener("click", () => {
   mode = mode === "login" ? "register" : "login";
-  emailCard.classList.add("card-flip");
-  setTimeout(() => emailCard.classList.remove("card-flip"), 260);
+  authCard.classList.add("card-flip");
+  setTimeout(() => authCard.classList.remove("card-flip"), 260);
   applyMode();
 });
 
-emailForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (configLooksEmpty) return;
-  emailError.textContent = "";
-  emailSubmit.disabled = true;
-  try {
-    if (mode === "register") {
-      await registerWithEmail(emailInput.value, passwordInput.value);
-    } else {
-      await loginWithEmail(emailInput.value, passwordInput.value);
-    }
-    // onAuthStateChanged takes over from here
-  } catch (err) {
-    console.error(err);
-    emailError.textContent = err.message || "Не удалось войти";
-  } finally {
-    emailSubmit.disabled = false;
+const checkUsernameDebounced = debounce(async (raw) => {
+  if (mode !== "register") return;
+  const uname = normalizeUsername(raw);
+  if (!isValidUsername(uname)) {
+    usernameHint.textContent = "3-20 символов: латиница, цифры, _";
+    usernameHint.className = "field-hint";
+    usernameHint.classList.remove("hidden");
+    return;
   }
-});
+  const available = await usernameAvailable(uname);
+  usernameHint.textContent = available ? "Свободно" : "Уже занято";
+  usernameHint.className = "field-hint " + (available ? "ok" : "bad");
+  usernameHint.classList.remove("hidden");
+}, 400);
 
-// ---------- 2. Profile setup ----------
+usernameInput.addEventListener("input", () => checkUsernameDebounced(usernameInput.value));
 
-function renderAvatarPreview(color) {
+// ---------- Avatar (register only) ----------
+
+function renderAvatarPreview() {
+  const color = colorForUid(normalizeUsername(usernameInput.value) || "?");
   avatarPreview.style.background = color;
   if (selectedAvatarImage) {
     avatarPreview.innerHTML = `<img src="${selectedAvatarImage}" alt="" />`;
@@ -104,82 +103,70 @@ avatarInput.addEventListener("change", async () => {
   avatarInput.value = "";
   if (!file) return;
   if (!file.type.startsWith("image/")) {
-    profileError.textContent = "Выберите файл изображения";
+    authError.textContent = "Выберите файл изображения";
     return;
   }
   try {
     selectedAvatarImage = await resizeImageToDataUrl(file);
-    profileError.textContent = "";
-    renderAvatarPreview(currentUser ? colorForUid(currentUser.uid) : "#5b8cff");
+    authError.textContent = "";
+    renderAvatarPreview();
   } catch (err) {
     console.error(err);
-    profileError.textContent = "Не удалось загрузить фото";
+    authError.textContent = "Не удалось загрузить фото";
   }
 });
 
 avatarRemoveBtn.addEventListener("click", () => {
   selectedAvatarImage = null;
-  renderAvatarPreview(currentUser ? colorForUid(currentUser.uid) : "#5b8cff");
+  renderAvatarPreview();
 });
 
-const checkUsernameDebounced = debounce(async (raw) => {
-  const uname = normalizeUsername(raw);
-  if (!isValidUsername(uname)) {
-    usernameHint.textContent = "3-20 символов: латиница, цифры, _";
-    usernameHint.className = "field-hint";
-    return;
-  }
-  const available = await usernameAvailable(uname);
-  usernameHint.textContent = available ? "Юзернейм свободен" : "Уже занят";
-  usernameHint.className = "field-hint " + (available ? "ok" : "bad");
-}, 400);
-
-usernameInput.addEventListener("input", () => checkUsernameDebounced(usernameInput.value));
-
-profileForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  profileError.textContent = "";
-  profileSubmit.disabled = true;
-  try {
-    await completeProfile({
-      uid: currentUser.uid,
-      email: currentUser.email,
-      username: usernameInput.value,
-      displayName: displaynameInput.value,
-      avatarImage: selectedAvatarImage,
-    });
-    goToApp();
-  } catch (err) {
-    console.error(err);
-    profileError.textContent = err.message || "Не удалось сохранить профиль";
-  } finally {
-    profileSubmit.disabled = false;
-  }
-});
-
-// ---------- Auth state ----------
+// ---------- Submit ----------
 
 function goToApp() {
   window.location.href = "/";
 }
 
+authForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (configLooksEmpty) return;
+  authError.textContent = "";
+  authSubmit.disabled = true;
+  try {
+    if (mode === "register") {
+      const user = await registerAccount({
+        username: usernameInput.value,
+        password: passwordInput.value,
+        confirmPassword: confirmPasswordInput.value,
+        nickname: nicknameInput.value,
+        avatarImage: selectedAvatarImage,
+      });
+      await addPersonalNotice(user.uid, "Добро пожаловать в Linkage Message! Ваш аккаунт создан.");
+    } else {
+      const user = await loginAccount({
+        username: usernameInput.value,
+        password: passwordInput.value,
+      });
+      await addPersonalNotice(user.uid, `Выполнен вход в аккаунт: ${describeDevice()}.`);
+    }
+    goToApp();
+  } catch (err) {
+    console.error(err);
+    authError.textContent = err.message || "Не удалось войти";
+  } finally {
+    authSubmit.disabled = false;
+  }
+});
+
+// ---------- Auth state ----------
+// If already signed in with a complete profile, skip straight to the app.
+
 if (!configLooksEmpty) {
   applyMode();
+  renderAvatarPreview();
   watchAuthState(async (user) => {
-    if (!user) {
-      currentUser = null;
-      showScreen(screenEmail);
-      return;
-    }
-    currentUser = user;
+    if (!user) return;
     const profile = await fetchMyProfile(user.uid);
-    if (!profile) {
-      selectedAvatarImage = null;
-      renderAvatarPreview(colorForUid(user.uid));
-      showScreen(screenProfile);
-      return;
-    }
-    // Already signed in with a complete profile - nothing to do here.
-    goToApp();
+    if (profile) goToApp();
   });
 }

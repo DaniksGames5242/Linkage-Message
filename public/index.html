@@ -34,40 +34,36 @@
         </div>
       </div>
 
-      <div id="verify-banner" class="hidden">
-        <span>Подтвердите email — мы отправили письмо со ссылкой.</span>
-        <button type="button" class="link-btn" id="verify-resend-btn">Отправить повторно</button>
-      </div>
-
       <div id="search-box">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="search-input" type="text" placeholder="Найти по юзернейму или email…" autocomplete="off" />
+        <input id="search-input" type="text" placeholder="Найти по юзернейму…" autocomplete="off" />
       </div>
 
       <div id="search-result" class="hidden"></div>
 
-      <div id="tabs">
-        <button class="tab-btn active" data-tab="chats">Чаты</button>
-        <button class="tab-btn" data-tab="contacts">Контакты</button>
-      </div>
+      <div id="chat-list"></div>
 
-      <div id="chat-list" class="tab-panel"></div>
-      <div id="contact-list" class="tab-panel hidden"></div>
+      <button type="button" id="fab-new-chat" title="Новый чат">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 0 1 4 4L7 21l-4 1 1-4z"/></svg>
+      </button>
     </aside>
 
     <section id="chat">
       <div id="empty-state">
         <div class="dot"></div>
-        <div>Выберите чат слева<br />или найдите контакт по юзернейму/email</div>
+        <div>Выберите чат слева<br />или найдите контакт по юзернейму</div>
       </div>
 
       <div id="chat-header" class="hidden">
         <button class="icon-btn only-mobile" id="back-to-list-btn">←</button>
         <div id="chat-header-avatar"></div>
-        <div>
+        <div class="chat-header-meta">
           <div id="chat-title">—</div>
           <div id="chat-sub">—</div>
         </div>
+        <button class="icon-btn hidden" id="edit-contact-btn" title="Изменить имя контакта">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        </button>
       </div>
 
       <div id="messages" class="hidden"></div>
@@ -77,6 +73,25 @@
         <button type="submit" id="send-btn">➤</button>
       </form>
     </section>
+  </div>
+
+  <!-- Edit contact alias modal -->
+  <div id="alias-overlay" class="hidden">
+    <div class="alias-panel">
+      <h3>Имя контакта</h3>
+      <div class="field">
+        <label for="alias-firstname">Имя</label>
+        <input id="alias-firstname" type="text" maxlength="40" />
+      </div>
+      <div class="field">
+        <label for="alias-lastname">Фамилия</label>
+        <input id="alias-lastname" type="text" maxlength="40" />
+      </div>
+      <div class="alias-actions">
+        <button type="button" class="small-btn secondary" id="alias-cancel-btn">Отмена</button>
+        <button type="button" class="small-btn" id="alias-save-btn">Сохранить</button>
+      </div>
+    </div>
   </div>
 
   <!-- Settings overlay -->
@@ -91,6 +106,7 @@
         <button class="tab-btn active" data-stab="profile">Профиль</button>
         <button class="tab-btn" data-stab="privacy">Приватность</button>
         <button class="tab-btn" data-stab="notifications">Уведомления</button>
+        <button class="tab-btn" data-stab="sessions">Сессии</button>
       </div>
 
       <div class="settings-body">
@@ -107,21 +123,17 @@
             <button type="button" class="link-btn" id="settings-avatar-remove-btn" hidden>Удалить фото</button>
           </div>
           <div class="field">
-            <label for="settings-displayname">Имя</label>
+            <label for="settings-displayname">Ник</label>
             <input id="settings-displayname" type="text" maxlength="40" />
           </div>
           <div class="field">
-            <label for="settings-username">Юзернейм</label>
+            <label for="settings-username">Имя пользователя</label>
             <input id="settings-username" type="text" maxlength="20" autocomplete="off" />
             <div class="field-hint" id="settings-username-hint"></div>
           </div>
           <div class="field">
             <label for="settings-bio">О себе</label>
             <input id="settings-bio" type="text" maxlength="140" placeholder="Пара слов о себе" />
-          </div>
-          <div class="field">
-            <label>Email</label>
-            <input type="text" id="settings-email" disabled />
           </div>
           <button class="primary" id="settings-profile-save">Сохранить</button>
           <div class="auth-error" id="settings-profile-error"></div>
@@ -131,33 +143,12 @@
         <div class="settings-tab-panel hidden" data-spanel="privacy">
           <div class="setting-row">
             <div>
-              <div class="setting-title">Кто видит мой email</div>
-              <div class="setting-desc">Влияет на отображение email в вашем профиле</div>
-            </div>
-            <select id="privacy-email">
-              <option value="everyone">Все</option>
-              <option value="contacts">Только контакты</option>
-              <option value="nobody">Никто</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div>
               <div class="setting-title">Кто видит время последнего захода</div>
               <div class="setting-desc">«Был(а) недавно» в шапке чата</div>
             </div>
             <select id="privacy-lastseen">
               <option value="everyone">Все</option>
               <option value="contacts">Только контакты</option>
-              <option value="nobody">Никто</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-title">Поиск по email</div>
-              <div class="setting-desc">Разрешить находить вас по email</div>
-            </div>
-            <select id="privacy-findbyemail">
-              <option value="everyone">Все</option>
               <option value="nobody">Никто</option>
             </select>
           </div>
@@ -190,6 +181,56 @@
           </div>
           <button class="primary" id="settings-notif-save">Сохранить</button>
           <div class="auth-error" id="settings-notif-error"></div>
+        </div>
+
+        <!-- Sessions tab -->
+        <div class="settings-tab-panel hidden" data-spanel="sessions">
+          <h4 class="settings-subheading">Смена пароля</h4>
+          <div class="field">
+            <label for="pw-current">Текущий пароль</label>
+            <div class="password-field">
+              <input id="pw-current" type="password" autocomplete="current-password" />
+              <button type="button" class="password-toggle" id="pw-current-toggle"></button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="pw-new">Новый пароль</label>
+            <div class="password-field">
+              <input id="pw-new" type="password" autocomplete="new-password" />
+              <button type="button" class="password-toggle" id="pw-new-toggle"></button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="pw-confirm">Подтвердите новый пароль</label>
+            <div class="password-field">
+              <input id="pw-confirm" type="password" autocomplete="new-password" />
+              <button type="button" class="password-toggle" id="pw-confirm-toggle"></button>
+            </div>
+          </div>
+          <button class="primary" id="pw-save-btn">Сменить пароль</button>
+          <div class="auth-error" id="pw-error"></div>
+
+          <h4 class="settings-subheading">Где вы входили</h4>
+          <div id="sessions-list" class="sessions-list"></div>
+
+          <h4 class="settings-subheading danger-heading">Опасная зона</h4>
+          <p class="setting-desc">Удаление аккаунта необратимо: профиль, юзернейм и контакты будут удалены.</p>
+          <button type="button" class="danger-btn" id="delete-account-open-btn">Удалить аккаунт</button>
+
+          <div id="delete-account-confirm" class="hidden">
+            <div class="field">
+              <label for="delete-account-password">Введите пароль, чтобы подтвердить</label>
+              <div class="password-field">
+                <input id="delete-account-password" type="password" autocomplete="current-password" />
+                <button type="button" class="password-toggle" id="delete-account-password-toggle"></button>
+              </div>
+            </div>
+            <div class="alias-actions">
+              <button type="button" class="small-btn secondary" id="delete-account-cancel-btn">Отмена</button>
+              <button type="button" class="danger-btn" id="delete-account-confirm-btn">Удалить навсегда</button>
+            </div>
+          </div>
+          <div class="auth-error" id="delete-account-error"></div>
         </div>
       </div>
     </div>

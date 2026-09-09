@@ -5,10 +5,15 @@ import {
   watchAuthState,
   logout,
   touchPresence,
-  resendVerificationEmail,
+  listenSessions,
+  forgetSession,
+  changePassword,
+  deleteAccount,
 } from "./auth.js";
-import { searchUser, addContact, listenContacts, getProfile } from "./contacts.js";
-import { ensureChat, listenMyChats, listenMessages, sendMessage } from "./chats.js";
+import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName } from "./contacts.js";
+import { ensureChat, listenMyChats, listenMessages, sendMessage, listenChatDoc, setTyping } from "./chats.js";
+import { listenSavedMessages, addSavedMessage } from "./saved.js";
+import { listenNotificationsFeed, addBroadcast } from "./notify.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications } from "./settings.js";
 import {
   colorForUid,
@@ -18,11 +23,17 @@ import {
   isValidUsername,
   fmtTime,
   fmtRelative,
+  fmtDateTime,
   isRecentlyOnline,
   avatarHTML,
   escapeHTML,
   resizeImageToDataUrl,
+  attachPasswordToggle,
 } from "./utils.js";
+
+const ADMIN_USERNAME = "danik";
+const SAVED_ID = "__saved__";
+const NOTIFICATIONS_ID = "__notifications__";
 
 // ---------- DOM refs ----------
 
@@ -35,26 +46,29 @@ const profileDropdown = document.getElementById("profile-dropdown");
 const menuSettingsBtn = document.getElementById("menu-settings-btn");
 const menuLogoutBtn = document.getElementById("menu-logout-btn");
 
-const verifyBanner = document.getElementById("verify-banner");
-const verifyResendBtn = document.getElementById("verify-resend-btn");
-
 const searchInput = document.getElementById("search-input");
 const searchResultEl = document.getElementById("search-result");
+const fabNewChat = document.getElementById("fab-new-chat");
 
-const tabBtns = document.querySelectorAll("#tabs .tab-btn");
 const chatListEl = document.getElementById("chat-list");
-const contactListEl = document.getElementById("contact-list");
 
 const emptyState = document.getElementById("empty-state");
 const chatHeader = document.getElementById("chat-header");
 const chatHeaderAvatar = document.getElementById("chat-header-avatar");
 const chatTitle = document.getElementById("chat-title");
 const chatSub = document.getElementById("chat-sub");
+const editContactBtn = document.getElementById("edit-contact-btn");
 const messagesEl = document.getElementById("messages");
 const composer = document.getElementById("composer");
 const msgInput = document.getElementById("msg-input");
 const sendBtn = document.getElementById("send-btn");
 const backToListBtn = document.getElementById("back-to-list-btn");
+
+const aliasOverlay = document.getElementById("alias-overlay");
+const aliasFirstname = document.getElementById("alias-firstname");
+const aliasLastname = document.getElementById("alias-lastname");
+const aliasCancelBtn = document.getElementById("alias-cancel-btn");
+const aliasSaveBtn = document.getElementById("alias-save-btn");
 
 const settingsOverlay = document.getElementById("settings-overlay");
 const settingsCloseBtn = document.getElementById("settings-close-btn");
@@ -67,13 +81,10 @@ const settingsDisplayname = document.getElementById("settings-displayname");
 const settingsUsername = document.getElementById("settings-username");
 const settingsUsernameHint = document.getElementById("settings-username-hint");
 const settingsBio = document.getElementById("settings-bio");
-const settingsEmail = document.getElementById("settings-email");
 const settingsProfileSave = document.getElementById("settings-profile-save");
 const settingsProfileError = document.getElementById("settings-profile-error");
 
-const privacyEmail = document.getElementById("privacy-email");
 const privacyLastseen = document.getElementById("privacy-lastseen");
-const privacyFindbyemail = document.getElementById("privacy-findbyemail");
 const settingsPrivacySave = document.getElementById("settings-privacy-save");
 const settingsPrivacyError = document.getElementById("settings-privacy-error");
 
@@ -83,25 +94,45 @@ const notifPreview = document.getElementById("notif-preview");
 const settingsNotifSave = document.getElementById("settings-notif-save");
 const settingsNotifError = document.getElementById("settings-notif-error");
 
+const pwCurrent = document.getElementById("pw-current");
+const pwNew = document.getElementById("pw-new");
+const pwConfirm = document.getElementById("pw-confirm");
+const pwSaveBtn = document.getElementById("pw-save-btn");
+const pwError = document.getElementById("pw-error");
+const sessionsListEl = document.getElementById("sessions-list");
+const deleteAccountOpenBtn = document.getElementById("delete-account-open-btn");
+const deleteAccountConfirm = document.getElementById("delete-account-confirm");
+const deleteAccountPassword = document.getElementById("delete-account-password");
+const deleteAccountCancelBtn = document.getElementById("delete-account-cancel-btn");
+const deleteAccountConfirmBtn = document.getElementById("delete-account-confirm-btn");
+const deleteAccountError = document.getElementById("delete-account-error");
+
+attachPasswordToggle(pwCurrent, document.getElementById("pw-current-toggle"));
+attachPasswordToggle(pwNew, document.getElementById("pw-new-toggle"));
+attachPasswordToggle(pwConfirm, document.getElementById("pw-confirm-toggle"));
+attachPasswordToggle(deleteAccountPassword, document.getElementById("delete-account-password-toggle"));
+
 // ---------- State ----------
 
 let currentUser = null;
 let myProfile = null;
 let selectedSettingsAvatarImage = null;
-let verifyResendTimer = null;
 
 let chats = [];
 let contacts = [];
 let contactsMap = new Map();
-let currentChatId = null;
+let currentChatId = null; // real chatId, or SAVED_ID / NOTIFICATIONS_ID
 let currentOtherUid = null;
 let currentOtherProfile = null;
 
 let unsubChats = null;
 let unsubMessages = null;
+let unsubChatDoc = null;
 let unsubContacts = null;
 let chatsInitialized = false;
 let presenceInterval = null;
+let typingClearTimer = null;
+let sessionsUnsub = null;
 
 // ---------- Settings avatar upload ----------
 
@@ -144,7 +175,7 @@ settingsAvatarRemoveBtn.addEventListener("click", () => {
 
 // ---------- Auth state ----------
 // This page assumes an authenticated user with a completed profile.
-// Anything else redirects to /login, which owns the email/password/profile-setup flow.
+// Anything else redirects to /login, which owns the username/password/registration flow.
 
 function goToLogin() {
   window.location.href = "/login";
@@ -174,9 +205,11 @@ if (configLooksEmpty) {
 function cleanupSubscriptions() {
   if (unsubChats) unsubChats();
   if (unsubMessages) unsubMessages();
+  if (unsubChatDoc) unsubChatDoc();
   if (unsubContacts) unsubContacts();
+  if (sessionsUnsub) sessionsUnsub();
   if (presenceInterval) clearInterval(presenceInterval);
-  unsubChats = unsubMessages = unsubContacts = presenceInterval = null;
+  unsubChats = unsubMessages = unsubChatDoc = unsubContacts = sessionsUnsub = presenceInterval = null;
   chatsInitialized = false;
 }
 
@@ -185,7 +218,6 @@ function cleanupSubscriptions() {
 function enterApp() {
   appEl.classList.remove("hidden");
   renderMe();
-  updateVerifyBanner();
   listenContactsList();
   listenChatsList();
   touchPresence(currentUser.uid);
@@ -226,39 +258,11 @@ menuLogoutBtn.addEventListener("click", async () => {
   await logout();
 });
 
-// ---------- Email verification banner ----------
+// ---------- Search / new chat ----------
 
-async function updateVerifyBanner() {
-  try {
-    await currentUser.reload();
-  } catch (_) {
-    /* ignore */
-  }
-  verifyBanner.classList.toggle("hidden", !!currentUser.emailVerified);
-}
-
-verifyResendBtn.addEventListener("click", async () => {
-  verifyResendBtn.disabled = true;
-  try {
-    await resendVerificationEmail(currentUser);
-    verifyResendBtn.textContent = "Письмо отправлено";
-  } catch (err) {
-    console.error(err);
-    verifyResendBtn.textContent = "Не удалось отправить";
-  }
-  let seconds = 30;
-  clearInterval(verifyResendTimer);
-  verifyResendTimer = setInterval(() => {
-    seconds -= 1;
-    if (seconds <= 0) {
-      clearInterval(verifyResendTimer);
-      verifyResendBtn.disabled = false;
-      verifyResendBtn.textContent = "Отправить повторно";
-    }
-  }, 1000);
+fabNewChat.addEventListener("click", () => {
+  searchInput.focus();
 });
-
-// ---------- Search ----------
 
 const runSearch = debounce(async (raw) => {
   const q = raw.trim();
@@ -303,7 +307,7 @@ const runSearch = debounce(async (raw) => {
   card.querySelector("#sr-message").addEventListener("click", async () => {
     await addContact(currentUser.uid, uid);
     const chatId = await ensureChat(currentUser.uid, uid);
-    openChat(chatId, uid, profile);
+    openContactChat(chatId, uid, profile);
     searchInput.value = "";
     searchResultEl.classList.add("hidden");
   });
@@ -311,54 +315,17 @@ const runSearch = debounce(async (raw) => {
 
 searchInput.addEventListener("input", () => runSearch(searchInput.value));
 
-// ---------- Tabs ----------
-
-tabBtns.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    tabBtns.forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    const tab = btn.dataset.tab;
-    chatListEl.classList.toggle("hidden", tab !== "chats");
-    contactListEl.classList.toggle("hidden", tab !== "contacts");
-  });
-});
-
-// ---------- Contacts ----------
+// ---------- Contacts (background data only - no separate tab) ----------
 
 function listenContactsList() {
   unsubContacts = listenContacts(currentUser.uid, (list) => {
     contacts = list;
-    contactsMap = new Map(list.map((c) => [c.uid, c.profile]));
-    renderContacts();
+    contactsMap = new Map(list.map((c) => [c.uid, c]));
+    renderChats();
   });
 }
 
-function renderContacts() {
-  if (contacts.length === 0) {
-    contactListEl.innerHTML = '<div class="empty-list">Пока нет контактов.<br />Найдите кого-то по юзернейму или email выше ↑</div>';
-    return;
-  }
-  contactListEl.innerHTML = "";
-  contacts.forEach(({ uid, profile }) => {
-    const item = document.createElement("div");
-    item.className = "contact-item";
-    item.innerHTML = `
-      ${avatarHTML(profile, uid)}
-      <div class="contact-meta">
-        <div class="contact-name"></div>
-        <div class="contact-sub">@${escapeHTML(profile.username)}</div>
-      </div>
-    `;
-    item.querySelector(".contact-name").textContent = profile.displayName;
-    item.addEventListener("click", async () => {
-      const chatId = await ensureChat(currentUser.uid, uid);
-      openChat(chatId, uid, profile);
-    });
-    contactListEl.appendChild(item);
-  });
-}
-
-// ---------- Chats list ----------
+// ---------- Chats list (pinned Избранное + Linkage Notifications, then real chats) ----------
 
 function listenChatsList() {
   unsubChats = listenMyChats(currentUser.uid, (list, changes) => {
@@ -374,16 +341,46 @@ function listenChatsList() {
   });
 }
 
+function pinnedItemHTML(id, iconSvg, title, subtitle) {
+  const item = document.createElement("div");
+  item.className = "room-item pinned-item" + (id === currentChatId ? " active" : "");
+  item.innerHTML = `
+    <div class="avatar pinned-avatar">${iconSvg}</div>
+    <div class="room-meta">
+      <div class="room-name"></div>
+      <div class="room-last"></div>
+    </div>
+  `;
+  item.querySelector(".room-name").textContent = title;
+  item.querySelector(".room-last").textContent = subtitle;
+  return item;
+}
+
+const SAVED_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+const BELL_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
+
 async function renderChats() {
-  if (chats.length === 0) {
-    chatListEl.innerHTML = '<div class="empty-list">Пока нет чатов.<br />Найдите контакт по юзернейму или email выше ↑</div>';
-    return;
-  }
   chatListEl.innerHTML = "";
+
+  const savedItem = pinnedItemHTML(SAVED_ID, SAVED_ICON, "Избранное", "Ваши заметки");
+  savedItem.querySelector(".pinned-avatar").style.background = "#5b8cff";
+  savedItem.addEventListener("click", openSavedChat);
+  chatListEl.appendChild(savedItem);
+
+  const notifItem = pinnedItemHTML(NOTIFICATIONS_ID, BELL_ICON, "Linkage Notifications", "Обновления и уведомления о входе");
+  notifItem.querySelector(".pinned-avatar").style.background = "#8b5cf6";
+  notifItem.addEventListener("click", openNotificationsChat);
+  chatListEl.appendChild(notifItem);
+
   for (const chat of chats) {
     const otherUid = chat.participants.find((p) => p !== currentUser.uid);
-    const profile = contactsMap.get(otherUid) || (await getProfile(otherUid));
+    const contact = contactsMap.get(otherUid);
+    const profile = contact?.profile || (await getProfile(otherUid));
     if (!profile) continue;
+
+    const name = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
 
     const item = document.createElement("div");
     item.className = "room-item" + (chat.id === currentChatId ? " active" : "");
@@ -394,46 +391,113 @@ async function renderChats() {
         <div class="room-last"></div>
       </div>
     `;
-    item.querySelector(".room-name").textContent = profile.displayName;
+    item.querySelector(".room-name").textContent = name;
     const lastPrefix = chat.lastMessageSenderId === currentUser.uid ? "Вы: " : "";
     item.querySelector(".room-last").textContent = chat.lastMessage ? lastPrefix + chat.lastMessage : "Нет сообщений";
-    item.addEventListener("click", () => openChat(chat.id, otherUid, profile));
+    item.addEventListener("click", () => openContactChat(chat.id, otherUid, profile));
     chatListEl.appendChild(item);
   }
 }
 
-// ---------- Chat view ----------
+// ---------- Shared chat-view plumbing ----------
 
-function openChat(chatId, otherUid, profile) {
+function resetChatView() {
   if (unsubMessages) unsubMessages();
-  currentChatId = chatId;
-  currentOtherUid = otherUid;
-  currentOtherProfile = profile;
+  if (unsubChatDoc) unsubChatDoc();
+  unsubMessages = unsubChatDoc = null;
+  clearTimeout(typingClearTimer);
 
   emptyState.classList.add("hidden");
   chatHeader.classList.remove("hidden");
   messagesEl.classList.remove("hidden");
   composer.classList.remove("hidden");
   sidebar.classList.add("chat-open");
+  chatSub.textContent = "";
+  chatSub.classList.remove("typing");
+  editContactBtn.classList.add("hidden");
+}
 
+function renderPlainMessages(msgs, isMineFn) {
+  messagesEl.innerHTML = "";
+  if (msgs.length === 0) {
+    messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
+    return;
+  }
+  msgs.forEach((msg) => renderMessage(msg, isMineFn(msg)));
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// ---------- Избранное (Saved) ----------
+
+function openSavedChat() {
+  resetChatView();
+  currentChatId = SAVED_ID;
+  currentOtherUid = null;
+  currentOtherProfile = null;
+
+  chatHeaderAvatar.innerHTML = `<div class="avatar pinned-avatar" style="background:#5b8cff">${SAVED_ICON}</div>`;
+  chatTitle.textContent = "Избранное";
+  chatSub.textContent = "Заметки, которые видите только вы";
+
+  renderChats();
+  messagesEl.innerHTML = '<div class="system-msg">Загрузка…</div>';
+  unsubMessages = listenSavedMessages(currentUser.uid, (msgs) => renderPlainMessages(msgs, () => true));
+}
+
+// ---------- Linkage Notifications ----------
+
+function openNotificationsChat() {
+  resetChatView();
+  currentChatId = NOTIFICATIONS_ID;
+  currentOtherUid = null;
+  currentOtherProfile = null;
+
+  chatHeaderAvatar.innerHTML = `<div class="avatar pinned-avatar" style="background:#8b5cf6">${BELL_ICON}</div>`;
+  chatTitle.textContent = "Linkage Notifications";
+  chatSub.textContent = myProfile.username === ADMIN_USERNAME ? "Только вы можете писать сюда всем" : "Официальный канал уведомлений";
+
+  composer.classList.toggle("hidden", myProfile.username !== ADMIN_USERNAME);
+
+  renderChats();
+  messagesEl.innerHTML = '<div class="system-msg">Загрузка…</div>';
+  unsubMessages = listenNotificationsFeed(currentUser.uid, (msgs) => renderPlainMessages(msgs, () => false));
+}
+
+// ---------- 1:1 contact chat ----------
+
+function openContactChat(chatId, otherUid, profile) {
+  resetChatView();
+  currentChatId = chatId;
+  currentOtherUid = otherUid;
+  currentOtherProfile = profile;
+
+  const contact = contactsMap.get(otherUid);
   chatHeaderAvatar.innerHTML = avatarHTML(profile, otherUid);
-  chatTitle.textContent = profile.displayName;
-  updateChatSub(profile);
+  chatTitle.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
+  chatSub.textContent = "@" + profile.username;
+  editContactBtn.classList.remove("hidden");
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
   unsubMessages = listenMessages(chatId, (msgs) => {
-    messagesEl.innerHTML = "";
-    if (msgs.length === 0) {
-      messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет. Начните переписку!</div>';
-      return;
-    }
-    msgs.forEach(renderMessage);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (currentChatId !== chatId) return;
+    renderPlainMessages(msgs, (msg) => msg.senderId === currentUser.uid);
+  });
+  unsubChatDoc = listenChatDoc(chatId, (data) => {
+    if (currentChatId !== chatId || !data) return;
+    updateChatSub(profile, data);
   });
 }
 
-function updateChatSub(profile) {
+function updateChatSub(profile, chatData) {
+  const otherTyping = chatData?.typing?.[currentOtherUid];
+  if (otherTyping?.toDate && Date.now() - otherTyping.toDate().getTime() < 6000) {
+    chatSub.textContent = "печатает…";
+    chatSub.classList.add("typing");
+    return;
+  }
+  chatSub.classList.remove("typing");
+
   const visibility = profile.privacy?.lastSeenVisibility || "everyone";
   const isContact = contactsMap.has(currentOtherUid);
   const canSee = visibility === "everyone" || (visibility === "contacts" && isContact);
@@ -454,10 +518,9 @@ backToListBtn.addEventListener("click", () => {
   sidebar.classList.remove("chat-open");
 });
 
-function renderMessage(msg) {
-  const isMe = msg.senderId === currentUser.uid;
+function renderMessage(msg, isMine) {
   const row = document.createElement("div");
-  row.className = "msg-row" + (isMe ? " me" : "");
+  row.className = "msg-row" + (isMine ? " me" : "");
   row.innerHTML = `
     <div class="msg-group">
       <div class="bubble"></div>
@@ -484,6 +547,12 @@ msgInput.addEventListener("keydown", (e) => {
 msgInput.addEventListener("input", () => {
   msgInput.style.height = "auto";
   msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
+
+  if (currentChatId && currentOtherUid) {
+    setTyping(currentChatId, currentUser.uid, true);
+    clearTimeout(typingClearTimer);
+    typingClearTimer = setTimeout(() => setTyping(currentChatId, currentUser.uid, false), 3000);
+  }
 });
 
 async function doSendMessage() {
@@ -492,8 +561,15 @@ async function doSendMessage() {
   msgInput.value = "";
   msgInput.style.height = "auto";
   sendBtn.disabled = true;
+  clearTimeout(typingClearTimer);
   try {
-    await sendMessage(currentChatId, currentUser.uid, text);
+    if (currentChatId === SAVED_ID) {
+      await addSavedMessage(currentUser.uid, text);
+    } else if (currentChatId === NOTIFICATIONS_ID) {
+      await addBroadcast(currentUser.uid, text);
+    } else {
+      await sendMessage(currentChatId, currentUser.uid, text);
+    }
   } catch (err) {
     console.error(err);
     alert("Не удалось отправить сообщение: " + err.message);
@@ -502,7 +578,38 @@ async function doSendMessage() {
   }
 }
 
-// ---------- Notifications ----------
+// ---------- Contact alias editing ----------
+
+editContactBtn.addEventListener("click", () => {
+  if (!currentOtherUid) return;
+  const contact = contactsMap.get(currentOtherUid);
+  aliasFirstname.value = contact?.alias?.firstName || "";
+  aliasLastname.value = contact?.alias?.lastName || "";
+  aliasOverlay.classList.remove("hidden");
+});
+
+aliasCancelBtn.addEventListener("click", () => aliasOverlay.classList.add("hidden"));
+aliasOverlay.addEventListener("click", (e) => {
+  if (e.target === aliasOverlay) aliasOverlay.classList.add("hidden");
+});
+
+aliasSaveBtn.addEventListener("click", async () => {
+  if (!currentOtherUid) return;
+  await setContactAlias(currentUser.uid, currentOtherUid, {
+    firstName: aliasFirstname.value,
+    lastName: aliasLastname.value,
+  });
+  aliasOverlay.classList.add("hidden");
+  const contact = contactsMap.get(currentOtherUid);
+  if (contact) {
+    chatTitle.textContent = contactDisplayName(
+      { firstName: aliasFirstname.value.trim(), lastName: aliasLastname.value.trim() },
+      currentOtherProfile
+    );
+  }
+});
+
+// ---------- Notifications (sound / desktop) ----------
 
 function beep() {
   try {
@@ -528,7 +635,6 @@ async function maybeNotify(chatData) {
     chatData.participants &&
     chatData.participants.includes(currentUser.uid) &&
     !document.hidden &&
-    chatData.lastMessageSenderId !== currentUser.uid &&
     [...chatData.participants].sort().join("_") === currentChatId;
   if (isViewingThisChat) return;
 
@@ -537,7 +643,7 @@ async function maybeNotify(chatData) {
 
   if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
     const senderUid = chatData.lastMessageSenderId;
-    const senderProfile = contactsMap.get(senderUid) || (await getProfile(senderUid));
+    const senderProfile = contactsMap.get(senderUid)?.profile || (await getProfile(senderUid));
     const title = senderProfile?.displayName || "Новое сообщение";
     const body = notifPrefs.preview !== false ? chatData.lastMessage : "Новое сообщение";
     new Notification(title, { body });
@@ -558,6 +664,7 @@ settingsTabBtns.forEach((btn) => {
     document.querySelectorAll(".settings-tab-panel").forEach((p) => {
       p.classList.toggle("hidden", p.dataset.spanel !== btn.dataset.stab);
     });
+    if (btn.dataset.stab === "sessions") loadSessions();
   });
 });
 
@@ -565,6 +672,11 @@ function openSettings() {
   settingsProfileError.textContent = "";
   settingsPrivacyError.textContent = "";
   settingsNotifError.textContent = "";
+  pwError.textContent = "";
+  deleteAccountError.textContent = "";
+  pwCurrent.value = pwNew.value = pwConfirm.value = "";
+  deleteAccountConfirm.classList.add("hidden");
+  deleteAccountPassword.value = "";
 
   selectedSettingsAvatarImage = myProfile.avatarImage || null;
   renderSettingsAvatarPreview();
@@ -573,11 +685,8 @@ function openSettings() {
   settingsUsername.value = myProfile.username || "";
   settingsUsernameHint.textContent = "";
   settingsBio.value = myProfile.bio || "";
-  settingsEmail.value = currentUser.email || "";
 
-  privacyEmail.value = myProfile.privacy?.emailVisibility || "contacts";
   privacyLastseen.value = myProfile.privacy?.lastSeenVisibility || "everyone";
-  privacyFindbyemail.value = myProfile.privacy?.findByEmail || "everyone";
 
   notifSound.checked = myProfile.notifications?.sound !== false;
   notifDesktop.checked = !!myProfile.notifications?.desktop;
@@ -618,7 +727,6 @@ settingsProfileSave.addEventListener("click", async () => {
       displayName: settingsDisplayname.value.trim().slice(0, 40) || myProfile.username,
       bio: settingsBio.value.trim().slice(0, 140),
       avatarImage: selectedSettingsAvatarImage,
-      avatarEmoji: null,
     });
     myProfile = await fetchMyProfile(currentUser.uid);
     renderMe();
@@ -636,11 +744,7 @@ settingsPrivacySave.addEventListener("click", async () => {
   settingsPrivacyError.textContent = "";
   settingsPrivacySave.disabled = true;
   try {
-    const privacy = {
-      emailVisibility: privacyEmail.value,
-      lastSeenVisibility: privacyLastseen.value,
-      findByEmail: privacyFindbyemail.value,
-    };
+    const privacy = { lastSeenVisibility: privacyLastseen.value };
     await updatePrivacy(currentUser.uid, privacy);
     myProfile.privacy = privacy;
     settingsOverlay.classList.add("hidden");
@@ -674,5 +778,87 @@ settingsNotifSave.addEventListener("click", async () => {
     settingsNotifError.textContent = err.message || "Не удалось сохранить";
   } finally {
     settingsNotifSave.disabled = false;
+  }
+});
+
+// ---------- Sessions tab: password change, session history, delete account ----------
+
+pwSaveBtn.addEventListener("click", async () => {
+  pwError.textContent = "";
+  if (!pwNew.value || pwNew.value.length < 6) {
+    pwError.textContent = "Новый пароль минимум 6 символов";
+    return;
+  }
+  if (pwNew.value !== pwConfirm.value) {
+    pwError.textContent = "Пароли не совпадают";
+    return;
+  }
+  pwSaveBtn.disabled = true;
+  try {
+    await changePassword(currentUser, pwCurrent.value, pwNew.value);
+    pwCurrent.value = pwNew.value = pwConfirm.value = "";
+    pwError.textContent = "";
+    pwError.classList.add("ok-text");
+    pwError.textContent = "Пароль изменён";
+  } catch (err) {
+    console.error(err);
+    pwError.classList.remove("ok-text");
+    pwError.textContent = err.message || "Не удалось сменить пароль";
+  } finally {
+    pwSaveBtn.disabled = false;
+  }
+});
+
+function loadSessions() {
+  if (sessionsUnsub) return;
+  sessionsUnsub = listenSessions(currentUser.uid, (sessions) => {
+    if (sessions.length === 0) {
+      sessionsListEl.innerHTML = '<div class="empty-list">История пуста</div>';
+      return;
+    }
+    sessionsListEl.innerHTML = "";
+    sessions.forEach((s) => {
+      const row = document.createElement("div");
+      row.className = "session-row";
+      row.innerHTML = `
+        <div>
+          <div class="session-device"></div>
+          <div class="session-time"></div>
+        </div>
+        <button type="button" class="link-btn" title="Забыть эту запись">Забыть</button>
+      `;
+      row.querySelector(".session-device").textContent = s.device || "Неизвестное устройство";
+      row.querySelector(".session-time").textContent = fmtDateTime(s.createdAt);
+      row.querySelector("button").addEventListener("click", () => forgetSession(currentUser.uid, s.id));
+      sessionsListEl.appendChild(row);
+    });
+  });
+}
+
+deleteAccountOpenBtn.addEventListener("click", () => {
+  deleteAccountConfirm.classList.remove("hidden");
+});
+
+deleteAccountCancelBtn.addEventListener("click", () => {
+  deleteAccountConfirm.classList.add("hidden");
+  deleteAccountPassword.value = "";
+  deleteAccountError.textContent = "";
+});
+
+deleteAccountConfirmBtn.addEventListener("click", async () => {
+  deleteAccountError.textContent = "";
+  if (!deleteAccountPassword.value) {
+    deleteAccountError.textContent = "Введите пароль";
+    return;
+  }
+  deleteAccountConfirmBtn.disabled = true;
+  try {
+    cleanupSubscriptions();
+    await deleteAccount(currentUser, deleteAccountPassword.value, myProfile.username);
+    window.location.href = "/login";
+  } catch (err) {
+    console.error(err);
+    deleteAccountError.textContent = err.message || "Не удалось удалить аккаунт";
+    deleteAccountConfirmBtn.disabled = false;
   }
 });

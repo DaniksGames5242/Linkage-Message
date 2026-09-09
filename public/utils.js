@@ -32,14 +32,6 @@ export function isValidUsername(name) {
   return /^[a-z0-9_]{3,20}$/.test(name);
 }
 
-export function normalizeEmail(raw) {
-  return (raw || "").trim().toLowerCase();
-}
-
-export function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
 export function chatIdFor(uidA, uidB) {
   return [uidA, uidB].sort().join("_");
 }
@@ -107,4 +99,44 @@ export function resizeImageToDataUrl(file, size = 256, quality = 0.85) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+const EYE_OPEN =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_CLOSED =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a20.3 20.3 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a20.4 20.4 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+// Wires an eye-icon button to toggle an <input type="password"> field's visibility.
+export function attachPasswordToggle(inputEl, btnEl) {
+  btnEl.innerHTML = EYE_CLOSED;
+  btnEl.addEventListener("click", () => {
+    const showing = inputEl.type === "text";
+    inputEl.type = showing ? "password" : "text";
+    btnEl.innerHTML = showing ? EYE_CLOSED : EYE_OPEN;
+  });
+}
+
+export function fmtDateTime(ts) {
+  if (!ts || !ts.toDate) return "";
+  return ts.toDate().toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+// Rough, best-effort "Browser on OS" label for login history entries.
+export function describeDevice() {
+  const ua = navigator.userAgent || "";
+  let browser = "Браузер";
+  if (/Edg\//.test(ua)) browser = "Edge";
+  else if (/OPR\//.test(ua)) browser = "Opera";
+  else if (/Chrome\//.test(ua)) browser = "Chrome";
+  else if (/Firefox\//.test(ua)) browser = "Firefox";
+  else if (/Safari\//.test(ua)) browser = "Safari";
+
+  let os = "устройство";
+  if (/Windows/.test(ua)) os = "Windows";
+  else if (/Mac OS X/.test(ua)) os = "macOS";
+  else if (/Android/.test(ua)) os = "Android";
+  else if (/iPhone|iPad|iOS/.test(ua)) os = "iOS";
+  else if (/Linux/.test(ua)) os = "Linux";
+
+  return `${browser}, ${os}`;
 }

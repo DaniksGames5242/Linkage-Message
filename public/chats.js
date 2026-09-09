@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
   addDoc,
   collection,
   query,
@@ -11,6 +12,7 @@ import {
   limit,
   onSnapshot,
   serverTimestamp,
+  deleteField,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { chatIdFor } from "./utils.js";
 
@@ -73,7 +75,24 @@ export async function sendMessage(chatId, senderId, text) {
       lastMessage: trimmed,
       lastMessageAt: serverTimestamp(),
       lastMessageSenderId: senderId,
+      typing: { [senderId]: deleteField() },
     },
     { merge: true }
   );
+}
+
+export function listenChatDoc(chatId, onChange) {
+  return onSnapshot(doc(db, "chats", chatId), (snap) => {
+    onChange(snap.exists() ? snap.data() : null);
+  });
+}
+
+export async function setTyping(chatId, uid, isTyping) {
+  try {
+    await updateDoc(doc(db, "chats", chatId), {
+      [`typing.${uid}`]: isTyping ? serverTimestamp() : deleteField(),
+    });
+  } catch (_) {
+    // chat doc may not exist yet - ignore
+  }
 }

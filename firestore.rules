@@ -10,36 +10,70 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    function isAdmin() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == 'danik';
+    }
+
     // ---------- users/{uid} : public-ish profile ----------
     match /users/{uid} {
       allow read: if isSignedIn();
       allow create: if isMe(uid);
       allow update: if isMe(uid);
-      allow delete: if false;
+      allow delete: if isMe(uid);
+
+      // ---------- users/{uid}/contacts/{contactUid} : private contact list (+ per-contact alias) ----------
+      match /contacts/{contactUid} {
+        allow read, write: if isMe(uid);
+      }
+
+      // ---------- users/{uid}/savedMessages/{id} : "Избранное", notes-to-self ----------
+      match /savedMessages/{messageId} {
+        allow read: if isMe(uid);
+        allow create: if isMe(uid)
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000;
+        allow update, delete: if false;
+      }
+
+      // ---------- users/{uid}/systemChat/{id} : personal "Linkage Notifications" feed ----------
+      // Self-written for login notices; admin-written for anything else (kept for flexibility,
+      // the app currently only uses the shared broadcasts/ collection for admin announcements).
+      match /systemChat/{messageId} {
+        allow read: if isMe(uid);
+        allow create: if isMe(uid) || isAdmin();
+        allow update, delete: if false;
+      }
+
+      // ---------- users/{uid}/sessions/{id} : login history (informational only) ----------
+      match /sessions/{sessionId} {
+        allow read, create: if isMe(uid);
+        allow delete: if isMe(uid);
+        allow update: if false;
+      }
     }
 
-    // ---------- usernames/{username} -> { uid } : uniqueness index ----------
+    // ---------- usernames/{username} -> { uid, authEmail } : lookup / uniqueness index ----------
+    // Public read on purpose: logging in has to resolve "username" -> the
+    // synthetic Auth email *before* the client is signed in. Neither field
+    // is sensitive (authEmail is a random placeholder, not a real address).
     match /usernames/{username} {
-      allow read: if isSignedIn();
+      allow read: if true;
       allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update: if isSignedIn() && resource.data.uid == request.auth.uid;
       allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
     }
 
-    // ---------- emails/{normalizedEmail} -> { uid } : lookup index for "add by email" ----------
-    match /emails/{emailId} {
+    // ---------- broadcasts/{id} : "Linkage Notifications" announcements, admin-only, everyone reads ----------
+    match /broadcasts/{messageId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn()
-        && request.resource.data.uid == request.auth.uid
-        && request.auth.token.email is string
-        && request.auth.token.email.lower() == emailId;
-      allow update: if isSignedIn() && resource.data.uid == request.auth.uid;
-      allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
-    }
-
-    // ---------- users/{uid}/contacts/{contactUid} : private contact list ----------
-    match /users/{uid}/contacts/{contactUid} {
-      allow read, write: if isMe(uid);
+      allow create: if isAdmin()
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 4000;
+      allow update, delete: if false;
     }
 
     // ---------- chats/{chatId} : 1:1 conversations ----------

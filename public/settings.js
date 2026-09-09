@@ -23,7 +23,13 @@ export async function changeUsername(uid, oldUsername, rawNewUsername) {
     if (newSnap.exists()) {
       throw new Error("Этот юзернейм уже занят");
     }
-    tx.set(newRef, { uid });
+    let authEmail = null;
+    if (oldUsername) {
+      const oldRef = doc(db, "usernames", oldUsername);
+      const oldSnap = await tx.get(oldRef);
+      authEmail = oldSnap.exists() ? oldSnap.data().authEmail : null;
+    }
+    tx.set(newRef, { uid, authEmail });
     if (oldUsername) {
       tx.delete(doc(db, "usernames", oldUsername));
     }
