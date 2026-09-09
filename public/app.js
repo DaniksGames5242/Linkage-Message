@@ -14,6 +14,7 @@ import { searchUser, addContact, listenContacts, getProfile, setContactAlias, co
 import { ensureChat, listenMyChats, listenMessages, sendMessage, listenChatDoc, setTyping } from "./chats.js";
 import { listenSavedMessages, addSavedMessage } from "./saved.js";
 import { listenNotificationsFeed, addBroadcast } from "./notify.js";
+import { createGroup, listenMyGroups, listenGroupMessages, sendGroupMessage } from "./groups.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications } from "./settings.js";
 import {
   colorForUid,
@@ -42,9 +43,6 @@ const appEl = document.getElementById("app");
 const sidebar = document.getElementById("sidebar");
 const meName = document.getElementById("me-name");
 const menuTriggerBtn = document.getElementById("menu-trigger-btn");
-const profileDropdown = document.getElementById("profile-dropdown");
-const menuSettingsBtn = document.getElementById("menu-settings-btn");
-const menuLogoutBtn = document.getElementById("menu-logout-btn");
 
 const searchInput = document.getElementById("search-input");
 const searchResultEl = document.getElementById("search-result");
@@ -70,9 +68,39 @@ const aliasLastname = document.getElementById("alias-lastname");
 const aliasCancelBtn = document.getElementById("alias-cancel-btn");
 const aliasSaveBtn = document.getElementById("alias-save-btn");
 
+const newChatOverlay = document.getElementById("new-chat-overlay");
+const newChatCloseBtn = document.getElementById("new-chat-close-btn");
+const newChatMenu = document.getElementById("new-chat-menu");
+const newChatContactBtn = document.getElementById("new-chat-contact-btn");
+const newChatGroupOpenBtn = document.getElementById("new-chat-group-open-btn");
+const newChatChannelOpenBtn = document.getElementById("new-chat-channel-open-btn");
+
+const newChatContactStep = document.getElementById("new-chat-contact-step");
+const newChatContactBackBtn = document.getElementById("new-chat-contact-back-btn");
+const newChatUsernameInput = document.getElementById("new-chat-username-input");
+const newChatContactResult = document.getElementById("new-chat-contact-result");
+
+const newChatGroupStep = document.getElementById("new-chat-group-step");
+const newChatGroupBackBtn = document.getElementById("new-chat-group-back-btn");
+const newChatGroupTitle = document.getElementById("new-chat-group-title");
+const newChatGroupAvatarPreview = document.getElementById("new-chat-group-avatar-preview");
+const newChatGroupAvatarPickBtn = document.getElementById("new-chat-group-avatar-pick-btn");
+const newChatGroupAvatarInput = document.getElementById("new-chat-group-avatar-input");
+const newChatGroupNameLabel = document.getElementById("new-chat-group-name-label");
+const newChatGroupNameInput = document.getElementById("new-chat-group-name-input");
+const newChatGroupMemberInput = document.getElementById("new-chat-group-member-input");
+const newChatGroupMemberResult = document.getElementById("new-chat-group-member-result");
+const newChatGroupMembersChips = document.getElementById("new-chat-group-members-chips");
+const newChatGroupCreateBtn = document.getElementById("new-chat-group-create-btn");
+const newChatGroupError = document.getElementById("new-chat-group-error");
+
 const settingsOverlay = document.getElementById("settings-overlay");
 const settingsCloseBtn = document.getElementById("settings-close-btn");
-const settingsTabBtns = document.querySelectorAll("#settings-tabs .tab-btn");
+const settingsBackBtn = document.getElementById("settings-back-btn");
+const settingsHeaderTitle = document.getElementById("settings-header-title");
+const settingsMenu = document.getElementById("settings-menu");
+const settingsMenuItems = document.querySelectorAll(".settings-menu-item");
+const sessionsLogoutBtn = document.getElementById("sessions-logout-btn");
 const settingsAvatarPreview = document.getElementById("settings-avatar-preview");
 const settingsAvatarPickBtn = document.getElementById("settings-avatar-pick-btn");
 const settingsAvatarInput = document.getElementById("settings-avatar-input");
@@ -119,13 +147,16 @@ let myProfile = null;
 let selectedSettingsAvatarImage = null;
 
 let chats = [];
+let groups = [];
 let contacts = [];
 let contactsMap = new Map();
-let currentChatId = null; // real chatId, or SAVED_ID / NOTIFICATIONS_ID
+let currentChatId = null; // real chatId, group id, or SAVED_ID / NOTIFICATIONS_ID
+let currentChatType = null; // "contact" | "group" | "channel" | "saved" | "notifications"
 let currentOtherUid = null;
 let currentOtherProfile = null;
 
 let unsubChats = null;
+let unsubGroups = null;
 let unsubMessages = null;
 let unsubChatDoc = null;
 let unsubContacts = null;
@@ -133,6 +164,10 @@ let chatsInitialized = false;
 let presenceInterval = null;
 let typingClearTimer = null;
 let sessionsUnsub = null;
+
+let pendingGroupType = "group";
+let pendingGroupAvatarImage = null;
+let pendingGroupMembers = new Map(); // uid -> profile
 
 // ---------- Settings avatar upload ----------
 
@@ -204,12 +239,13 @@ if (configLooksEmpty) {
 
 function cleanupSubscriptions() {
   if (unsubChats) unsubChats();
+  if (unsubGroups) unsubGroups();
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
   if (unsubContacts) unsubContacts();
   if (sessionsUnsub) sessionsUnsub();
   if (presenceInterval) clearInterval(presenceInterval);
-  unsubChats = unsubMessages = unsubChatDoc = unsubContacts = sessionsUnsub = presenceInterval = null;
+  unsubChats = unsubGroups = unsubMessages = unsubChatDoc = unsubContacts = sessionsUnsub = presenceInterval = null;
   chatsInitialized = false;
 }
 
@@ -220,6 +256,7 @@ function enterApp() {
   renderMe();
   listenContactsList();
   listenChatsList();
+  listenGroupsList();
   touchPresence(currentUser.uid);
   presenceInterval = setInterval(() => touchPresence(currentUser.uid), 45000);
   document.addEventListener("visibilitychange", onVisibilityChange);
@@ -234,35 +271,11 @@ function renderMe() {
   meName.textContent = myProfile.displayName;
 }
 
-// ---------- Profile dropdown menu ----------
+// ---------- Avatar click -> settings ----------
 
-menuTriggerBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
-  profileDropdown.classList.toggle("hidden");
-});
+menuTriggerBtn.addEventListener("click", () => openSettings());
 
-document.addEventListener("click", (e) => {
-  if (!profileDropdown.classList.contains("hidden") && !profileDropdown.contains(e.target) && e.target !== menuTriggerBtn) {
-    profileDropdown.classList.add("hidden");
-  }
-});
-
-menuSettingsBtn.addEventListener("click", () => {
-  profileDropdown.classList.add("hidden");
-  openSettings();
-});
-
-menuLogoutBtn.addEventListener("click", async () => {
-  profileDropdown.classList.add("hidden");
-  cleanupSubscriptions();
-  await logout();
-});
-
-// ---------- Search / new chat ----------
-
-fabNewChat.addEventListener("click", () => {
-  searchInput.focus();
-});
+// ---------- Search ----------
 
 const runSearch = debounce(async (raw) => {
   const q = raw.trim();
@@ -315,6 +328,222 @@ const runSearch = debounce(async (raw) => {
 
 searchInput.addEventListener("input", () => runSearch(searchInput.value));
 
+// ---------- New chat modal (contact / group / channel) ----------
+
+fabNewChat.addEventListener("click", () => openNewChatMenu());
+newChatCloseBtn.addEventListener("click", () => newChatOverlay.classList.add("hidden"));
+newChatOverlay.addEventListener("click", (e) => {
+  if (e.target === newChatOverlay) newChatOverlay.classList.add("hidden");
+});
+
+function showNewChatStep(step) {
+  [newChatMenu, newChatContactStep, newChatGroupStep].forEach((el) => el.classList.add("hidden"));
+  step.classList.remove("hidden");
+}
+
+function openNewChatMenu() {
+  newChatUsernameInput.value = "";
+  newChatContactResult.innerHTML = "";
+  showNewChatStep(newChatMenu);
+  newChatOverlay.classList.remove("hidden");
+}
+
+newChatContactBtn.addEventListener("click", () => showNewChatStep(newChatContactStep));
+newChatContactBackBtn.addEventListener("click", () => showNewChatStep(newChatMenu));
+
+const runNewChatContactSearch = debounce(async (raw) => {
+  const q = raw.trim();
+  if (!q) {
+    newChatContactResult.innerHTML = "";
+    return;
+  }
+  const result = await searchUser(q, currentUser.uid);
+  if (!result || result.self) {
+    newChatContactResult.innerHTML = `<div class="search-empty">${
+      result?.self ? "Это вы 🙂" : "Пользователь не найден"
+    }</div>`;
+    return;
+  }
+  const { uid, profile } = result;
+  const isContact = contactsMap.has(uid);
+  const card = document.createElement("div");
+  card.className = "search-result-card";
+  card.innerHTML = `
+    ${avatarHTML(profile, uid)}
+    <div class="search-result-meta">
+      <div class="search-result-name"></div>
+      <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
+    </div>
+    <div class="search-result-actions">
+      ${isContact ? "" : '<button class="small-btn secondary" id="ncr-add">Добавить</button>'}
+      <button class="small-btn" id="ncr-message">Написать</button>
+    </div>
+  `;
+  card.querySelector(".search-result-name").textContent = profile.displayName;
+  newChatContactResult.innerHTML = "";
+  newChatContactResult.appendChild(card);
+
+  const addBtn = card.querySelector("#ncr-add");
+  if (addBtn) addBtn.addEventListener("click", async () => addContact(currentUser.uid, uid));
+
+  card.querySelector("#ncr-message").addEventListener("click", async () => {
+    await addContact(currentUser.uid, uid);
+    const chatId = await ensureChat(currentUser.uid, uid);
+    openContactChat(chatId, uid, profile);
+    newChatOverlay.classList.add("hidden");
+  });
+}, 350);
+
+newChatUsernameInput.addEventListener("input", () => runNewChatContactSearch(newChatUsernameInput.value));
+
+// ---------- New chat modal: group / channel creation ----------
+
+function renderGroupAvatarPreview() {
+  const color = "#5b8cff";
+  newChatGroupAvatarPreview.style.background = color;
+  if (pendingGroupAvatarImage) {
+    newChatGroupAvatarPreview.innerHTML = `<img src="${pendingGroupAvatarImage}" alt="" />`;
+  } else {
+    newChatGroupAvatarPreview.textContent = pendingGroupType === "channel" ? "📢" : "👥";
+  }
+}
+
+function renderGroupMemberChips() {
+  newChatGroupMembersChips.innerHTML = "";
+  pendingGroupMembers.forEach((profile, uid) => {
+    const chip = document.createElement("div");
+    chip.className = "member-chip";
+    chip.innerHTML = `<span></span><button type="button" title="Убрать">✕</button>`;
+    chip.querySelector("span").textContent = profile.displayName;
+    chip.querySelector("button").addEventListener("click", () => {
+      pendingGroupMembers.delete(uid);
+      renderGroupMemberChips();
+    });
+    newChatGroupMembersChips.appendChild(chip);
+  });
+}
+
+function openNewChatGroupStep(type) {
+  pendingGroupType = type;
+  pendingGroupAvatarImage = null;
+  pendingGroupMembers = new Map();
+  newChatGroupTitle.textContent = type === "channel" ? "Новый канал" : "Новая группа";
+  newChatGroupNameLabel.textContent = type === "channel" ? "Название канала" : "Название группы";
+  newChatGroupNameInput.value = "";
+  newChatGroupMemberInput.value = "";
+  newChatGroupMemberResult.innerHTML = "";
+  newChatGroupError.textContent = "";
+  renderGroupAvatarPreview();
+  renderGroupMemberChips();
+  showNewChatStep(newChatGroupStep);
+}
+
+newChatGroupOpenBtn.addEventListener("click", () => openNewChatGroupStep("group"));
+newChatChannelOpenBtn.addEventListener("click", () => openNewChatGroupStep("channel"));
+newChatGroupBackBtn.addEventListener("click", () => showNewChatStep(newChatMenu));
+
+newChatGroupAvatarPickBtn.addEventListener("click", () => newChatGroupAvatarInput.click());
+
+newChatGroupAvatarInput.addEventListener("change", async () => {
+  const file = newChatGroupAvatarInput.files?.[0];
+  newChatGroupAvatarInput.value = "";
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    newChatGroupError.textContent = "Выберите файл изображения";
+    return;
+  }
+  try {
+    pendingGroupAvatarImage = await resizeImageToDataUrl(file);
+    newChatGroupError.textContent = "";
+    renderGroupAvatarPreview();
+  } catch (err) {
+    console.error(err);
+    newChatGroupError.textContent = "Не удалось загрузить фото";
+  }
+});
+
+const runGroupMemberSearch = debounce(async (raw) => {
+  const q = raw.trim();
+  if (!q) {
+    newChatGroupMemberResult.innerHTML = "";
+    return;
+  }
+  const result = await searchUser(q, currentUser.uid);
+  if (!result || result.self || pendingGroupMembers.has(result.uid)) {
+    newChatGroupMemberResult.innerHTML = result?.self
+      ? '<div class="search-empty">Это вы 🙂</div>'
+      : pendingGroupMembers.has(result?.uid)
+      ? '<div class="search-empty">Уже добавлен(а)</div>'
+      : '<div class="search-empty">Пользователь не найден</div>';
+    return;
+  }
+  const { uid, profile } = result;
+  const card = document.createElement("div");
+  card.className = "search-result-card";
+  card.innerHTML = `
+    ${avatarHTML(profile, uid)}
+    <div class="search-result-meta">
+      <div class="search-result-name"></div>
+      <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
+    </div>
+    <div class="search-result-actions">
+      <button class="small-btn" id="gmr-add">Добавить</button>
+    </div>
+  `;
+  card.querySelector(".search-result-name").textContent = profile.displayName;
+  newChatGroupMemberResult.innerHTML = "";
+  newChatGroupMemberResult.appendChild(card);
+
+  card.querySelector("#gmr-add").addEventListener("click", () => {
+    pendingGroupMembers.set(uid, profile);
+    renderGroupMemberChips();
+    newChatGroupMemberInput.value = "";
+    newChatGroupMemberResult.innerHTML = "";
+  });
+}, 350);
+
+newChatGroupMemberInput.addEventListener("input", () => runGroupMemberSearch(newChatGroupMemberInput.value));
+
+newChatGroupCreateBtn.addEventListener("click", async () => {
+  newChatGroupError.textContent = "";
+  const name = newChatGroupNameInput.value.trim();
+  if (!name) {
+    newChatGroupError.textContent = "Введите название";
+    return;
+  }
+  newChatGroupCreateBtn.disabled = true;
+  try {
+    const memberUids = Array.from(pendingGroupMembers.keys());
+    const groupId = await createGroup({
+      type: pendingGroupType,
+      name,
+      avatarImage: pendingGroupAvatarImage,
+      avatarColor: colorForUid(name + Date.now()),
+      ownerId: currentUser.uid,
+      memberUids,
+    });
+    const newGroup = {
+      id: groupId,
+      type: pendingGroupType,
+      name,
+      avatarImage: pendingGroupAvatarImage,
+      avatarColor: colorForUid(name),
+      ownerId: currentUser.uid,
+      admins: [currentUser.uid],
+      members: [currentUser.uid, ...memberUids],
+      lastMessage: "",
+      lastMessageSenderId: null,
+    };
+    newChatOverlay.classList.add("hidden");
+    openGroupChat(newGroup);
+  } catch (err) {
+    console.error(err);
+    newChatGroupError.textContent = err.message || "Не удалось создать";
+  } finally {
+    newChatGroupCreateBtn.disabled = false;
+  }
+});
+
 // ---------- Contacts (background data only - no separate tab) ----------
 
 function listenContactsList() {
@@ -325,7 +554,7 @@ function listenContactsList() {
   });
 }
 
-// ---------- Chats list (pinned Избранное + Linkage Notifications, then real chats) ----------
+// ---------- Chats list (pinned Избранное + Linkage Notifications, then real chats/groups) ----------
 
 function listenChatsList() {
   unsubChats = listenMyChats(currentUser.uid, (list, changes) => {
@@ -338,6 +567,13 @@ function listenChatsList() {
       });
     }
     chatsInitialized = true;
+  });
+}
+
+function listenGroupsList() {
+  unsubGroups = listenMyGroups(currentUser.uid, (list) => {
+    groups = list;
+    renderChats();
   });
 }
 
@@ -361,6 +597,15 @@ const SAVED_ICON =
 const BELL_ICON =
   '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
 
+function groupAvatarHTML(group) {
+  const color = group.avatarColor || colorForUid(group.id || group.name || "?");
+  if (group.avatarImage) {
+    return `<div class="avatar" style="background:${color}"><img src="${group.avatarImage}" alt="" /></div>`;
+  }
+  const icon = group.type === "channel" ? "📢" : "👥";
+  return `<div class="avatar" style="background:${color}">${icon}</div>`;
+}
+
 async function renderChats() {
   chatListEl.innerHTML = "";
 
@@ -374,7 +619,40 @@ async function renderChats() {
   notifItem.addEventListener("click", openNotificationsChat);
   chatListEl.appendChild(notifItem);
 
-  for (const chat of chats) {
+  const combined = [
+    ...chats.map((data) => ({ kind: "contact", data })),
+    ...groups.map((data) => ({ kind: "group", data })),
+  ].sort((a, b) => {
+    const ta = a.data.lastMessageAt?.toMillis ? a.data.lastMessageAt.toMillis() : 0;
+    const tb = b.data.lastMessageAt?.toMillis ? b.data.lastMessageAt.toMillis() : 0;
+    return tb - ta;
+  });
+
+  for (const entry of combined) {
+    if (entry.kind === "group") {
+      const group = entry.data;
+      const item = document.createElement("div");
+      item.className = "room-item" + (group.id === currentChatId ? " active" : "");
+      item.innerHTML = `
+        ${groupAvatarHTML(group)}
+        <div class="room-meta">
+          <div class="room-name"></div>
+          <div class="room-last"></div>
+        </div>
+      `;
+      item.querySelector(".room-name").textContent = group.name;
+      const lastPrefix = group.lastMessageSenderId === currentUser.uid ? "Вы: " : "";
+      item.querySelector(".room-last").textContent = group.lastMessage
+        ? lastPrefix + group.lastMessage
+        : group.type === "channel"
+        ? "Канал"
+        : "Группа";
+      item.addEventListener("click", () => openGroupChat(group));
+      chatListEl.appendChild(item);
+      continue;
+    }
+
+    const chat = entry.data;
     const otherUid = chat.participants.find((p) => p !== currentUser.uid);
     const contact = contactsMap.get(otherUid);
     const profile = contact?.profile || (await getProfile(otherUid));
@@ -432,6 +710,7 @@ function renderPlainMessages(msgs, isMineFn) {
 function openSavedChat() {
   resetChatView();
   currentChatId = SAVED_ID;
+  currentChatType = "saved";
   currentOtherUid = null;
   currentOtherProfile = null;
 
@@ -449,6 +728,7 @@ function openSavedChat() {
 function openNotificationsChat() {
   resetChatView();
   currentChatId = NOTIFICATIONS_ID;
+  currentChatType = "notifications";
   currentOtherUid = null;
   currentOtherProfile = null;
 
@@ -468,6 +748,7 @@ function openNotificationsChat() {
 function openContactChat(chatId, otherUid, profile) {
   resetChatView();
   currentChatId = chatId;
+  currentChatType = "contact";
   currentOtherUid = otherUid;
   currentOtherProfile = profile;
 
@@ -486,6 +767,56 @@ function openContactChat(chatId, otherUid, profile) {
   unsubChatDoc = listenChatDoc(chatId, (data) => {
     if (currentChatId !== chatId || !data) return;
     updateChatSub(profile, data);
+  });
+}
+
+// ---------- Groups & channels ----------
+
+function pluralMembers(n) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} участник`;
+  if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return `${n} участника`;
+  return `${n} участников`;
+}
+
+function openGroupChat(group) {
+  resetChatView();
+  currentChatId = group.id;
+  currentChatType = group.type;
+  currentOtherUid = null;
+  currentOtherProfile = null;
+
+  chatHeaderAvatar.innerHTML = groupAvatarHTML(group);
+  chatTitle.textContent = group.name;
+  chatSub.textContent = pluralMembers((group.members || []).length);
+
+  const canPost = group.type === "group" || (group.admins || []).includes(currentUser.uid);
+  composer.classList.toggle("hidden", !canPost);
+
+  renderChats();
+  messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
+  const senderCache = new Map();
+  unsubMessages = listenGroupMessages(group.id, async (msgs) => {
+    if (currentChatId !== group.id) return;
+    messagesEl.innerHTML = "";
+    if (msgs.length === 0) {
+      messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
+      return;
+    }
+    for (const msg of msgs) {
+      const isMine = msg.senderId === currentUser.uid;
+      let senderName = null;
+      if (!isMine) {
+        if (!senderCache.has(msg.senderId)) {
+          const p = contactsMap.get(msg.senderId)?.profile || (await getProfile(msg.senderId));
+          senderCache.set(msg.senderId, p);
+        }
+        senderName = senderCache.get(msg.senderId)?.displayName || "—";
+      }
+      renderMessage(msg, isMine, senderName);
+    }
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   });
 }
 
@@ -518,15 +849,17 @@ backToListBtn.addEventListener("click", () => {
   sidebar.classList.remove("chat-open");
 });
 
-function renderMessage(msg, isMine) {
+function renderMessage(msg, isMine, senderName) {
   const row = document.createElement("div");
   row.className = "msg-row" + (isMine ? " me" : "");
   row.innerHTML = `
     <div class="msg-group">
+      ${senderName ? '<div class="msg-sender"></div>' : ""}
       <div class="bubble"></div>
       <div class="msg-time"></div>
     </div>
   `;
+  if (senderName) row.querySelector(".msg-sender").textContent = senderName;
   row.querySelector(".bubble").textContent = msg.text;
   row.querySelector(".msg-time").textContent = fmtTime(msg.createdAt);
   messagesEl.appendChild(row);
@@ -548,7 +881,7 @@ msgInput.addEventListener("input", () => {
   msgInput.style.height = "auto";
   msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
 
-  if (currentChatId && currentOtherUid) {
+  if (currentChatType === "contact") {
     setTyping(currentChatId, currentUser.uid, true);
     clearTimeout(typingClearTimer);
     typingClearTimer = setTimeout(() => setTyping(currentChatId, currentUser.uid, false), 3000);
@@ -563,10 +896,12 @@ async function doSendMessage() {
   sendBtn.disabled = true;
   clearTimeout(typingClearTimer);
   try {
-    if (currentChatId === SAVED_ID) {
+    if (currentChatType === "saved") {
       await addSavedMessage(currentUser.uid, text);
-    } else if (currentChatId === NOTIFICATIONS_ID) {
+    } else if (currentChatType === "notifications") {
       await addBroadcast(currentUser.uid, text);
+    } else if (currentChatType === "group" || currentChatType === "channel") {
+      await sendGroupMessage(currentChatId, currentUser.uid, text);
     } else {
       await sendMessage(currentChatId, currentUser.uid, text);
     }
@@ -657,16 +992,35 @@ settingsOverlay.addEventListener("click", (e) => {
   if (e.target === settingsOverlay) settingsOverlay.classList.add("hidden");
 });
 
-settingsTabBtns.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    settingsTabBtns.forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    document.querySelectorAll(".settings-tab-panel").forEach((p) => {
-      p.classList.toggle("hidden", p.dataset.spanel !== btn.dataset.stab);
-    });
-    if (btn.dataset.stab === "sessions") loadSessions();
+const SETTINGS_SECTION_TITLES = {
+  profile: "Профиль",
+  privacy: "Приватность",
+  notifications: "Уведомления",
+  sessions: "Сессии",
+};
+
+function showSettingsMenu() {
+  settingsMenu.classList.remove("hidden");
+  document.querySelectorAll(".settings-tab-panel").forEach((p) => p.classList.add("hidden"));
+  settingsHeaderTitle.textContent = "Настройки";
+  settingsBackBtn.classList.add("hidden");
+}
+
+function showSettingsSection(section) {
+  settingsMenu.classList.add("hidden");
+  document.querySelectorAll(".settings-tab-panel").forEach((p) => {
+    p.classList.toggle("hidden", p.dataset.spanel !== section);
   });
+  settingsHeaderTitle.textContent = SETTINGS_SECTION_TITLES[section] || "Настройки";
+  settingsBackBtn.classList.remove("hidden");
+  if (section === "sessions") loadSessions();
+}
+
+settingsMenuItems.forEach((btn) => {
+  btn.addEventListener("click", () => showSettingsSection(btn.dataset.section));
 });
+
+settingsBackBtn.addEventListener("click", showSettingsMenu);
 
 function openSettings() {
   settingsProfileError.textContent = "";
@@ -692,6 +1046,7 @@ function openSettings() {
   notifDesktop.checked = !!myProfile.notifications?.desktop;
   notifPreview.checked = myProfile.notifications?.preview !== false;
 
+  showSettingsMenu();
   settingsOverlay.classList.remove("hidden");
 }
 
@@ -811,6 +1166,13 @@ pwSaveBtn.addEventListener("click", async () => {
 
 function loadSessions() {
   if (sessionsUnsub) return;
+  let currentSessionId = null;
+  try {
+    currentSessionId = sessionStorage.getItem("currentSessionId");
+  } catch (_) {
+    /* ignore */
+  }
+
   sessionsUnsub = listenSessions(currentUser.uid, (sessions) => {
     if (sessions.length === 0) {
       sessionsListEl.innerHTML = '<div class="empty-list">История пуста</div>';
@@ -818,22 +1180,39 @@ function loadSessions() {
     }
     sessionsListEl.innerHTML = "";
     sessions.forEach((s) => {
+      const isCurrent = s.id === currentSessionId;
       const row = document.createElement("div");
-      row.className = "session-row";
+      row.className = "session-row" + (isCurrent ? " current" : "");
       row.innerHTML = `
         <div>
           <div class="session-device"></div>
           <div class="session-time"></div>
         </div>
-        <button type="button" class="link-btn" title="Забыть эту запись">Забыть</button>
       `;
       row.querySelector(".session-device").textContent = s.device || "Неизвестное устройство";
-      row.querySelector(".session-time").textContent = fmtDateTime(s.createdAt);
-      row.querySelector("button").addEventListener("click", () => forgetSession(currentUser.uid, s.id));
+      row.querySelector(".session-time").textContent = isCurrent
+        ? "Текущая сессия"
+        : fmtDateTime(s.createdAt);
+      if (isCurrent) {
+        row.querySelector(".session-time").classList.add("session-current-badge");
+      } else {
+        const forgetBtn = document.createElement("button");
+        forgetBtn.type = "button";
+        forgetBtn.className = "link-btn";
+        forgetBtn.title = "Забыть эту запись";
+        forgetBtn.textContent = "Забыть";
+        forgetBtn.addEventListener("click", () => forgetSession(currentUser.uid, s.id));
+        row.appendChild(forgetBtn);
+      }
       sessionsListEl.appendChild(row);
     });
   });
 }
+
+sessionsLogoutBtn.addEventListener("click", async () => {
+  cleanupSubscriptions();
+  await logout();
+});
 
 deleteAccountOpenBtn.addEventListener("click", () => {
   deleteAccountConfirm.classList.remove("hidden");

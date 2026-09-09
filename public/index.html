@@ -13,21 +13,9 @@
     <div id="sidebar-backdrop" class="hidden"></div>
     <aside id="sidebar">
       <div id="sidebar-header">
-        <div class="header-menu-wrap">
-          <button class="avatar-menu-trigger" id="menu-trigger-btn" title="Меню">
-            <div class="avatar" id="me-avatar">?</div>
-          </button>
-          <div class="dropdown-menu hidden" id="profile-dropdown">
-            <button type="button" class="dropdown-item" id="menu-settings-btn">
-              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-              Настройки
-            </button>
-            <button type="button" class="dropdown-item danger" id="menu-logout-btn">
-              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              Выйти
-            </button>
-          </div>
-        </div>
+        <button class="avatar-menu-trigger" id="menu-trigger-btn" title="Настройки профиля">
+          <div class="avatar" id="me-avatar">?</div>
+        </button>
         <div class="me-text">
           <div class="me-name" id="me-name">—</div>
           <div class="me-status">Linkage Message</div>
@@ -94,24 +82,120 @@
     </div>
   </div>
 
+  <!-- New chat modal -->
+  <div id="new-chat-overlay" class="hidden">
+    <div class="alias-panel new-chat-panel">
+      <!-- Step 1: choose what to create -->
+      <div id="new-chat-menu">
+        <div class="new-chat-header">
+          <h3>Новый чат</h3>
+          <button type="button" class="icon-btn" id="new-chat-close-btn">✕</button>
+        </div>
+        <button type="button" class="settings-menu-item" id="new-chat-contact-btn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span>Новый контакт</span>
+        </button>
+        <button type="button" class="settings-menu-item" id="new-chat-group-open-btn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>Новая группа</span>
+        </button>
+        <button type="button" class="settings-menu-item" id="new-chat-channel-open-btn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11a9 9 0 0 1 9-9"/><path d="M4 4l16 16"/><path d="M9 15a4 4 0 0 1 4-4"/><circle cx="6" cy="18" r="2"/></svg>
+          <span>Новый канал</span>
+        </button>
+      </div>
+
+      <!-- Step 2a: add contact by username -->
+      <div id="new-chat-contact-step" class="hidden">
+        <div class="new-chat-header">
+          <button type="button" class="icon-btn" id="new-chat-contact-back-btn">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <h3>Новый контакт</h3>
+        </div>
+        <div class="field">
+          <label for="new-chat-username-input">Имя пользователя</label>
+          <input id="new-chat-username-input" type="text" placeholder="username" autocomplete="off" />
+        </div>
+        <div id="new-chat-contact-result"></div>
+      </div>
+
+      <!-- Step 2b: create group or channel -->
+      <div id="new-chat-group-step" class="hidden">
+        <div class="new-chat-header">
+          <button type="button" class="icon-btn" id="new-chat-group-back-btn">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <h3 id="new-chat-group-title">Новая группа</h3>
+        </div>
+
+        <div class="field avatar-upload-field">
+          <div class="avatar-upload" id="new-chat-group-avatar-upload">
+            <div class="avatar avatar-xl" id="new-chat-group-avatar-preview">?</div>
+            <button type="button" class="avatar-camera-btn" id="new-chat-group-avatar-pick-btn" title="Загрузить фото">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="14" r="3.5"/></svg>
+            </button>
+          </div>
+          <input type="file" id="new-chat-group-avatar-input" accept="image/*" class="hidden" />
+        </div>
+
+        <div class="field">
+          <label for="new-chat-group-name-input" id="new-chat-group-name-label">Название группы</label>
+          <input id="new-chat-group-name-input" type="text" maxlength="60" autocomplete="off" />
+        </div>
+
+        <div class="field">
+          <label for="new-chat-group-member-input">Добавить участников</label>
+          <input id="new-chat-group-member-input" type="text" placeholder="username" autocomplete="off" />
+          <div id="new-chat-group-member-result"></div>
+        </div>
+
+        <div id="new-chat-group-members-chips" class="member-chips"></div>
+
+        <button type="button" class="primary" id="new-chat-group-create-btn">Создать</button>
+        <div class="auth-error" id="new-chat-group-error"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings overlay -->
   <div id="settings-overlay" class="hidden">
     <div class="settings-panel">
       <div class="settings-header">
-        <h2>Настройки</h2>
+        <button class="icon-btn hidden" id="settings-back-btn" title="Назад">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <h2 id="settings-header-title">Настройки</h2>
         <button class="icon-btn" id="settings-close-btn">✕</button>
       </div>
 
-      <div id="settings-tabs">
-        <button class="tab-btn active" data-stab="profile">Профиль</button>
-        <button class="tab-btn" data-stab="privacy">Приватность</button>
-        <button class="tab-btn" data-stab="notifications">Уведомления</button>
-        <button class="tab-btn" data-stab="sessions">Сессии</button>
-      </div>
-
       <div class="settings-body">
-        <!-- Profile tab -->
-        <div class="settings-tab-panel" data-spanel="profile">
+        <!-- Section menu -->
+        <div id="settings-menu">
+          <button type="button" class="settings-menu-item" data-section="profile">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <span>Профиль</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button type="button" class="settings-menu-item" data-section="privacy">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V5z"/></svg>
+            <span>Приватность</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button type="button" class="settings-menu-item" data-section="notifications">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span>Уведомления</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button type="button" class="settings-menu-item" data-section="sessions">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            <span>Сессии</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+
+        <!-- Profile section -->
+        <div class="settings-tab-panel hidden" data-spanel="profile">
           <div class="field avatar-upload-field">
             <div class="avatar-upload" id="settings-avatar-upload">
               <div class="avatar avatar-xl" id="settings-avatar-preview">?</div>
@@ -185,6 +269,9 @@
 
         <!-- Sessions tab -->
         <div class="settings-tab-panel hidden" data-spanel="sessions">
+          <h4 class="settings-subheading">Этот аккаунт</h4>
+          <button type="button" class="danger-btn" id="sessions-logout-btn">Выйти из аккаунта</button>
+
           <h4 class="settings-subheading">Смена пароля</h4>
           <div class="field">
             <label for="pw-current">Текущий пароль</label>

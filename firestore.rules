@@ -76,6 +76,40 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ---------- groups/{groupId} : groups & channels ----------
+    // type == 'group': any member can post. type == 'channel': only members
+    // listed in `admins` can post, everyone else in `members` is read-only.
+    match /groups/{groupId} {
+      allow read: if isSignedIn()
+        && (resource == null || request.auth.uid in resource.data.members);
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.members
+        && request.auth.uid in request.resource.data.admins
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.type in ['group', 'channel']
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 60;
+      allow update: if isSignedIn() && request.auth.uid in resource.data.members;
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+        allow create: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members
+          && (
+            get(/databases/$(database)/documents/groups/$(groupId)).data.type == 'group'
+            || request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.admins
+          )
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000;
+        allow update, delete: if false;
+      }
+    }
+
     // ---------- chats/{chatId} : 1:1 conversations ----------
     match /chats/{chatId} {
       allow read: if isSignedIn()

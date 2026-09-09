@@ -157,12 +157,19 @@ export async function touchPresence(uid) {
 
 export async function recordSession(uid) {
   try {
-    await addDoc(collection(db, "users", uid, "sessions"), {
+    const ref = await addDoc(collection(db, "users", uid, "sessions"), {
       device: describeDevice(),
       createdAt: serverTimestamp(),
     });
+    try {
+      sessionStorage.setItem("currentSessionId", ref.id);
+    } catch (_) {
+      // sessionStorage may be unavailable (private mode etc.) - non-critical
+    }
+    return ref.id;
   } catch (_) {
     // non-critical
+    return null;
   }
 }
 
