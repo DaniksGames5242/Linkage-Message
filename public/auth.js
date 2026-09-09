@@ -1,7 +1,7 @@
 import { auth, db } from "./firebase.js";
 import {
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -12,37 +12,48 @@ import {
   runTransaction,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { normalizePhone, normalizeUsername, isValidUsername, colorForUid } from "./utils.js";
+import { normalizeEmail, isValidEmail, normalizeUsername, isValidUsername, colorForUid } from "./utils.js";
 
-let recaptchaVerifier = null;
-let confirmationResult = null;
-
-export function getRecaptcha() {
-  if (!recaptchaVerifier) {
-    recaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
-      size: "invisible",
-    });
+function friendlyAuthError(err) {
+  switch (err?.code) {
+    case "auth/email-already-in-use":
+      return "Этот email уже зарегистрирован. Попробуйте войти.";
+    case "auth/weak-password":
+      return "Пароль слишком простой (минимум 6 символов).";
+    case "auth/invalid-email":
+      return "Некорректный email.";
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+      return "Неверный email или пароль.";
+    case "auth/too-many-requests":
+      return "Слишком много попыток. Попробуйте позже.";
+    default:
+      return err?.message || "Что-то пошло не так";
   }
-  return recaptchaVerifier;
 }
 
-export async function requestOtp(rawPhone) {
-  const phone = normalizePhone(rawPhone);
-  if (!phone) throw new Error("Введите номер в формате +79991234567");
-  const verifier = getRecaptcha();
-  confirmationResult = await signInWithPhoneNumber(auth, phone, verifier);
-  return phone;
+export async function registerWithEmail(rawEmail, password) {
+  const email = normalizeEmail(rawEmail);
+  if (!isValidEmail(email)) throw new Error("Введите корректный email");
+  if (!password || password.length < 6) throw new Error("Пароль минимум 6 символов");
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    return cred.user;
+  } catch (err) {
+    throw new Error(friendlyAuthError(err));
+  }
 }
 
-export async function confirmOtp(code) {
-  if (!confirmationResult) throw new Error("Сначала запросите код");
-  if (!/^\d{4,8}$/.test(code)) throw new Error("Введите код из SMS");
-  const cred = await confirmationResult.confirm(code);
-  return cred.user;
-}
-
-export function resetOtpState() {
-  confirmationResult = null;
+export async function loginWithEmail(rawEmail, password) {
+  const email = normalizeEmail(rawEmail);
+  if (!isValidEmail(email)) throw new Error("Введите корректный email");
+  try {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    return cred.user;
+  } catch (err) {
+    throw new Error(friendlyAuthError(err));
+  }
 }
 
 export async function fetchMyProfile(uid) {
@@ -55,13 +66,14 @@ export async function usernameAvailable(username) {
   return !snap.exists();
 }
 
-export async function completeProfile({ uid, phoneNumber, username, displayName, avatarEmoji }) {
+export async function completeProfile({ uid, email, username, displayName, avatarEmoji }) {
   const uname = normalizeUsername(username);
   if (!isValidUsername(uname)) {
     throw new Error("Юзернейм: 3-20 символов, латиница/цифры/подчёркивание");
   }
   const name = (displayName || "").trim().slice(0, 40) || uname;
   const color = colorForUid(uid);
+  const normalizedEmail = normalizeEmail(email);
 
   await runTransaction(db, async (tx) => {
     const unameRef = doc(db, "usernames", uname);
@@ -72,16 +84,16 @@ export async function completeProfile({ uid, phoneNumber, username, displayName,
     tx.set(unameRef, { uid });
     tx.set(doc(db, "users", uid), {
       uid,
-      phone: phoneNumber,
+      email: normalizedEmail,
       username: uname,
       displayName: name,
       avatarColor: color,
       avatarEmoji: avatarEmoji || null,
       bio: "",
       privacy: {
-        phoneVisibility: "contacts",
+        emailVisibility: "contacts",
         lastSeenVisibility: "everyone",
-        findByPhone: "everyone",
+        findByEmail: "everyone",
       },
       notifications: {
         sound: true,
@@ -91,8 +103,8 @@ export async function completeProfile({ uid, phoneNumber, username, displayName,
       createdAt: serverTimestamp(),
       lastSeenAt: serverTimestamp(),
     });
-    if (phoneNumber) {
-      tx.set(doc(db, "phones", phoneNumber), { uid });
+    if (normalizedEmail) {
+      tx.set(doc(db, "emails", normalizedEmail), { uid });
     }
   });
 }

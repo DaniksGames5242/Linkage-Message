@@ -1,8 +1,7 @@
 import { configLooksEmpty } from "./firebase.js";
 import {
-  requestOtp,
-  confirmOtp,
-  resetOtpState,
+  registerWithEmail,
+  loginWithEmail,
   fetchMyProfile,
   usernameAvailable,
   completeProfile,
@@ -12,22 +11,16 @@ import { colorForUid, debounce, normalizeUsername, isValidUsername } from "./uti
 
 const AVATAR_EMOJIS = ["😀", "😎", "🐱", "🐶", "🦊", "🐼", "🌟", "🔥", "🌈", "🎮", "🎧", "⚽", "🍕", "🚀", "🌸", "👑"];
 
-const screenPhone = document.getElementById("screen-phone");
-const screenOtp = document.getElementById("screen-otp");
+const screenEmail = document.getElementById("screen-email");
 const screenProfile = document.getElementById("screen-profile");
 
-const phoneForm = document.getElementById("phone-form");
-const phoneInput = document.getElementById("phone-input");
-const phoneSubmit = document.getElementById("phone-submit");
-const phoneError = document.getElementById("phone-error");
-
-const otpForm = document.getElementById("otp-form");
-const otpInput = document.getElementById("otp-input");
-const otpSubmit = document.getElementById("otp-submit");
-const otpError = document.getElementById("otp-error");
-const otpSub = document.getElementById("otp-sub");
-const otpBack = document.getElementById("otp-back");
-const otpResend = document.getElementById("otp-resend");
+const emailModeTabs = document.querySelectorAll("#email-mode-tabs .tab-btn");
+const emailSub = document.getElementById("email-sub");
+const emailForm = document.getElementById("email-form");
+const emailInput = document.getElementById("email-input");
+const passwordInput = document.getElementById("password-input");
+const emailSubmit = document.getElementById("email-submit");
+const emailError = document.getElementById("email-error");
 
 const profileForm = document.getElementById("profile-form");
 const displaynameInput = document.getElementById("displayname-input");
@@ -38,16 +31,16 @@ const profileError = document.getElementById("profile-error");
 const avatarPicker = document.getElementById("avatar-picker");
 
 if (configLooksEmpty) {
-  phoneError.textContent = "Firebase не настроен: заполните public/firebase-config.js своими ключами проекта.";
-  phoneSubmit.disabled = true;
+  emailError.textContent = "Firebase не настроен: заполните public/firebase-config.js своими ключами проекта.";
+  emailSubmit.disabled = true;
 }
 
 let currentUser = null;
-let pendingPhone = null;
+let mode = "login";
 let selectedSetupEmoji = null;
 
 function showScreen(el) {
-  [screenPhone, screenOtp, screenProfile].forEach((s) => s.classList.add("hidden"));
+  [screenEmail, screenProfile].forEach((s) => s.classList.add("hidden"));
   el.classList.remove("hidden");
 }
 
@@ -78,80 +71,40 @@ function buildAvatarPicker(container, currentColor, currentEmoji, onSelect) {
   });
 }
 
-// ---------- 1. Phone entry ----------
+// ---------- 1. Email + password ----------
 
-phoneForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (configLooksEmpty) return;
-  phoneError.textContent = "";
-  phoneSubmit.disabled = true;
-  try {
-    pendingPhone = await requestOtp(phoneInput.value);
-    otpSub.textContent = `Код отправлен на ${pendingPhone}`;
-    otpInput.value = "";
-    showScreen(screenOtp);
-    startResendCooldown();
-  } catch (err) {
-    console.error(err);
-    phoneError.textContent = "Не удалось отправить код: " + (err.message || err);
-  } finally {
-    phoneSubmit.disabled = false;
-  }
+emailModeTabs.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    mode = btn.dataset.mode;
+    emailModeTabs.forEach((b) => b.classList.toggle("active", b === btn));
+    emailSubmit.textContent = mode === "register" ? "Зарегистрироваться" : "Войти";
+    emailSub.textContent =
+      mode === "register" ? "Создайте аккаунт по email" : "Войдите в свой аккаунт";
+    emailError.textContent = "";
+  });
 });
 
-// ---------- 2. OTP ----------
-
-otpForm.addEventListener("submit", async (e) => {
+emailForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  otpError.textContent = "";
-  otpSubmit.disabled = true;
+  if (configLooksEmpty) return;
+  emailError.textContent = "";
+  emailSubmit.disabled = true;
   try {
-    await confirmOtp(otpInput.value.trim());
+    if (mode === "register") {
+      await registerWithEmail(emailInput.value, passwordInput.value);
+    } else {
+      await loginWithEmail(emailInput.value, passwordInput.value);
+    }
     // onAuthStateChanged takes over from here
   } catch (err) {
     console.error(err);
-    otpError.textContent = "Неверный код. Попробуйте снова.";
+    emailError.textContent = err.message || "Не удалось войти";
   } finally {
-    otpSubmit.disabled = false;
+    emailSubmit.disabled = false;
   }
 });
 
-otpBack.addEventListener("click", () => {
-  resetOtpState();
-  pendingPhone = null;
-  showScreen(screenPhone);
-});
-
-let resendTimer = null;
-function startResendCooldown() {
-  let seconds = 60;
-  otpResend.disabled = true;
-  otpResend.textContent = `Отправить код повторно (${seconds}с)`;
-  clearInterval(resendTimer);
-  resendTimer = setInterval(() => {
-    seconds -= 1;
-    if (seconds <= 0) {
-      clearInterval(resendTimer);
-      otpResend.disabled = false;
-      otpResend.textContent = "Отправить код повторно";
-    } else {
-      otpResend.textContent = `Отправить код повторно (${seconds}с)`;
-    }
-  }, 1000);
-}
-
-otpResend.addEventListener("click", async () => {
-  if (!phoneInput.value) return;
-  otpError.textContent = "";
-  try {
-    pendingPhone = await requestOtp(phoneInput.value);
-    startResendCooldown();
-  } catch (err) {
-    otpError.textContent = "Не удалось отправить код: " + (err.message || err);
-  }
-});
-
-// ---------- 3. Profile setup ----------
+// ---------- 2. Profile setup ----------
 
 const checkUsernameDebounced = debounce(async (raw) => {
   const uname = normalizeUsername(raw);
@@ -174,7 +127,7 @@ profileForm.addEventListener("submit", async (e) => {
   try {
     await completeProfile({
       uid: currentUser.uid,
-      phoneNumber: currentUser.phoneNumber,
+      email: currentUser.email,
       username: usernameInput.value,
       displayName: displaynameInput.value,
       avatarEmoji: selectedSetupEmoji,
@@ -198,7 +151,7 @@ if (!configLooksEmpty) {
   watchAuthState(async (user) => {
     if (!user) {
       currentUser = null;
-      showScreen(screenPhone);
+      showScreen(screenEmail);
       return;
     }
     currentUser = user;

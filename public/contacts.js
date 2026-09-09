@@ -7,19 +7,19 @@ import {
   collection,
   onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { normalizePhone, normalizeUsername, isValidUsername } from "./utils.js";
+import { normalizeEmail, isValidEmail, normalizeUsername, isValidUsername } from "./utils.js";
 
-// Returns { uid, profile } | null. Tries phone first if it looks like one, else username.
+// Returns { uid, profile } | null. Tries email first if it looks like one, else username.
 export async function searchUser(rawQuery, myUid) {
   const raw = (rawQuery || "").trim();
   if (!raw) return null;
 
-  const phone = normalizePhone(raw);
+  const email = isValidEmail(raw) ? normalizeEmail(raw) : null;
   let targetUid = null;
 
-  if (phone) {
-    const phoneSnap = await getDoc(doc(db, "phones", phone));
-    if (phoneSnap.exists()) targetUid = phoneSnap.data().uid;
+  if (email) {
+    const emailSnap = await getDoc(doc(db, "emails", email));
+    if (emailSnap.exists()) targetUid = emailSnap.data().uid;
   } else {
     const uname = normalizeUsername(raw);
     if (isValidUsername(uname)) {
@@ -35,7 +35,7 @@ export async function searchUser(rawQuery, myUid) {
   if (!profileSnap.exists()) return null;
   const profile = profileSnap.data();
 
-  if (phone && profile.privacy?.findByPhone === "nobody") {
+  if (email && profile.privacy?.findByEmail === "nobody") {
     return null;
   }
 

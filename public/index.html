@@ -24,7 +24,7 @@
       </div>
 
       <div id="search-box">
-        <input id="search-input" type="text" placeholder="Найти по юзернейму или номеру…" autocomplete="off" />
+        <input id="search-input" type="text" placeholder="Найти по юзернейму или email…" autocomplete="off" />
       </div>
 
       <div id="search-result" class="hidden"></div>
@@ -41,7 +41,7 @@
     <section id="chat">
       <div id="empty-state">
         <div class="dot"></div>
-        <div>Выберите чат слева<br />или найдите контакт по юзернейму/номеру</div>
+        <div>Выберите чат слева<br />или найдите контакт по юзернейму/email</div>
       </div>
 
       <div id="chat-header" class="hidden">
@@ -97,8 +97,8 @@
             <input id="settings-bio" type="text" maxlength="140" placeholder="Пара слов о себе" />
           </div>
           <div class="field">
-            <label>Номер телефона</label>
-            <input type="text" id="settings-phone" disabled />
+            <label>Email</label>
+            <input type="text" id="settings-email" disabled />
           </div>
           <button class="primary" id="settings-profile-save">Сохранить</button>
           <div class="auth-error" id="settings-profile-error"></div>
@@ -108,10 +108,10 @@
         <div class="settings-tab-panel hidden" data-spanel="privacy">
           <div class="setting-row">
             <div>
-              <div class="setting-title">Кто видит мой номер телефона</div>
-              <div class="setting-desc">Влияет на отображение номера в вашем профиле</div>
+              <div class="setting-title">Кто видит мой email</div>
+              <div class="setting-desc">Влияет на отображение email в вашем профиле</div>
             </div>
-            <select id="privacy-phone">
+            <select id="privacy-email">
               <option value="everyone">Все</option>
               <option value="contacts">Только контакты</option>
               <option value="nobody">Никто</option>
@@ -130,10 +130,10 @@
           </div>
           <div class="setting-row">
             <div>
-              <div class="setting-title">Поиск по номеру телефона</div>
-              <div class="setting-desc">Разрешить находить вас по номеру</div>
+              <div class="setting-title">Поиск по email</div>
+              <div class="setting-desc">Разрешить находить вас по email</div>
             </div>
-            <select id="privacy-findbyphone">
+            <select id="privacy-findbyemail">
               <option value="everyone">Все</option>
               <option value="nobody">Никто</option>
             </select>

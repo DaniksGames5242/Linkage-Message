@@ -54,13 +54,13 @@ const settingsDisplayname = document.getElementById("settings-displayname");
 const settingsUsername = document.getElementById("settings-username");
 const settingsUsernameHint = document.getElementById("settings-username-hint");
 const settingsBio = document.getElementById("settings-bio");
-const settingsPhone = document.getElementById("settings-phone");
+const settingsEmail = document.getElementById("settings-email");
 const settingsProfileSave = document.getElementById("settings-profile-save");
 const settingsProfileError = document.getElementById("settings-profile-error");
 
-const privacyPhone = document.getElementById("privacy-phone");
+const privacyEmail = document.getElementById("privacy-email");
 const privacyLastseen = document.getElementById("privacy-lastseen");
-const privacyFindbyphone = document.getElementById("privacy-findbyphone");
+const privacyFindbyemail = document.getElementById("privacy-findbyemail");
 const settingsPrivacySave = document.getElementById("settings-privacy-save");
 const settingsPrivacyError = document.getElementById("settings-privacy-error");
 
@@ -120,7 +120,7 @@ function buildAvatarPicker(container, currentColor, currentEmoji, onSelect) {
 
 // ---------- Auth state ----------
 // This page assumes an authenticated user with a completed profile.
-// Anything else redirects to /login, which owns the phone/OTP/profile-setup flow.
+// Anything else redirects to /login, which owns the email/password/profile-setup flow.
 
 function goToLogin() {
   window.location.href = "/login";
@@ -262,7 +262,7 @@ function listenContactsList() {
 
 function renderContacts() {
   if (contacts.length === 0) {
-    contactListEl.innerHTML = '<div class="empty-list">Пока нет контактов.<br />Найдите кого-то по юзернейму или номеру выше ↑</div>';
+    contactListEl.innerHTML = '<div class="empty-list">Пока нет контактов.<br />Найдите кого-то по юзернейму или email выше ↑</div>';
     return;
   }
   contactListEl.innerHTML = "";
@@ -303,7 +303,7 @@ function listenChatsList() {
 
 async function renderChats() {
   if (chats.length === 0) {
-    chatListEl.innerHTML = '<div class="empty-list">Пока нет чатов.<br />Найдите контакт по юзернейму или номеру выше ↑</div>';
+    chatListEl.innerHTML = '<div class="empty-list">Пока нет чатов.<br />Найдите контакт по юзернейму или email выше ↑</div>';
     return;
   }
   chatListEl.innerHTML = "";
@@ -501,11 +501,11 @@ function openSettings() {
   settingsUsername.value = myProfile.username || "";
   settingsUsernameHint.textContent = "";
   settingsBio.value = myProfile.bio || "";
-  settingsPhone.value = currentUser.phoneNumber || "";
+  settingsEmail.value = currentUser.email || "";
 
-  privacyPhone.value = myProfile.privacy?.phoneVisibility || "contacts";
+  privacyEmail.value = myProfile.privacy?.emailVisibility || "contacts";
   privacyLastseen.value = myProfile.privacy?.lastSeenVisibility || "everyone";
-  privacyFindbyphone.value = myProfile.privacy?.findByPhone || "everyone";
+  privacyFindbyemail.value = myProfile.privacy?.findByEmail || "everyone";
 
   notifSound.checked = myProfile.notifications?.sound !== false;
   notifDesktop.checked = !!myProfile.notifications?.desktop;
@@ -564,9 +564,9 @@ settingsPrivacySave.addEventListener("click", async () => {
   settingsPrivacySave.disabled = true;
   try {
     const privacy = {
-      phoneVisibility: privacyPhone.value,
+      emailVisibility: privacyEmail.value,
       lastSeenVisibility: privacyLastseen.value,
-      findByPhone: privacyFindbyphone.value,
+      findByEmail: privacyFindbyemail.value,
     };
     await updatePrivacy(currentUser.uid, privacy);
     myProfile.privacy = privacy;

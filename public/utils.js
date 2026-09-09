@@ -32,12 +32,12 @@ export function isValidUsername(name) {
   return /^[a-z0-9_]{3,20}$/.test(name);
 }
 
-export function normalizePhone(raw) {
-  const cleaned = (raw || "").replace(/[^\d+]/g, "");
-  if (!cleaned.startsWith("+")) return null;
-  const digits = cleaned.slice(1);
-  if (!/^\d{7,15}$/.test(digits)) return null;
-  return "+" + digits;
+export function normalizeEmail(raw) {
+  return (raw || "").trim().toLowerCase();
+}
+
+export function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 export function chatIdFor(uidA, uidB) {

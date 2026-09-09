@@ -403,10 +403,15 @@ button.primary:disabled {
   padding: 4px;
 }
 
-#tabs {
+#tabs,
+#email-mode-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
   padding: 0 12px;
+}
+
+#email-mode-tabs {
+  margin-bottom: 20px;
 }
 
 .tab-btn {

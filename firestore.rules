@@ -26,12 +26,13 @@ service cloud.firestore {
       allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
     }
 
-    // ---------- phones/{e164Number} -> { uid } : lookup index for "add by phone" ----------
-    match /phones/{phoneId} {
+    // ---------- emails/{normalizedEmail} -> { uid } : lookup index for "add by email" ----------
+    match /emails/{emailId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn()
         && request.resource.data.uid == request.auth.uid
-        && request.auth.token.phone_number == phoneId;
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == emailId;
       allow update: if isSignedIn() && resource.data.uid == request.auth.uid;
       allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
     }
