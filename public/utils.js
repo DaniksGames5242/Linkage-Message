@@ -75,7 +75,36 @@ export function escapeHTML(str) {
 
 export function avatarHTML(profile, uid) {
   const color = profile?.avatarColor || colorForUid(uid || "?");
+  if (profile?.avatarImage) {
+    return `<div class="avatar" style="background:${color}"><img src="${profile.avatarImage}" alt="" /></div>`;
+  }
   const emoji = profile?.avatarEmoji;
   const label = escapeHTML(emoji || initials(profile?.displayName));
   return `<div class="avatar" style="background:${color}">${label}</div>`;
+}
+
+// Reads an image file, center-crops it to a square and downsizes it so it's
+// small enough to store inline in a Firestore document (well under 1 MiB).
+export function resizeImageToDataUrl(file, size = 256, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Файл не похож на изображение"));
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }

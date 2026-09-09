@@ -1,5 +1,12 @@
 import { configLooksEmpty } from "./firebase.js";
-import { fetchMyProfile, usernameAvailable, watchAuthState, logout, touchPresence } from "./auth.js";
+import {
+  fetchMyProfile,
+  usernameAvailable,
+  watchAuthState,
+  logout,
+  touchPresence,
+  resendVerificationEmail,
+} from "./auth.js";
 import { searchUser, addContact, listenContacts, getProfile } from "./contacts.js";
 import { ensureChat, listenMyChats, listenMessages, sendMessage } from "./chats.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications } from "./settings.js";
@@ -14,19 +21,22 @@ import {
   isRecentlyOnline,
   avatarHTML,
   escapeHTML,
+  resizeImageToDataUrl,
 } from "./utils.js";
-
-const AVATAR_EMOJIS = ["😀", "😎", "🐱", "🐶", "🦊", "🐼", "🌟", "🔥", "🌈", "🎮", "🎧", "⚽", "🍕", "🚀", "🌸", "👑"];
 
 // ---------- DOM refs ----------
 
 const appEl = document.getElementById("app");
 
 const sidebar = document.getElementById("sidebar");
-const meAvatar = document.getElementById("me-avatar");
 const meName = document.getElementById("me-name");
-const logoutBtn = document.getElementById("logout-btn");
-const openSettingsBtn = document.getElementById("open-settings-btn");
+const menuTriggerBtn = document.getElementById("menu-trigger-btn");
+const profileDropdown = document.getElementById("profile-dropdown");
+const menuSettingsBtn = document.getElementById("menu-settings-btn");
+const menuLogoutBtn = document.getElementById("menu-logout-btn");
+
+const verifyBanner = document.getElementById("verify-banner");
+const verifyResendBtn = document.getElementById("verify-resend-btn");
 
 const searchInput = document.getElementById("search-input");
 const searchResultEl = document.getElementById("search-result");
@@ -49,7 +59,10 @@ const backToListBtn = document.getElementById("back-to-list-btn");
 const settingsOverlay = document.getElementById("settings-overlay");
 const settingsCloseBtn = document.getElementById("settings-close-btn");
 const settingsTabBtns = document.querySelectorAll("#settings-tabs .tab-btn");
-const settingsAvatarPicker = document.getElementById("settings-avatar-picker");
+const settingsAvatarPreview = document.getElementById("settings-avatar-preview");
+const settingsAvatarPickBtn = document.getElementById("settings-avatar-pick-btn");
+const settingsAvatarInput = document.getElementById("settings-avatar-input");
+const settingsAvatarRemoveBtn = document.getElementById("settings-avatar-remove-btn");
 const settingsDisplayname = document.getElementById("settings-displayname");
 const settingsUsername = document.getElementById("settings-username");
 const settingsUsernameHint = document.getElementById("settings-username-hint");
@@ -74,7 +87,8 @@ const settingsNotifError = document.getElementById("settings-notif-error");
 
 let currentUser = null;
 let myProfile = null;
-let selectedSettingsEmoji = null;
+let selectedSettingsAvatarImage = null;
+let verifyResendTimer = null;
 
 let chats = [];
 let contacts = [];
@@ -89,34 +103,44 @@ let unsubContacts = null;
 let chatsInitialized = false;
 let presenceInterval = null;
 
-// ---------- Avatar pickers ----------
+// ---------- Settings avatar upload ----------
 
-function buildAvatarPicker(container, currentColor, currentEmoji, onSelect) {
-  container.innerHTML = "";
-  const noneOpt = document.createElement("div");
-  noneOpt.className = "avatar-option" + (currentEmoji ? "" : " selected");
-  noneOpt.style.background = currentColor;
-  noneOpt.textContent = "—";
-  noneOpt.addEventListener("click", () => {
-    onSelect(null);
-    [...container.children].forEach((c) => c.classList.remove("selected"));
-    noneOpt.classList.add("selected");
-  });
-  container.appendChild(noneOpt);
-
-  AVATAR_EMOJIS.forEach((emoji) => {
-    const opt = document.createElement("div");
-    opt.className = "avatar-option" + (currentEmoji === emoji ? " selected" : "");
-    opt.style.background = currentColor;
-    opt.textContent = emoji;
-    opt.addEventListener("click", () => {
-      onSelect(emoji);
-      [...container.children].forEach((c) => c.classList.remove("selected"));
-      opt.classList.add("selected");
-    });
-    container.appendChild(opt);
-  });
+function renderSettingsAvatarPreview() {
+  const color = myProfile.avatarColor || colorForUid(currentUser.uid);
+  settingsAvatarPreview.style.background = color;
+  if (selectedSettingsAvatarImage) {
+    settingsAvatarPreview.innerHTML = `<img src="${selectedSettingsAvatarImage}" alt="" />`;
+    settingsAvatarRemoveBtn.hidden = false;
+  } else {
+    settingsAvatarPreview.textContent = initials(myProfile.displayName);
+    settingsAvatarRemoveBtn.hidden = true;
+  }
 }
+
+settingsAvatarPickBtn.addEventListener("click", () => settingsAvatarInput.click());
+
+settingsAvatarInput.addEventListener("change", async () => {
+  const file = settingsAvatarInput.files?.[0];
+  settingsAvatarInput.value = "";
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    settingsProfileError.textContent = "Выберите файл изображения";
+    return;
+  }
+  try {
+    selectedSettingsAvatarImage = await resizeImageToDataUrl(file);
+    settingsProfileError.textContent = "";
+    renderSettingsAvatarPreview();
+  } catch (err) {
+    console.error(err);
+    settingsProfileError.textContent = "Не удалось загрузить фото";
+  }
+});
+
+settingsAvatarRemoveBtn.addEventListener("click", () => {
+  selectedSettingsAvatarImage = null;
+  renderSettingsAvatarPreview();
+});
 
 // ---------- Auth state ----------
 // This page assumes an authenticated user with a completed profile.
@@ -161,6 +185,7 @@ function cleanupSubscriptions() {
 function enterApp() {
   appEl.classList.remove("hidden");
   renderMe();
+  updateVerifyBanner();
   listenContactsList();
   listenChatsList();
   touchPresence(currentUser.uid);
@@ -173,16 +198,64 @@ function onVisibilityChange() {
 }
 
 function renderMe() {
-  const color = myProfile.avatarColor || colorForUid(currentUser.uid);
-  const label = myProfile.avatarEmoji || initials(myProfile.displayName);
-  meAvatar.style.background = color;
-  meAvatar.textContent = label;
+  menuTriggerBtn.innerHTML = avatarHTML(myProfile, currentUser.uid);
   meName.textContent = myProfile.displayName;
 }
 
-logoutBtn.addEventListener("click", async () => {
+// ---------- Profile dropdown menu ----------
+
+menuTriggerBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  profileDropdown.classList.toggle("hidden");
+});
+
+document.addEventListener("click", (e) => {
+  if (!profileDropdown.classList.contains("hidden") && !profileDropdown.contains(e.target) && e.target !== menuTriggerBtn) {
+    profileDropdown.classList.add("hidden");
+  }
+});
+
+menuSettingsBtn.addEventListener("click", () => {
+  profileDropdown.classList.add("hidden");
+  openSettings();
+});
+
+menuLogoutBtn.addEventListener("click", async () => {
+  profileDropdown.classList.add("hidden");
   cleanupSubscriptions();
   await logout();
+});
+
+// ---------- Email verification banner ----------
+
+async function updateVerifyBanner() {
+  try {
+    await currentUser.reload();
+  } catch (_) {
+    /* ignore */
+  }
+  verifyBanner.classList.toggle("hidden", !!currentUser.emailVerified);
+}
+
+verifyResendBtn.addEventListener("click", async () => {
+  verifyResendBtn.disabled = true;
+  try {
+    await resendVerificationEmail(currentUser);
+    verifyResendBtn.textContent = "Письмо отправлено";
+  } catch (err) {
+    console.error(err);
+    verifyResendBtn.textContent = "Не удалось отправить";
+  }
+  let seconds = 30;
+  clearInterval(verifyResendTimer);
+  verifyResendTimer = setInterval(() => {
+    seconds -= 1;
+    if (seconds <= 0) {
+      clearInterval(verifyResendTimer);
+      verifyResendBtn.disabled = false;
+      verifyResendBtn.textContent = "Отправить повторно";
+    }
+  }, 1000);
 });
 
 // ---------- Search ----------
@@ -473,7 +546,6 @@ async function maybeNotify(chatData) {
 
 // ---------- Settings overlay ----------
 
-openSettingsBtn.addEventListener("click", openSettings);
 settingsCloseBtn.addEventListener("click", () => settingsOverlay.classList.add("hidden"));
 settingsOverlay.addEventListener("click", (e) => {
   if (e.target === settingsOverlay) settingsOverlay.classList.add("hidden");
@@ -494,8 +566,8 @@ function openSettings() {
   settingsPrivacyError.textContent = "";
   settingsNotifError.textContent = "";
 
-  selectedSettingsEmoji = myProfile.avatarEmoji || null;
-  buildAvatarPicker(settingsAvatarPicker, myProfile.avatarColor || colorForUid(currentUser.uid), selectedSettingsEmoji, (emoji) => (selectedSettingsEmoji = emoji));
+  selectedSettingsAvatarImage = myProfile.avatarImage || null;
+  renderSettingsAvatarPreview();
 
   settingsDisplayname.value = myProfile.displayName || "";
   settingsUsername.value = myProfile.username || "";
@@ -545,7 +617,8 @@ settingsProfileSave.addEventListener("click", async () => {
     await updateProfileFields(currentUser.uid, {
       displayName: settingsDisplayname.value.trim().slice(0, 40) || myProfile.username,
       bio: settingsBio.value.trim().slice(0, 140),
-      avatarEmoji: selectedSettingsEmoji,
+      avatarImage: selectedSettingsAvatarImage,
+      avatarEmoji: null,
     });
     myProfile = await fetchMyProfile(currentUser.uid);
     renderMe();

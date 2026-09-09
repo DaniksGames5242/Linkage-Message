@@ -13,17 +13,34 @@
     <div id="sidebar-backdrop" class="hidden"></div>
     <aside id="sidebar">
       <div id="sidebar-header">
-        <button class="me" id="open-settings-btn" title="Настройки">
-          <div class="avatar" id="me-avatar">?</div>
-          <div class="me-text">
-            <div class="me-name" id="me-name">—</div>
-            <div class="me-status">Настройки профиля</div>
+        <div class="header-menu-wrap">
+          <button class="avatar-menu-trigger" id="menu-trigger-btn" title="Меню">
+            <div class="avatar" id="me-avatar">?</div>
+          </button>
+          <div class="dropdown-menu hidden" id="profile-dropdown">
+            <button type="button" class="dropdown-item" id="menu-settings-btn">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              Настройки
+            </button>
+            <button type="button" class="dropdown-item danger" id="menu-logout-btn">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              Выйти
+            </button>
           </div>
-        </button>
-        <button class="icon-btn" id="logout-btn" title="Выйти">⏻</button>
+        </div>
+        <div class="me-text">
+          <div class="me-name" id="me-name">—</div>
+          <div class="me-status">Linkage Message</div>
+        </div>
+      </div>
+
+      <div id="verify-banner" class="hidden">
+        <span>Подтвердите email — мы отправили письмо со ссылкой.</span>
+        <button type="button" class="link-btn" id="verify-resend-btn">Отправить повторно</button>
       </div>
 
       <div id="search-box">
+        <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input id="search-input" type="text" placeholder="Найти по юзернейму или email…" autocomplete="off" />
       </div>
 
@@ -79,9 +96,15 @@
       <div class="settings-body">
         <!-- Profile tab -->
         <div class="settings-tab-panel" data-spanel="profile">
-          <div class="field avatar-picker-field">
-            <label>Аватар</label>
-            <div class="avatar-picker" id="settings-avatar-picker"></div>
+          <div class="field avatar-upload-field">
+            <div class="avatar-upload" id="settings-avatar-upload">
+              <div class="avatar avatar-xl" id="settings-avatar-preview">?</div>
+              <button type="button" class="avatar-camera-btn" id="settings-avatar-pick-btn" title="Загрузить фото">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="14" r="3.5"/></svg>
+              </button>
+            </div>
+            <input type="file" id="settings-avatar-input" accept="image/*" class="hidden" />
+            <button type="button" class="link-btn" id="settings-avatar-remove-btn" hidden>Удалить фото</button>
           </div>
           <div class="field">
             <label for="settings-displayname">Имя</label>

@@ -10,17 +10,12 @@
 
   <!-- 1. Email + password -->
   <div id="screen-email" class="auth-screen">
-    <div class="auth-card">
+    <div class="auth-card" id="email-card">
       <div class="auth-logo">
         <div class="dot"></div>
         <h1>Linkage Message</h1>
       </div>
-      <p class="sub" id="email-sub">Войдите или зарегистрируйтесь по email</p>
-
-      <div id="email-mode-tabs">
-        <button type="button" class="tab-btn active" data-mode="login">Вход</button>
-        <button type="button" class="tab-btn" data-mode="register">Регистрация</button>
-      </div>
+      <p class="sub" id="email-sub">Войдите в свой аккаунт</p>
 
       <form id="email-form">
         <div class="field">
@@ -35,9 +30,7 @@
         <div class="auth-error" id="email-error"></div>
       </form>
 
-      <div class="auth-hint">
-        Регистрация бесплатна и не требует привязки телефона или карты.
-      </div>
+      <button type="button" class="switch-mode-btn" id="switch-mode-btn">Ещё нет аккаунта? Зарегистрируйтесь</button>
     </div>
   </div>
 
@@ -51,9 +44,15 @@
       <p class="sub">Придумайте юзернейм и имя, которые увидят другие</p>
 
       <form id="profile-form">
-        <div class="field avatar-picker-field">
-          <label>Аватар (необязательно)</label>
-          <div class="avatar-picker" id="avatar-picker"></div>
+        <div class="field avatar-upload-field">
+          <div class="avatar-upload" id="avatar-upload">
+            <div class="avatar avatar-xl" id="setup-avatar-preview">?</div>
+            <button type="button" class="avatar-camera-btn" id="setup-avatar-pick-btn" title="Загрузить фото">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="14" r="3.5"/></svg>
+            </button>
+          </div>
+          <input type="file" id="setup-avatar-input" accept="image/*" class="hidden" />
+          <button type="button" class="link-btn" id="setup-avatar-remove-btn" hidden>Удалить фото</button>
         </div>
         <div class="field">
           <label for="displayname-input">Имя</label>

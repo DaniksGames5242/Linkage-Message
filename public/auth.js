@@ -2,6 +2,7 @@ import { auth, db } from "./firebase.js";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  sendEmailVerification,
   signOut,
   onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -39,10 +40,15 @@ export async function registerWithEmail(rawEmail, password) {
   if (!password || password.length < 6) throw new Error("Пароль минимум 6 символов");
   try {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
+    sendEmailVerification(cred.user).catch((err) => console.warn("Verification email failed:", err));
     return cred.user;
   } catch (err) {
     throw new Error(friendlyAuthError(err));
   }
+}
+
+export async function resendVerificationEmail(user) {
+  await sendEmailVerification(user);
 }
 
 export async function loginWithEmail(rawEmail, password) {
@@ -66,7 +72,7 @@ export async function usernameAvailable(username) {
   return !snap.exists();
 }
 
-export async function completeProfile({ uid, email, username, displayName, avatarEmoji }) {
+export async function completeProfile({ uid, email, username, displayName, avatarEmoji, avatarImage }) {
   const uname = normalizeUsername(username);
   if (!isValidUsername(uname)) {
     throw new Error("Юзернейм: 3-20 символов, латиница/цифры/подчёркивание");
@@ -88,7 +94,8 @@ export async function completeProfile({ uid, email, username, displayName, avata
       username: uname,
       displayName: name,
       avatarColor: color,
-      avatarEmoji: avatarEmoji || null,
+      avatarEmoji: avatarImage ? null : avatarEmoji || null,
+      avatarImage: avatarImage || null,
       bio: "",
       privacy: {
         emailVisibility: "contacts",

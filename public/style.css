@@ -197,31 +197,56 @@ button.primary:disabled {
   cursor: not-allowed;
 }
 
-.avatar-picker-field label {
-  margin-bottom: 10px;
+.switch-mode-btn {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 10px 4px 0;
+  text-align: center;
 }
 
-.avatar-picker {
+.switch-mode-btn:hover {
+  text-decoration: underline;
+}
+
+.avatar-upload-field {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
   gap: 8px;
+  margin-bottom: 22px;
 }
 
-.avatar-option {
-  width: 40px;
-  height: 40px;
+.avatar-upload {
+  position: relative;
+  width: fit-content;
+}
+
+.avatar-camera-btn {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  border: 3px solid var(--panel);
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  cursor: pointer;
-  border: 2px solid transparent;
-  background: var(--panel-2);
+  transition: transform 0.12s, background 0.15s;
 }
 
-.avatar-option.selected {
-  border-color: var(--accent);
+.avatar-camera-btn:hover {
+  background: var(--accent-2);
+  transform: scale(1.08);
 }
 
 /* ---------- App layout ---------- */
@@ -247,25 +272,31 @@ button.primary:disabled {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 12px;
 }
 
-.me {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
+.header-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.avatar-menu-trigger {
   background: none;
   border: none;
+  padding: 0;
   cursor: pointer;
-  padding: 4px;
-  border-radius: 10px;
-  text-align: left;
+  border-radius: 50%;
+  display: block;
+  transition: transform 0.12s;
 }
 
-.me:hover {
-  background: var(--panel-2);
+.avatar-menu-trigger:hover {
+  transform: scale(1.05);
+}
+
+.avatar-menu-trigger:active {
+  transform: scale(0.96);
 }
 
 .avatar {
@@ -279,6 +310,58 @@ button.primary:disabled {
   font-size: 14px;
   color: white;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.avatar.avatar-xl {
+  width: 88px;
+  height: 88px;
+  font-size: 30px;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  animation: dropdownIn 0.14s ease;
+  transform-origin: top left;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13.5px;
+  padding: 10px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dropdown-item:hover {
+  background: var(--panel);
+}
+
+.dropdown-item.danger {
+  color: var(--danger);
 }
 
 .me-text {
@@ -322,24 +405,56 @@ button.primary:disabled {
   display: none;
 }
 
+#verify-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(245, 166, 35, 0.12);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: #f5a623;
+  animation: fadeIn 0.2s ease;
+}
+
+#verify-banner .link-btn {
+  color: #f5a623;
+  font-weight: 600;
+  flex-shrink: 0;
+  padding: 2px;
+}
+
 #search-box {
+  position: relative;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.search-icon {
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  pointer-events: none;
 }
 
 #search-box input {
   width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 9px 10px;
+  border-radius: 999px;
+  padding: 9px 12px 9px 34px;
   color: var(--text);
   font-size: 13px;
   outline: none;
+  transition: border-color 0.15s, background 0.15s;
 }
 
 #search-box input:focus {
   border-color: var(--accent);
+  background: var(--panel);
 }
 
 #search-result {
@@ -802,4 +917,93 @@ input.switch:checked::before {
   .settings-panel {
     max-height: 92vh;
   }
+}
+
+/* ---------- Animations ---------- */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes screenIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes appIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dropdownIn {
+  from { opacity: 0; transform: scale(0.92) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cardFlip {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.97); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.auth-card {
+  animation: screenIn 0.28s ease;
+}
+
+.card-flip {
+  animation: cardFlip 0.26s ease;
+}
+
+#app:not(.hidden) {
+  animation: appIn 0.25s ease;
+}
+
+#settings-overlay:not(.hidden) {
+  animation: overlayIn 0.15s ease;
+}
+
+.settings-panel {
+  animation: panelIn 0.2s ease;
+}
+
+.msg-row {
+  animation: msgIn 0.18s ease;
+}
+
+.room-item,
+.contact-item {
+  transition: background 0.12s, transform 0.1s;
+}
+
+.room-item:active,
+.contact-item:active {
+  transform: scale(0.99);
+}
+
+.icon-btn,
+.small-btn,
+#composer button {
+  transition: transform 0.1s, opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.icon-btn:active,
+.small-btn:active,
+#composer button:active {
+  transform: scale(0.94);
 }
