@@ -1,23 +1,33 @@
 # Linkage Message
 
-Простой веб-мессенджер в реальном времени: HTML/CSS/JS + Firebase (Auth + Firestore), деплой на Vercel.
+Веб-мессенджер: вход по номеру телефона (SMS-код), профиль с юзернеймом и аватаром, поиск и добавление контактов по номеру/юзернейму, личные чаты в реальном времени, настройки профиля/приватности/уведомлений.
 
-Никакого бэкенда/сборки не требуется — это статический сайт, лежащий в `public/`.
+Стек: HTML/CSS/JS (без сборки) + Firebase (Phone Auth + Firestore), деплой — статический хостинг на Vercel.
+
+Группы и каналы — следующий шаг, в этой версии их нет.
 
 ## 1. Настройка Firebase
 
-1. Зайдите на https://console.firebase.google.com и создайте новый проект (бесплатный план Spark достаточен).
-2. В проекте откройте **Build → Authentication → Get started** и включите провайдер **Anonymous**.
-3. Откройте **Build → Firestore Database → Create database** (режим Production).
-4. В **Firestore → Rules** вставьте содержимое файла [`firestore.rules`](./firestore.rules) из этого репозитория и нажмите Publish.
-5. В **Project settings → General → Your apps** нажмите "Add app" → Web (`</>`), зарегистрируйте приложение (имя любое, Hosting не подключать).
-6. Скопируйте объект `firebaseConfig`, который вам покажут, и вставьте его значения в файл [`public/firebase-config.js`](./public/firebase-config.js) вместо `YOUR_API_KEY` и т.д.
+1. https://console.firebase.google.com → создать проект.
+2. **Build → Authentication → Get started → Sign-in method** → включите провайдер **Phone**.
+3. **Build → Firestore Database → Create database** (режим Production, любой регион).
+4. Вкладка **Rules** в Firestore → вставьте содержимое [`firestore.rules`](./firestore.rules) → **Publish**.
+5. **Project settings → General → Your apps** → `</>` Web → зарегистрируйте приложение (Hosting не подключать) → скопируйте `firebaseConfig` в [`public/firebase-config.js`](./public/firebase-config.js).
+6. **Authentication → Settings → Authorized domains** → добавьте домен, на котором будет открываться сайт (например `<project>.vercel.app`); `localhost` там уже есть по умолчанию.
 
-Эти ключи публичные по дизайну Firebase (используются в клиентском JS), безопасность обеспечивают Firestore Security Rules из шага 4, а не секретность ключей.
+### Важно про SMS и тарифный план
+
+Реальная отправка SMS-кодов через Firebase Phone Auth требует тарифа **Blaze** (pay-as-you-go) — привяжите способ оплаты в Firebase Console (**⚙ → Usage and billing**). Бесплатная квота на телефонную авторизацию всё равно есть, но сам план должен быть Blaze, иначе вход по телефону не заработает вообще.
+
+Для разработки/тестов без реальных SMS: **Authentication → Sign-in method → Phone → Phone numbers for testing** — добавьте тестовый номер (например `+79990000000`) и код (например `123456`). Такие номера работают даже на бесплатном плане Spark и не тратят SMS-квоту.
+
+При первом входе Firebase покажет invisible reCAPTCHA (может появиться небольшой значок в углу экрана) — это нормально, так Firebase защищается от спама.
+
+### Составной индекс Firestore
+
+Список чатов сортируется по времени последнего сообщения (`orderBy lastMessageAt`) при фильтре по участнику (`array-contains`) — Firestore для такого запроса требует составной индекс. При первом открытии списка чатов в консоли браузера появится ошибка со ссылкой вида `https://console.firebase.google.com/.../firestore/indexes?create_composite=...` — просто перейдите по ней и нажмите «Create index» (создастся за 1-2 минуты, потом ошибка исчезнет сама).
 
 ## 2. Локальная проверка
-
-Файлы полностью статические, достаточно любого HTTP-сервера:
 
 ```bash
 npx serve public
@@ -25,33 +35,61 @@ npx serve public
 python3 -m http.server 8000 --directory public
 ```
 
-Откройте `http://localhost:3000` (или `:8000`), введите ник и войдите.
-
 ## 3. Деплой на Vercel
 
-1. Запушьте этот репозиторий в свой GitHub.
-2. На https://vercel.com нажмите **New Project → Import Git Repository** и выберите репозиторий.
-3. Vercel определит статический проект. В настройках убедитесь, что **Output Directory** = `public` (уже прописано в `vercel.json`, менять не нужно). Framework Preset можно оставить "Other".
-4. Нажмите **Deploy**.
-
-После деплоя мессенджер будет доступен по адресу вида `https://<project>.vercel.app` — сообщения синхронизируются в реальном времени между всеми, кто открыл ссылку.
+1. Запушьте репозиторий в GitHub.
+2. https://vercel.com → **New Project → Import Git Repository**.
+3. Output Directory уже прописан в `vercel.json` как `public`, Framework Preset — "Other".
+4. **Deploy**.
+5. Не забудьте добавить `<project>.vercel.app` в Authorized domains (шаг 6 выше), иначе вход по SMS будет падать с ошибкой домена.
 
 ## Как это работает
 
-- **Вход**: пользователь вводит ник → анонимная авторизация Firebase (`signInAnonymously`) + ник сохраняется как `displayName`.
-- **Комнаты**: коллекция Firestore `rooms`, список обновляется в реальном времени (`onSnapshot`), любой авторизованный пользователь может создать комнату.
-- **Сообщения**: подколлекция `rooms/{roomId}/messages`, тоже через `onSnapshot` — новые сообщения появляются у всех участников мгновенно, без перезагрузки.
-- **Файлы**:
-  - `public/index.html` — разметка
-  - `public/style.css` — тёмная тема, адаптивная вёрстка (мобильный вид со сдвижным сайдбаром)
-  - `public/app.js` — вся логика (Firebase modular SDK через CDN, ES-модуль)
-  - `public/firebase-config.js` — сюда вставляются ваши ключи проекта
-  - `firestore.rules` — правила безопасности Firestore
-  - `vercel.json` — указывает Vercel, что раздавать нужно папку `public`
+**Вход и регистрация:**
+1. Пользователь вводит номер телефона → `signInWithPhoneNumber` (Firebase Auth) отправляет SMS.
+2. Вводит код из SMS → авторизация.
+3. Если профиля ещё нет (`users/{uid}` в Firestore отсутствует) — экран создания профиля: юзернейм (проверка уникальности в реальном времени), имя, аватар (эмодзи на цветном фоне, необязательно).
 
-## Возможные доработки
+**Контакты:**
+- Поиск по номеру телефона или юзернейму (`@username`) в верхней части сайдбара.
+- Найденного пользователя можно добавить в контакты и/или сразу написать (это тоже добавляет в контакты).
+- Вкладка «Контакты» — список сохранённых контактов.
 
-- Приватные/защищённые паролем комнаты
-- Индикатор "печатает…" и статус "онлайн" (через Firestore/RTDB presence)
-- Загрузка изображений (Firebase Storage)
-- Push-уведомления (Firebase Cloud Messaging)
+**Чаты:**
+- Только личные (1:1), без групп/каналов.
+- ID чата — детерминированная комбинация двух uid, коллекция `chats/{chatId}/messages`.
+- Список чатов и сообщения обновляются в реальном времени через `onSnapshot`.
+
+**Настройки (иконка профиля в сайдбаре):**
+- *Профиль* — имя, юзернейм (со сменой через транзакцию, освобождает старый), статус/о себе, аватар.
+- *Приватность* — кто видит номер телефона, кто видит время последнего захода, разрешён ли поиск по номеру. Проверяется на уровне клиента (см. ограничения ниже).
+- *Уведомления* — звук, системные уведомления браузера (Notification API, работают пока вкладка открыта — без push/service worker), показывать ли превью текста.
+
+## Структура данных Firestore
+
+- `users/{uid}` — профиль: `phone`, `username`, `displayName`, `avatarColor`, `avatarEmoji`, `bio`, `privacy`, `notifications`, `lastSeenAt`
+- `usernames/{username}` → `{ uid }` — индекс уникальности юзернеймов
+- `phones/{e164Number}` → `{ uid }` — индекс для поиска по номеру
+- `users/{uid}/contacts/{contactUid}` — личный список контактов
+- `chats/{chatId}` — `participants`, `lastMessage`, `lastMessageAt`, `lastMessageSenderId`
+- `chats/{chatId}/messages/{messageId}` — `text`, `senderId`, `createdAt`
+
+## Файлы
+
+- `public/index.html` — разметка всех экранов
+- `public/style.css` — тёмная тема, адаптивная вёрстка
+- `public/firebase.js` — инициализация Firebase
+- `public/auth.js` — телефонная авторизация, создание профиля
+- `public/contacts.js` — поиск и список контактов
+- `public/chats.js` — чаты и сообщения
+- `public/settings.js` — обновление профиля/приватности/уведомлений
+- `public/utils.js` — общие хелперы (аватары, форматирование, валидация)
+- `public/app.js` — точка входа, переключение экранов, склейка всего интерфейса
+- `firestore.rules` — правила безопасности
+
+## Известные ограничения
+
+- Настройки приватности («кто видит номер/последний визит/поиск по номеру») проверяются на клиенте — это ограничивает UI, но не является полноценной серверной защитой; для этого нужны Cloud Functions с более сложными правилами.
+- Статус «в сети» — эвристика по `lastSeenAt` (обновляется раз в ~45 сек и при возврате на вкладку), а не настоящий realtime presence.
+- Уведомления браузера работают только пока вкладка/приложение открыты в браузере — это не push-уведомления (для них нужен Firebase Cloud Messaging + Service Worker).
+- Групповые чаты и каналы не реализованы — следующий этап.

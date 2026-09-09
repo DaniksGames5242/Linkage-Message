@@ -1,242 +1,548 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { configLooksEmpty, auth } from "./firebase.js";
 import {
-  getAuth,
-  signInAnonymously,
-  onAuthStateChanged,
-  updateProfile,
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  requestOtp,
+  confirmOtp,
+  resetOtpState,
+  fetchMyProfile,
+  usernameAvailable,
+  completeProfile,
+  watchAuthState,
+  logout,
+  touchPresence,
+} from "./auth.js";
+import { searchUser, addContact, listenContacts, getProfile } from "./contacts.js";
+import { ensureChat, listenMyChats, listenMessages, sendMessage } from "./chats.js";
+import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications } from "./settings.js";
 import {
-  getFirestore,
-  collection,
-  addDoc,
-  doc,
-  setDoc,
-  query,
-  orderBy,
-  limit,
-  onSnapshot,
-  serverTimestamp,
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  colorForUid,
+  initials,
+  debounce,
+  normalizeUsername,
+  isValidUsername,
+  fmtTime,
+  fmtRelative,
+  isRecentlyOnline,
+  avatarHTML,
+  escapeHTML,
+} from "./utils.js";
 
-const cfg = window.FIREBASE_CONFIG;
-const configLooksEmpty = !cfg || cfg.apiKey === "YOUR_API_KEY";
+const AVATAR_EMOJIS = ["😀", "😎", "🐱", "🐶", "🦊", "🐼", "🌟", "🔥", "🌈", "🎮", "🎧", "⚽", "🍕", "🚀", "🌸", "👑"];
 
-const authScreen = document.getElementById("auth-screen");
-const authForm = document.getElementById("auth-form");
-const nicknameInput = document.getElementById("nickname");
-const authSubmit = document.getElementById("auth-submit");
-const authError = document.getElementById("auth-error");
+// ---------- DOM refs ----------
 
+const screenPhone = document.getElementById("screen-phone");
+const screenOtp = document.getElementById("screen-otp");
+const screenProfile = document.getElementById("screen-profile");
 const appEl = document.getElementById("app");
+
+const phoneForm = document.getElementById("phone-form");
+const phoneInput = document.getElementById("phone-input");
+const phoneSubmit = document.getElementById("phone-submit");
+const phoneError = document.getElementById("phone-error");
+
+const otpForm = document.getElementById("otp-form");
+const otpInput = document.getElementById("otp-input");
+const otpSubmit = document.getElementById("otp-submit");
+const otpError = document.getElementById("otp-error");
+const otpSub = document.getElementById("otp-sub");
+const otpBack = document.getElementById("otp-back");
+const otpResend = document.getElementById("otp-resend");
+
+const profileForm = document.getElementById("profile-form");
+const displaynameInput = document.getElementById("displayname-input");
+const usernameInput = document.getElementById("username-input");
+const usernameHint = document.getElementById("username-hint");
+const profileSubmit = document.getElementById("profile-submit");
+const profileError = document.getElementById("profile-error");
+const avatarPicker = document.getElementById("avatar-picker");
+
 const sidebar = document.getElementById("sidebar");
-const sidebarBackdrop = document.getElementById("sidebar-backdrop");
 const meAvatar = document.getElementById("me-avatar");
 const meName = document.getElementById("me-name");
 const logoutBtn = document.getElementById("logout-btn");
+const openSettingsBtn = document.getElementById("open-settings-btn");
 
-const newRoomForm = document.getElementById("new-room-form");
-const newRoomInput = document.getElementById("new-room-input");
-const roomListEl = document.getElementById("room-list");
+const searchInput = document.getElementById("search-input");
+const searchResultEl = document.getElementById("search-result");
+
+const tabBtns = document.querySelectorAll("#tabs .tab-btn");
+const chatListEl = document.getElementById("chat-list");
+const contactListEl = document.getElementById("contact-list");
 
 const emptyState = document.getElementById("empty-state");
 const chatHeader = document.getElementById("chat-header");
-const chatRoomHash = document.getElementById("chat-room-hash");
+const chatHeaderAvatar = document.getElementById("chat-header-avatar");
 const chatTitle = document.getElementById("chat-title");
 const chatSub = document.getElementById("chat-sub");
 const messagesEl = document.getElementById("messages");
 const composer = document.getElementById("composer");
 const msgInput = document.getElementById("msg-input");
 const sendBtn = document.getElementById("send-btn");
+const backToListBtn = document.getElementById("back-to-list-btn");
+
+const settingsOverlay = document.getElementById("settings-overlay");
+const settingsCloseBtn = document.getElementById("settings-close-btn");
+const settingsTabBtns = document.querySelectorAll("#settings-tabs .tab-btn");
+const settingsAvatarPicker = document.getElementById("settings-avatar-picker");
+const settingsDisplayname = document.getElementById("settings-displayname");
+const settingsUsername = document.getElementById("settings-username");
+const settingsUsernameHint = document.getElementById("settings-username-hint");
+const settingsBio = document.getElementById("settings-bio");
+const settingsPhone = document.getElementById("settings-phone");
+const settingsProfileSave = document.getElementById("settings-profile-save");
+const settingsProfileError = document.getElementById("settings-profile-error");
+
+const privacyPhone = document.getElementById("privacy-phone");
+const privacyLastseen = document.getElementById("privacy-lastseen");
+const privacyFindbyphone = document.getElementById("privacy-findbyphone");
+const settingsPrivacySave = document.getElementById("settings-privacy-save");
+const settingsPrivacyError = document.getElementById("settings-privacy-error");
+
+const notifSound = document.getElementById("notif-sound");
+const notifDesktop = document.getElementById("notif-desktop");
+const notifPreview = document.getElementById("notif-preview");
+const settingsNotifSave = document.getElementById("settings-notif-save");
+const settingsNotifError = document.getElementById("settings-notif-error");
 
 if (configLooksEmpty) {
-  authError.textContent =
-    "Firebase не настроен: заполните public/firebase-config.js своими ключами проекта.";
-  authSubmit.disabled = true;
+  phoneError.textContent = "Firebase не настроен: заполните public/firebase-config.js своими ключами проекта.";
+  phoneSubmit.disabled = true;
 }
 
-let app, auth, db;
-if (!configLooksEmpty) {
-  app = initializeApp(cfg);
-  auth = getAuth(app);
-  db = getFirestore(app);
-}
+// ---------- State ----------
 
 let currentUser = null;
-let currentRoomId = null;
+let myProfile = null;
+let pendingPhone = null;
+let selectedSetupEmoji = null;
+let selectedSettingsEmoji = null;
+
+let chats = [];
+let contacts = [];
+let contactsMap = new Map();
+let currentChatId = null;
+let currentOtherUid = null;
+let currentOtherProfile = null;
+
+let unsubChats = null;
 let unsubMessages = null;
-let unsubRooms = null;
-let rooms = [];
+let unsubContacts = null;
+let chatsInitialized = false;
+let presenceInterval = null;
 
-function initials(name) {
-  return (name || "?").trim().slice(0, 2).toUpperCase();
+function showScreen(el) {
+  [screenPhone, screenOtp, screenProfile, appEl].forEach((s) => s.classList.add("hidden"));
+  el.classList.remove("hidden");
 }
 
-function fmtTime(ts) {
-  if (!ts || !ts.toDate) return "";
-  const d = ts.toDate();
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// ---------- Avatar pickers ----------
+
+function buildAvatarPicker(container, currentColor, currentEmoji, onSelect) {
+  container.innerHTML = "";
+  const noneOpt = document.createElement("div");
+  noneOpt.className = "avatar-option" + (currentEmoji ? "" : " selected");
+  noneOpt.style.background = currentColor;
+  noneOpt.textContent = "—";
+  noneOpt.addEventListener("click", () => {
+    onSelect(null);
+    [...container.children].forEach((c) => c.classList.remove("selected"));
+    noneOpt.classList.add("selected");
+  });
+  container.appendChild(noneOpt);
+
+  AVATAR_EMOJIS.forEach((emoji) => {
+    const opt = document.createElement("div");
+    opt.className = "avatar-option" + (currentEmoji === emoji ? " selected" : "");
+    opt.style.background = currentColor;
+    opt.textContent = emoji;
+    opt.addEventListener("click", () => {
+      onSelect(emoji);
+      [...container.children].forEach((c) => c.classList.remove("selected"));
+      opt.classList.add("selected");
+    });
+    container.appendChild(opt);
+  });
 }
 
-// ---------- Auth ----------
+// ---------- 1. Phone entry ----------
 
-authForm.addEventListener("submit", async (e) => {
+phoneForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (configLooksEmpty) return;
-  const nick = nicknameInput.value.trim();
-  if (!nick) return;
-
-  authSubmit.disabled = true;
-  authError.textContent = "";
+  phoneError.textContent = "";
+  phoneSubmit.disabled = true;
   try {
-    const cred = await signInAnonymously(auth);
-    await updateProfile(cred.user, { displayName: nick });
-    localStorage.setItem("lm_nickname", nick);
-    // onAuthStateChanged picks it up from here
+    pendingPhone = await requestOtp(phoneInput.value);
+    otpSub.textContent = `Код отправлен на ${pendingPhone}`;
+    otpInput.value = "";
+    showScreen(screenOtp);
+    startResendCooldown();
   } catch (err) {
     console.error(err);
-    authError.textContent = "Не удалось войти: " + (err.message || err);
-    authSubmit.disabled = false;
+    phoneError.textContent = "Не удалось отправить код: " + (err.message || err);
+  } finally {
+    phoneSubmit.disabled = false;
   }
 });
 
-logoutBtn.addEventListener("click", () => {
-  if (unsubMessages) unsubMessages();
-  if (unsubRooms) unsubRooms();
-  auth.signOut();
-  location.reload();
-});
+// ---------- 2. OTP ----------
 
-if (!configLooksEmpty) {
-  const savedNick = localStorage.getItem("lm_nickname");
-  if (savedNick) nicknameInput.value = savedNick;
-
-  onAuthStateChanged(auth, (user) => {
-    if (user && user.displayName) {
-      currentUser = user;
-      showApp(user);
-    } else if (!user) {
-      currentUser = null;
-      authScreen.classList.remove("hidden");
-      appEl.classList.add("hidden");
-    }
-  });
-}
-
-function showApp(user) {
-  authScreen.classList.add("hidden");
-  appEl.classList.remove("hidden");
-  meName.textContent = user.displayName;
-  meAvatar.textContent = initials(user.displayName);
-  listenRooms();
-}
-
-// ---------- Rooms ----------
-
-newRoomForm.addEventListener("submit", async (e) => {
+otpForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const name = newRoomInput.value.trim();
-  if (!name) return;
-  newRoomInput.value = "";
+  otpError.textContent = "";
+  otpSubmit.disabled = true;
   try {
-    const ref = await addDoc(collection(db, "rooms"), {
-      name,
-      createdBy: currentUser.displayName,
-      createdAt: serverTimestamp(),
-      lastMessage: "",
-      lastMessageAt: serverTimestamp(),
-    });
-    selectRoom(ref.id, name);
+    await confirmOtp(otpInput.value.trim());
+    // onAuthStateChanged takes over from here
   } catch (err) {
     console.error(err);
-    alert("Не удалось создать комнату: " + err.message);
+    otpError.textContent = "Неверный код. Попробуйте снова.";
+  } finally {
+    otpSubmit.disabled = false;
   }
 });
 
-function listenRooms() {
-  const q = query(collection(db, "rooms"), orderBy("lastMessageAt", "desc"), limit(50));
-  unsubRooms = onSnapshot(q, (snap) => {
-    rooms = [];
-    snap.forEach((d) => rooms.push({ id: d.id, ...d.data() }));
-    renderRooms();
-  });
+otpBack.addEventListener("click", () => {
+  resetOtpState();
+  pendingPhone = null;
+  showScreen(screenPhone);
+});
+
+let resendTimer = null;
+function startResendCooldown() {
+  let seconds = 60;
+  otpResend.disabled = true;
+  otpResend.textContent = `Отправить код повторно (${seconds}с)`;
+  clearInterval(resendTimer);
+  resendTimer = setInterval(() => {
+    seconds -= 1;
+    if (seconds <= 0) {
+      clearInterval(resendTimer);
+      otpResend.disabled = false;
+      otpResend.textContent = "Отправить код повторно";
+    } else {
+      otpResend.textContent = `Отправить код повторно (${seconds}с)`;
+    }
+  }, 1000);
 }
 
-function renderRooms() {
-  if (rooms.length === 0) {
-    roomListEl.innerHTML = '<div class="empty-rooms">Комнат пока нет.<br />Создайте первую выше ↑</div>';
+otpResend.addEventListener("click", async () => {
+  if (!phoneInput.value) return;
+  otpError.textContent = "";
+  try {
+    pendingPhone = await requestOtp(phoneInput.value);
+    startResendCooldown();
+  } catch (err) {
+    otpError.textContent = "Не удалось отправить код: " + (err.message || err);
+  }
+});
+
+// ---------- 3. Profile setup ----------
+
+const checkUsernameDebounced = debounce(async (raw) => {
+  const uname = normalizeUsername(raw);
+  if (!isValidUsername(uname)) {
+    usernameHint.textContent = "3-20 символов: латиница, цифры, _";
+    usernameHint.className = "field-hint";
     return;
   }
-  roomListEl.innerHTML = "";
-  rooms.forEach((room) => {
+  const available = await usernameAvailable(uname);
+  usernameHint.textContent = available ? "Юзернейм свободен" : "Уже занят";
+  usernameHint.className = "field-hint " + (available ? "ok" : "bad");
+}, 400);
+
+usernameInput.addEventListener("input", () => checkUsernameDebounced(usernameInput.value));
+
+profileForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  profileError.textContent = "";
+  profileSubmit.disabled = true;
+  try {
+    await completeProfile({
+      uid: currentUser.uid,
+      phoneNumber: currentUser.phoneNumber,
+      username: usernameInput.value,
+      displayName: displaynameInput.value,
+      avatarEmoji: selectedSetupEmoji,
+    });
+    myProfile = await fetchMyProfile(currentUser.uid);
+    enterApp();
+  } catch (err) {
+    console.error(err);
+    profileError.textContent = err.message || "Не удалось сохранить профиль";
+  } finally {
+    profileSubmit.disabled = false;
+  }
+});
+
+// ---------- Auth state ----------
+
+if (!configLooksEmpty) {
+  watchAuthState(async (user) => {
+    if (!user) {
+      currentUser = null;
+      myProfile = null;
+      cleanupSubscriptions();
+      showScreen(screenPhone);
+      return;
+    }
+    currentUser = user;
+    myProfile = await fetchMyProfile(user.uid);
+    if (!myProfile) {
+      const color = colorForUid(user.uid);
+      selectedSetupEmoji = null;
+      buildAvatarPicker(avatarPicker, color, null, (emoji) => (selectedSetupEmoji = emoji));
+      showScreen(screenProfile);
+      return;
+    }
+    enterApp();
+  });
+}
+
+function cleanupSubscriptions() {
+  if (unsubChats) unsubChats();
+  if (unsubMessages) unsubMessages();
+  if (unsubContacts) unsubContacts();
+  if (presenceInterval) clearInterval(presenceInterval);
+  unsubChats = unsubMessages = unsubContacts = presenceInterval = null;
+  chatsInitialized = false;
+}
+
+// ---------- Main app ----------
+
+function enterApp() {
+  showScreen(appEl);
+  renderMe();
+  listenContactsList();
+  listenChatsList();
+  touchPresence(currentUser.uid);
+  presenceInterval = setInterval(() => touchPresence(currentUser.uid), 45000);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+}
+
+function onVisibilityChange() {
+  if (!document.hidden && currentUser) touchPresence(currentUser.uid);
+}
+
+function renderMe() {
+  const color = myProfile.avatarColor || colorForUid(currentUser.uid);
+  const label = myProfile.avatarEmoji || initials(myProfile.displayName);
+  meAvatar.style.background = color;
+  meAvatar.textContent = label;
+  meName.textContent = myProfile.displayName;
+}
+
+logoutBtn.addEventListener("click", async () => {
+  cleanupSubscriptions();
+  await logout();
+});
+
+// ---------- Search ----------
+
+const runSearch = debounce(async (raw) => {
+  const q = raw.trim();
+  if (!q) {
+    searchResultEl.classList.add("hidden");
+    searchResultEl.innerHTML = "";
+    return;
+  }
+  const result = await searchUser(q, currentUser.uid);
+  searchResultEl.classList.remove("hidden");
+  if (!result || result.self) {
+    searchResultEl.innerHTML = `<div class="search-empty">${
+      result?.self ? "Это вы 🙂" : "Пользователь не найден"
+    }</div>`;
+    return;
+  }
+  const { uid, profile } = result;
+  const isContact = contactsMap.has(uid);
+  const card = document.createElement("div");
+  card.className = "search-result-card";
+  card.innerHTML = `
+    ${avatarHTML(profile, uid)}
+    <div class="search-result-meta">
+      <div class="search-result-name"></div>
+      <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
+    </div>
+    <div class="search-result-actions">
+      ${isContact ? "" : '<button class="small-btn secondary" id="sr-add">Добавить</button>'}
+      <button class="small-btn" id="sr-message">Написать</button>
+    </div>
+  `;
+  card.querySelector(".search-result-name").textContent = profile.displayName;
+  searchResultEl.innerHTML = "";
+  searchResultEl.appendChild(card);
+
+  const addBtn = card.querySelector("#sr-add");
+  if (addBtn) {
+    addBtn.addEventListener("click", async () => {
+      await addContact(currentUser.uid, uid);
+    });
+  }
+  card.querySelector("#sr-message").addEventListener("click", async () => {
+    await addContact(currentUser.uid, uid);
+    const chatId = await ensureChat(currentUser.uid, uid);
+    openChat(chatId, uid, profile);
+    searchInput.value = "";
+    searchResultEl.classList.add("hidden");
+  });
+}, 350);
+
+searchInput.addEventListener("input", () => runSearch(searchInput.value));
+
+// ---------- Tabs ----------
+
+tabBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    tabBtns.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    const tab = btn.dataset.tab;
+    chatListEl.classList.toggle("hidden", tab !== "chats");
+    contactListEl.classList.toggle("hidden", tab !== "contacts");
+  });
+});
+
+// ---------- Contacts ----------
+
+function listenContactsList() {
+  unsubContacts = listenContacts(currentUser.uid, (list) => {
+    contacts = list;
+    contactsMap = new Map(list.map((c) => [c.uid, c.profile]));
+    renderContacts();
+  });
+}
+
+function renderContacts() {
+  if (contacts.length === 0) {
+    contactListEl.innerHTML = '<div class="empty-list">Пока нет контактов.<br />Найдите кого-то по юзернейму или номеру выше ↑</div>';
+    return;
+  }
+  contactListEl.innerHTML = "";
+  contacts.forEach(({ uid, profile }) => {
     const item = document.createElement("div");
-    item.className = "room-item" + (room.id === currentRoomId ? " active" : "");
+    item.className = "contact-item";
     item.innerHTML = `
-      <div class="room-hash">#</div>
+      ${avatarHTML(profile, uid)}
+      <div class="contact-meta">
+        <div class="contact-name"></div>
+        <div class="contact-sub">@${escapeHTML(profile.username)}</div>
+      </div>
+    `;
+    item.querySelector(".contact-name").textContent = profile.displayName;
+    item.addEventListener("click", async () => {
+      const chatId = await ensureChat(currentUser.uid, uid);
+      openChat(chatId, uid, profile);
+    });
+    contactListEl.appendChild(item);
+  });
+}
+
+// ---------- Chats list ----------
+
+function listenChatsList() {
+  unsubChats = listenMyChats(currentUser.uid, (list, changes) => {
+    chats = list;
+    renderChats();
+    if (chatsInitialized) {
+      changes.forEach((c) => {
+        if (c.type === "removed") return;
+        maybeNotify(c.data);
+      });
+    }
+    chatsInitialized = true;
+  });
+}
+
+async function renderChats() {
+  if (chats.length === 0) {
+    chatListEl.innerHTML = '<div class="empty-list">Пока нет чатов.<br />Найдите контакт по юзернейму или номеру выше ↑</div>';
+    return;
+  }
+  chatListEl.innerHTML = "";
+  for (const chat of chats) {
+    const otherUid = chat.participants.find((p) => p !== currentUser.uid);
+    const profile = contactsMap.get(otherUid) || (await getProfile(otherUid));
+    if (!profile) continue;
+
+    const item = document.createElement("div");
+    item.className = "room-item" + (chat.id === currentChatId ? " active" : "");
+    item.innerHTML = `
+      ${avatarHTML(profile, otherUid)}
       <div class="room-meta">
         <div class="room-name"></div>
         <div class="room-last"></div>
       </div>
     `;
-    item.querySelector(".room-name").textContent = room.name;
-    item.querySelector(".room-last").textContent = room.lastMessage || "Нет сообщений";
-    item.addEventListener("click", () => {
-      selectRoom(room.id, room.name);
-      sidebar.classList.remove("open");
-      sidebarBackdrop.classList.add("hidden");
-    });
-    roomListEl.appendChild(item);
-  });
+    item.querySelector(".room-name").textContent = profile.displayName;
+    const lastPrefix = chat.lastMessageSenderId === currentUser.uid ? "Вы: " : "";
+    item.querySelector(".room-last").textContent = chat.lastMessage ? lastPrefix + chat.lastMessage : "Нет сообщений";
+    item.addEventListener("click", () => openChat(chat.id, otherUid, profile));
+    chatListEl.appendChild(item);
+  }
 }
 
-function selectRoom(roomId, roomName) {
+// ---------- Chat view ----------
+
+function openChat(chatId, otherUid, profile) {
   if (unsubMessages) unsubMessages();
-  currentRoomId = roomId;
+  currentChatId = chatId;
+  currentOtherUid = otherUid;
+  currentOtherProfile = profile;
 
   emptyState.classList.add("hidden");
   chatHeader.classList.remove("hidden");
   messagesEl.classList.remove("hidden");
   composer.classList.remove("hidden");
+  sidebar.classList.add("chat-open");
 
-  chatRoomHash.textContent = "#";
-  chatTitle.textContent = roomName;
-  chatSub.textContent = "Обновляется в реальном времени";
+  chatHeaderAvatar.innerHTML = avatarHTML(profile, otherUid);
+  chatTitle.textContent = profile.displayName;
+  updateChatSub(profile);
 
-  renderRooms();
-  listenMessages(roomId);
-}
-
-// ---------- Messages ----------
-
-function listenMessages(roomId) {
+  renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
-  const q = query(
-    collection(db, "rooms", roomId, "messages"),
-    orderBy("createdAt", "asc"),
-    limit(200)
-  );
-  unsubMessages = onSnapshot(q, (snap) => {
+  unsubMessages = listenMessages(chatId, (msgs) => {
     messagesEl.innerHTML = "";
-    if (snap.empty) {
+    if (msgs.length === 0) {
       messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет. Начните переписку!</div>';
       return;
     }
-    snap.forEach((d) => renderMessage(d.data()));
+    msgs.forEach(renderMessage);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   });
 }
 
+function updateChatSub(profile) {
+  const visibility = profile.privacy?.lastSeenVisibility || "everyone";
+  const isContact = contactsMap.has(currentOtherUid);
+  const canSee = visibility === "everyone" || (visibility === "contacts" && isContact);
+  if (!canSee) {
+    chatSub.textContent = "@" + profile.username;
+    return;
+  }
+  if (isRecentlyOnline(profile.lastSeenAt)) {
+    chatSub.textContent = "в сети";
+  } else if (profile.lastSeenAt) {
+    chatSub.textContent = "был(а) " + fmtRelative(profile.lastSeenAt);
+  } else {
+    chatSub.textContent = "@" + profile.username;
+  }
+}
+
+backToListBtn.addEventListener("click", () => {
+  sidebar.classList.remove("chat-open");
+});
+
 function renderMessage(msg) {
-  const isMe = msg.uid === currentUser.uid;
+  const isMe = msg.senderId === currentUser.uid;
   const row = document.createElement("div");
   row.className = "msg-row" + (isMe ? " me" : "");
   row.innerHTML = `
     <div class="msg-group">
-      <div class="msg-author"></div>
       <div class="bubble"></div>
       <div class="msg-time"></div>
     </div>
   `;
-  row.querySelector(".msg-author").textContent = isMe ? "Вы" : msg.author;
   row.querySelector(".bubble").textContent = msg.text;
   row.querySelector(".msg-time").textContent = fmtTime(msg.createdAt);
   messagesEl.appendChild(row);
@@ -244,13 +550,13 @@ function renderMessage(msg) {
 
 composer.addEventListener("submit", async (e) => {
   e.preventDefault();
-  await sendMessage();
+  await doSendMessage();
 });
 
 msgInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    sendMessage();
+    doSendMessage();
   }
 });
 
@@ -259,24 +565,14 @@ msgInput.addEventListener("input", () => {
   msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
 });
 
-async function sendMessage() {
+async function doSendMessage() {
   const text = msgInput.value.trim();
-  if (!text || !currentRoomId) return;
+  if (!text || !currentChatId) return;
   msgInput.value = "";
   msgInput.style.height = "auto";
   sendBtn.disabled = true;
   try {
-    await addDoc(collection(db, "rooms", currentRoomId, "messages"), {
-      text,
-      uid: currentUser.uid,
-      author: currentUser.displayName,
-      createdAt: serverTimestamp(),
-    });
-    await setDoc(
-      doc(db, "rooms", currentRoomId),
-      { lastMessage: text, lastMessageAt: serverTimestamp() },
-      { merge: true }
-    );
+    await sendMessage(currentChatId, currentUser.uid, text);
   } catch (err) {
     console.error(err);
     alert("Не удалось отправить сообщение: " + err.message);
@@ -285,9 +581,177 @@ async function sendMessage() {
   }
 }
 
-// ---------- Mobile sidebar toggle ----------
+// ---------- Notifications ----------
 
-sidebarBackdrop.addEventListener("click", () => {
-  sidebar.classList.remove("open");
-  sidebarBackdrop.classList.add("hidden");
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 720;
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+  } catch (_) {
+    /* audio not available */
+  }
+}
+
+async function maybeNotify(chatData) {
+  if (!chatData.lastMessageSenderId || chatData.lastMessageSenderId === currentUser.uid) return;
+  const isViewingThisChat =
+    currentChatId &&
+    chatData.participants &&
+    chatData.participants.includes(currentUser.uid) &&
+    !document.hidden &&
+    chatData.lastMessageSenderId !== currentUser.uid &&
+    [...chatData.participants].sort().join("_") === currentChatId;
+  if (isViewingThisChat) return;
+
+  const notifPrefs = myProfile?.notifications || {};
+  if (notifPrefs.sound !== false) beep();
+
+  if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
+    const senderUid = chatData.lastMessageSenderId;
+    const senderProfile = contactsMap.get(senderUid) || (await getProfile(senderUid));
+    const title = senderProfile?.displayName || "Новое сообщение";
+    const body = notifPrefs.preview !== false ? chatData.lastMessage : "Новое сообщение";
+    new Notification(title, { body });
+  }
+}
+
+// ---------- Settings overlay ----------
+
+openSettingsBtn.addEventListener("click", openSettings);
+settingsCloseBtn.addEventListener("click", () => settingsOverlay.classList.add("hidden"));
+settingsOverlay.addEventListener("click", (e) => {
+  if (e.target === settingsOverlay) settingsOverlay.classList.add("hidden");
+});
+
+settingsTabBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    settingsTabBtns.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll(".settings-tab-panel").forEach((p) => {
+      p.classList.toggle("hidden", p.dataset.spanel !== btn.dataset.stab);
+    });
+  });
+});
+
+function openSettings() {
+  settingsProfileError.textContent = "";
+  settingsPrivacyError.textContent = "";
+  settingsNotifError.textContent = "";
+
+  selectedSettingsEmoji = myProfile.avatarEmoji || null;
+  buildAvatarPicker(settingsAvatarPicker, myProfile.avatarColor || colorForUid(currentUser.uid), selectedSettingsEmoji, (emoji) => (selectedSettingsEmoji = emoji));
+
+  settingsDisplayname.value = myProfile.displayName || "";
+  settingsUsername.value = myProfile.username || "";
+  settingsUsernameHint.textContent = "";
+  settingsBio.value = myProfile.bio || "";
+  settingsPhone.value = currentUser.phoneNumber || "";
+
+  privacyPhone.value = myProfile.privacy?.phoneVisibility || "contacts";
+  privacyLastseen.value = myProfile.privacy?.lastSeenVisibility || "everyone";
+  privacyFindbyphone.value = myProfile.privacy?.findByPhone || "everyone";
+
+  notifSound.checked = myProfile.notifications?.sound !== false;
+  notifDesktop.checked = !!myProfile.notifications?.desktop;
+  notifPreview.checked = myProfile.notifications?.preview !== false;
+
+  settingsOverlay.classList.remove("hidden");
+}
+
+const checkSettingsUsernameDebounced = debounce(async (raw) => {
+  const uname = normalizeUsername(raw);
+  if (uname === myProfile.username) {
+    settingsUsernameHint.textContent = "";
+    return;
+  }
+  if (!isValidUsername(uname)) {
+    settingsUsernameHint.textContent = "3-20 символов: латиница, цифры, _";
+    settingsUsernameHint.className = "field-hint bad";
+    return;
+  }
+  const available = await usernameAvailable(uname);
+  settingsUsernameHint.textContent = available ? "Юзернейм свободен" : "Уже занят";
+  settingsUsernameHint.className = "field-hint " + (available ? "ok" : "bad");
+}, 400);
+
+settingsUsername.addEventListener("input", () => checkSettingsUsernameDebounced(settingsUsername.value));
+
+settingsProfileSave.addEventListener("click", async () => {
+  settingsProfileError.textContent = "";
+  settingsProfileSave.disabled = true;
+  try {
+    const newUsernameRaw = settingsUsername.value;
+    const newUsername = normalizeUsername(newUsernameRaw);
+    if (newUsername !== myProfile.username) {
+      const finalUsername = await changeUsername(currentUser.uid, myProfile.username, newUsernameRaw);
+      myProfile.username = finalUsername;
+    }
+    await updateProfileFields(currentUser.uid, {
+      displayName: settingsDisplayname.value.trim().slice(0, 40) || myProfile.username,
+      bio: settingsBio.value.trim().slice(0, 140),
+      avatarEmoji: selectedSettingsEmoji,
+    });
+    myProfile = await fetchMyProfile(currentUser.uid);
+    renderMe();
+    renderChats();
+    settingsOverlay.classList.add("hidden");
+  } catch (err) {
+    console.error(err);
+    settingsProfileError.textContent = err.message || "Не удалось сохранить";
+  } finally {
+    settingsProfileSave.disabled = false;
+  }
+});
+
+settingsPrivacySave.addEventListener("click", async () => {
+  settingsPrivacyError.textContent = "";
+  settingsPrivacySave.disabled = true;
+  try {
+    const privacy = {
+      phoneVisibility: privacyPhone.value,
+      lastSeenVisibility: privacyLastseen.value,
+      findByPhone: privacyFindbyphone.value,
+    };
+    await updatePrivacy(currentUser.uid, privacy);
+    myProfile.privacy = privacy;
+    settingsOverlay.classList.add("hidden");
+  } catch (err) {
+    console.error(err);
+    settingsPrivacyError.textContent = err.message || "Не удалось сохранить";
+  } finally {
+    settingsPrivacySave.disabled = false;
+  }
+});
+
+settingsNotifSave.addEventListener("click", async () => {
+  settingsNotifError.textContent = "";
+  settingsNotifSave.disabled = true;
+  try {
+    if (notifDesktop.checked && "Notification" in window && Notification.permission === "default") {
+      await Notification.requestPermission();
+    }
+    const desktopEnabled = notifDesktop.checked && "Notification" in window && Notification.permission === "granted";
+    const notifications = {
+      sound: notifSound.checked,
+      desktop: desktopEnabled,
+      preview: notifPreview.checked,
+    };
+    await updateNotifications(currentUser.uid, notifications);
+    myProfile.notifications = notifications;
+    notifDesktop.checked = desktopEnabled;
+    settingsOverlay.classList.add("hidden");
+  } catch (err) {
+    console.error(err);
+    settingsNotifError.textContent = err.message || "Не удалось сохранить";
+  } finally {
+    settingsNotifSave.disabled = false;
+  }
 });
