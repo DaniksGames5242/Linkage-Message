@@ -67,7 +67,7 @@ export function listenGroupMessages(groupId, onChange, onError) {
   );
 }
 
-export async function sendGroupMessage(groupId, senderId, text, attachment) {
+export async function sendGroupMessage(groupId, senderId, text, attachment, replyTo) {
   const trimmed = (text || "").trim();
   const payload = {
     text: trimmed || attachment?.defaultCaption || "",
@@ -76,6 +76,7 @@ export async function sendGroupMessage(groupId, senderId, text, attachment) {
   };
   if (!payload.text) return;
   if (attachment) Object.assign(payload, attachment.fields);
+  if (replyTo) payload.replyTo = replyTo;
 
   await addDoc(collection(db, "groups", groupId, "messages"), payload);
   await setDoc(

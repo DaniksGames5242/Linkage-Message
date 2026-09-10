@@ -72,7 +72,7 @@ export function listenMessages(chatId, onChange, onError) {
   );
 }
 
-export async function sendMessage(chatId, senderId, text, attachment) {
+export async function sendMessage(chatId, senderId, text, attachment, replyTo) {
   const trimmed = (text || "").trim();
   const payload = {
     text: trimmed || attachment?.defaultCaption || "",
@@ -81,6 +81,7 @@ export async function sendMessage(chatId, senderId, text, attachment) {
   };
   if (!payload.text) return;
   if (attachment) Object.assign(payload, attachment.fields);
+  if (replyTo) payload.replyTo = replyTo;
 
   await addDoc(collection(db, "chats", chatId, "messages"), payload);
   await setDoc(

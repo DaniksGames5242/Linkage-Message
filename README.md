@@ -95,7 +95,8 @@ python3 -m http.server 8000 --directory public
 - Кнопка-скрепка позволяет прикрепить фото, видео, файл или GIF (обычный `<input type="file">`, без поиска гифок по API — просто загрузка файла с диска/из галереи). Фото и видео показываются превью прямо в чате, файлы — карточкой с именем и размером.
 - Кнопка-микрофон записывает голосовое сообщение (`MediaRecorder`), после записи можно прослушать и отправить или удалить.
 - Все вложения (фото/видео/файлы/голосовые) загружаются напрямую в Cloudinary (см. раздел про настройку выше), в Firestore попадает только ссылка на файл — лимит на размер отдельного файла ~25 МБ (клиентская проверка перед загрузкой), а не ~700 КБ, как было бы при хранении base64 в Firestore. Требует заполненного `public/cloudinary-config.js` — иначе вложения отправлять нельзя.
-- Долгое нажатие/наведение на своё сообщение показывает реакции (эмодзи-пилюли) и, только для своих сообщений, кнопки «Редактировать»/«Удалить». Реакции может ставить любой участник чата/группы.
+- Долгое нажатие/наведение на сообщение показывает реакции (эмодзи-пилюли), кнопку «Ответить» (доступна на любом сообщении, включая чужие) и, только для своих сообщений, кнопки «Редактировать»/«Удалить». Реакции может ставить любой участник чата/группы.
+- Ответ на сообщение — цитата с именем автора и превью текста/вложения показывается над строкой ввода до отправки и внутри самого сообщения после отправки; клик по цитате в сообщении прокручивает к оригиналу и подсвечивает его (только если он ещё виден в текущей истории чата).
 - Клик по трём точкам в шапке чата открывает меню «Очистить историю» (только у себя, сообщения остаются у собеседника) и «Удалить чат» (тоже только для себя — чат снова появится, если придёт новое сообщение).
 
 **Истории (`stories/{id}`):**
@@ -120,7 +121,7 @@ python3 -m http.server 8000 --directory public
 - `broadcasts/{id}` — объявления от `danik`, читают все: `text`, `senderId`, `createdAt`
 - `stories/{id}` — `ownerId`, `image` (data URL), `createdAt` (клиент фильтрует по 24ч)
 - `chats/{chatId}` — `participants`, `lastMessage`, `lastMessageAt`, `lastMessageSenderId`, `typing` (карта `uid -> timestamp`), `hiddenFor` (массив uid, «удалено у себя»), `clearedFor` (карта `uid -> timestamp`, «очищено у себя»)
-  - `chats/{chatId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions` (карта `emoji -> [uid]`), `imageUrl`/`fileUrl`/`voiceUrl` (ссылки на Cloudinary, опционально), `fileName`/`fileType`/`fileSize` (для `fileUrl`)
+  - `chats/{chatId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions` (карта `emoji -> [uid]`), `imageUrl`/`fileUrl`/`voiceUrl` (ссылки на Cloudinary, опционально), `fileName`/`fileType`/`fileSize` (для `fileUrl`), `replyTo` (снимок `{ id, senderName, text }` цитируемого сообщения, опционально)
 - `groups/{groupId}` — `type` (`group`/`channel`), `name`, `avatarColor`, `avatarImage`, `ownerId`, `admins`, `members`, `lastMessage`, `lastMessageAt`, `lastMessageSenderId`, `hiddenFor`, `clearedFor`
   - `groups/{groupId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions`, вложения (как в чатах)
 

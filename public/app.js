@@ -101,6 +101,11 @@ const attachInput = document.getElementById("attach-input");
 const voiceBtn = document.getElementById("voice-btn");
 const attachErrorEl = document.getElementById("attach-error");
 
+const replyPreviewEl = document.getElementById("reply-preview");
+const replyPreviewSenderEl = document.getElementById("reply-preview-sender");
+const replyPreviewTextEl = document.getElementById("reply-preview-text");
+const replyCancelBtn = document.getElementById("reply-cancel-btn");
+
 const storiesStripEl = document.getElementById("stories-strip");
 const storyAddInput = document.getElementById("story-add-input");
 const storyViewerOverlay = document.getElementById("story-viewer-overlay");
@@ -207,6 +212,7 @@ let currentChatId = null; // real chatId, group id, or SAVED_ID / NOTIFICATIONS_
 let currentChatType = null; // "contact" | "group" | "channel" | "saved" | "notifications"
 let currentOtherUid = null;
 let currentOtherProfile = null;
+let replyToMessage = null;
 
 let unsubChats = null;
 let unsubGroups = null;
@@ -943,6 +949,7 @@ function resetChatView() {
   attachErrorEl.textContent = "";
   currentClearedAt = 0;
   editingMessageId = null;
+  cancelReply();
   msgInput.value = "";
   msgInput.style.height = "auto";
   updateComposerButtons();
@@ -1160,6 +1167,49 @@ function messageOps() {
 
 const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤"];
 
+// ---------- Reply-to-message ----------
+
+function replySenderLabel(msg) {
+  if (msg.senderId === currentUser.uid) return "Вы";
+  if (currentChatType === "group" || currentChatType === "channel") {
+    return groupSenderCache.get(msg.senderId)?.displayName || "…";
+  }
+  return chatTitle.textContent || "…";
+}
+
+function replyPreviewText(msg) {
+  if (msg.imageUrl) return "📷 Фото";
+  if (msg.voiceUrl) return "🎤 Голосовое сообщение";
+  if (msg.fileUrl) {
+    if ((msg.fileType || "").startsWith("video/")) return "🎬 Видео";
+    return `📎 ${msg.fileName || "Файл"}`;
+  }
+  return msg.text || "";
+}
+
+function startReply(msg) {
+  replyToMessage = msg;
+  replyPreviewSenderEl.textContent = replySenderLabel(msg);
+  replyPreviewTextEl.textContent = replyPreviewText(msg).slice(0, 120);
+  replyPreviewEl.classList.remove("hidden");
+  msgInput.focus();
+}
+
+function cancelReply() {
+  replyToMessage = null;
+  replyPreviewEl?.classList.add("hidden");
+}
+
+replyCancelBtn?.addEventListener("click", cancelReply);
+
+function scrollToMessage(messageId) {
+  const row = messagesEl.querySelector(`[data-msg-id="${CSS.escape(messageId)}"]`);
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("flash-highlight");
+  setTimeout(() => row.classList.remove("flash-highlight"), 1000);
+}
+
 function renderBubbleContent(bubble, msg) {
   bubble.innerHTML = "";
   if (msg.imageUrl) {
@@ -1311,13 +1361,16 @@ function renderMessage(msg, isMine, senderName) {
   const canEdit = isMine && !!ops.edit;
   const canDelete = isMine && !!ops.del;
   const canReact = !!ops.react;
+  const canReply = currentChatType !== "notifications" && !composer.classList.contains("hidden");
 
   const row = document.createElement("div");
   row.className = "msg-row" + (isMine ? " me" : "");
+  row.dataset.msgId = msg.id;
 
   const actionsHTML =
-    canEdit || canDelete
+    canReply || canEdit || canDelete
       ? `<div class="msg-actions">
+          ${canReply ? '<button type="button" class="msg-reply-btn" title="Ответить">↩</button>' : ""}
           ${canEdit ? '<button type="button" class="msg-edit-btn" title="Редактировать">✎</button>' : ""}
           ${canDelete ? '<button type="button" class="msg-delete-btn" title="Удалить">🗑</button>' : ""}
         </div>`
@@ -1327,11 +1380,19 @@ function renderMessage(msg, isMine, senderName) {
     ${actionsHTML}
     <div class="msg-group">
       ${senderName ? '<div class="msg-sender"></div>' : ""}
+      ${msg.replyTo ? '<div class="msg-reply-quote"><div class="msg-reply-sender"></div><div class="msg-reply-text"></div></div>' : ""}
       <div class="bubble"></div>
       <div class="msg-time"></div>
     </div>
   `;
   if (senderName) row.querySelector(".msg-sender").textContent = senderName;
+
+  if (msg.replyTo) {
+    const quote = row.querySelector(".msg-reply-quote");
+    quote.querySelector(".msg-reply-sender").textContent = msg.replyTo.senderName || "…";
+    quote.querySelector(".msg-reply-text").textContent = msg.replyTo.text || "";
+    quote.addEventListener("click", () => scrollToMessage(msg.replyTo.id));
+  }
 
   renderBubbleContent(row.querySelector(".bubble"), msg);
 
@@ -1346,6 +1407,9 @@ function renderMessage(msg, isMine, senderName) {
 
   if (canReact) {
     row.querySelector(".msg-group").appendChild(buildReactionsBar(msg, ops.react));
+  }
+  if (canReply) {
+    row.querySelector(".msg-reply-btn").addEventListener("click", () => startReply(msg));
   }
   if (canEdit) {
     row.querySelector(".msg-edit-btn").addEventListener("click", () => startEditingMessage(row, msg, ops.edit));
@@ -1399,21 +1463,25 @@ async function doSendMessage(attachment) {
   const text = msgInput.value.trim();
   if (!text && !attachment) return;
   if (!currentChatId) return;
+  const replyPayload = replyToMessage
+    ? { id: replyToMessage.id, senderName: replySenderLabel(replyToMessage), text: replyPreviewText(replyToMessage).slice(0, 120) }
+    : null;
   msgInput.value = "";
   msgInput.style.height = "auto";
   updateComposerButtons();
   sendBtn.disabled = true;
   clearTimeout(typingClearTimer);
   closeEmojiPicker();
+  cancelReply();
   try {
     if (currentChatType === "saved") {
-      await addSavedMessage(currentUser.uid, text);
+      await addSavedMessage(currentUser.uid, text, replyPayload);
     } else if (currentChatType === "notifications") {
       await addBroadcast(currentUser.uid, text);
     } else if (currentChatType === "group" || currentChatType === "channel") {
-      await sendGroupMessage(currentChatId, currentUser.uid, text, attachment);
+      await sendGroupMessage(currentChatId, currentUser.uid, text, attachment, replyPayload);
     } else {
-      await sendMessage(currentChatId, currentUser.uid, text, attachment);
+      await sendMessage(currentChatId, currentUser.uid, text, attachment, replyPayload);
     }
   } catch (err) {
     console.error(err);
