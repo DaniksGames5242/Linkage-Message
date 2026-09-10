@@ -28,6 +28,7 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   overflow: hidden;
+  touch-action: pan-x pan-y;
 }
 
 .hidden {
@@ -42,6 +43,7 @@ button {
 
 .auth-screen {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -253,9 +255,11 @@ button.primary:disabled {
 
 #app {
   height: 100vh;
+  height: 100dvh;
   display: grid;
   grid-template-columns: 320px 1fr;
   grid-template-rows: 100vh;
+  grid-template-rows: 100dvh;
 }
 
 /* Sidebar */

@@ -98,6 +98,7 @@ python3 -m http.server 8000 --directory public
 - `public/login.html` + `public/login.js` — страница `/login`: юзернейм+пароль(+подтверждение+ник+аватар при регистрации)
 - `public/index.html` + `public/app.js` — страница `/` (сам мессенджер): чаты, поиск, настройки, сессии
 - `public/style.css` — тёмная тема, адаптивная вёрстка, анимации
+- `public/no-zoom.js` — блокирует pinch-zoom и двойной тап (в т.ч. на iOS, где viewport-мета это не может сделать сама)
 - `public/firebase.js` — инициализация Firebase
 - `public/auth.js` — регистрация/вход по юзернейму, смена пароля, удаление аккаунта, история сессий
 - `public/contacts.js` — поиск, список контактов, алиасы (имя/фамилия контакта)
