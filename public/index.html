@@ -22,6 +22,9 @@
         </div>
       </div>
 
+      <div id="stories-strip"></div>
+      <input type="file" id="story-add-input" accept="image/*" class="hidden" />
+
       <div id="search-box">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input id="search-input" type="text" placeholder="Найти по юзернейму…" autocomplete="off" />
@@ -52,14 +55,34 @@
         <button class="icon-btn hidden" id="edit-contact-btn" title="Изменить имя контакта">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
         </button>
+        <div class="header-menu-wrap">
+          <button class="icon-btn hidden" id="chat-menu-btn" title="Ещё">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
+          </button>
+          <div class="dropdown-menu hidden" id="chat-menu-dropdown">
+            <button type="button" class="dropdown-item" id="chat-menu-clear-btn">Очистить историю</button>
+            <button type="button" class="dropdown-item danger" id="chat-menu-delete-btn">Удалить чат</button>
+          </div>
+        </div>
       </div>
 
       <div id="messages" class="hidden"></div>
 
+      <div id="emoji-picker" class="hidden"></div>
+
       <form id="composer" class="hidden">
+        <button type="button" class="icon-btn" id="emoji-btn" title="Эмодзи">🙂</button>
+        <button type="button" class="icon-btn" id="attach-btn" title="Прикрепить файл">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <input type="file" id="attach-input" class="hidden" />
         <textarea id="msg-input" rows="1" placeholder="Написать сообщение…" autocomplete="off"></textarea>
+        <button type="button" class="icon-btn hidden" id="voice-btn" title="Голосовое сообщение">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+        </button>
         <button type="submit" id="send-btn">➤</button>
       </form>
+      <div class="attach-error" id="attach-error"></div>
     </section>
   </div>
 
@@ -158,6 +181,27 @@
     </div>
   </div>
 
+  <!-- Story viewer -->
+  <div id="story-viewer-overlay" class="hidden">
+    <div class="story-viewer">
+      <div id="story-progress-track"></div>
+      <div class="story-viewer-header">
+        <div id="story-viewer-avatar"></div>
+        <div class="story-viewer-meta">
+          <div id="story-viewer-name">—</div>
+          <div id="story-viewer-time">—</div>
+        </div>
+        <button type="button" class="icon-btn story-delete-btn hidden" id="story-delete-btn" title="Удалить">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="story-close-btn">✕</button>
+      </div>
+      <img id="story-viewer-image" src="" alt="" />
+      <button type="button" class="story-nav story-nav-prev" id="story-prev-btn" aria-label="Назад"></button>
+      <button type="button" class="story-nav story-nav-next" id="story-next-btn" aria-label="Вперёд"></button>
+    </div>
+  </div>
+
   <!-- Settings overlay -->
   <div id="settings-overlay" class="hidden">
     <div class="settings-panel">
@@ -218,6 +262,10 @@
           <div class="field">
             <label for="settings-bio">О себе</label>
             <input id="settings-bio" type="text" maxlength="140" placeholder="Пара слов о себе" />
+          </div>
+          <div class="field">
+            <label for="settings-birthday">Дата рождения</label>
+            <input id="settings-birthday" type="date" />
           </div>
           <button class="primary" id="settings-profile-save">Сохранить</button>
           <div class="auth-error" id="settings-profile-error"></div>

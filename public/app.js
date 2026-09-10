@@ -11,10 +11,33 @@ import {
   deleteAccount,
 } from "./auth.js";
 import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName } from "./contacts.js";
-import { ensureChat, listenMyChats, listenMessages, sendMessage, listenChatDoc, setTyping } from "./chats.js";
-import { listenSavedMessages, addSavedMessage } from "./saved.js";
+import {
+  ensureChat,
+  listenMyChats,
+  listenMessages,
+  sendMessage,
+  editMessage,
+  deleteMessage,
+  toggleReaction,
+  listenChatDoc,
+  setTyping,
+  hideChatForMe,
+  clearChatForMe,
+} from "./chats.js";
+import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
 import { listenNotificationsFeed, addBroadcast } from "./notify.js";
-import { createGroup, listenMyGroups, listenGroupMessages, sendGroupMessage } from "./groups.js";
+import {
+  createGroup,
+  listenMyGroups,
+  listenGroupMessages,
+  sendGroupMessage,
+  editGroupMessage,
+  deleteGroupMessage,
+  toggleGroupReaction,
+  hideGroupForMe,
+  clearGroupForMe,
+} from "./groups.js";
+import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications } from "./settings.js";
 import {
   colorForUid,
@@ -29,7 +52,12 @@ import {
   avatarHTML,
   escapeHTML,
   resizeImageToDataUrl,
+  imageFileToDataUrl,
+  fileToDataUrl,
+  fmtFileSize,
   attachPasswordToggle,
+  EMOJI_PICKER_SET,
+  REACTION_EMOJIS,
 } from "./utils.js";
 
 const ADMIN_USERNAME = "danik";
@@ -56,11 +84,35 @@ const chatHeaderAvatar = document.getElementById("chat-header-avatar");
 const chatTitle = document.getElementById("chat-title");
 const chatSub = document.getElementById("chat-sub");
 const editContactBtn = document.getElementById("edit-contact-btn");
+const chatMenuBtn = document.getElementById("chat-menu-btn");
+const chatMenuDropdown = document.getElementById("chat-menu-dropdown");
+const chatMenuClearBtn = document.getElementById("chat-menu-clear-btn");
+const chatMenuDeleteBtn = document.getElementById("chat-menu-delete-btn");
 const messagesEl = document.getElementById("messages");
 const composer = document.getElementById("composer");
 const msgInput = document.getElementById("msg-input");
 const sendBtn = document.getElementById("send-btn");
 const backToListBtn = document.getElementById("back-to-list-btn");
+
+const emojiBtn = document.getElementById("emoji-btn");
+const emojiPicker = document.getElementById("emoji-picker");
+const attachBtn = document.getElementById("attach-btn");
+const attachInput = document.getElementById("attach-input");
+const voiceBtn = document.getElementById("voice-btn");
+const attachErrorEl = document.getElementById("attach-error");
+
+const storiesStripEl = document.getElementById("stories-strip");
+const storyAddInput = document.getElementById("story-add-input");
+const storyViewerOverlay = document.getElementById("story-viewer-overlay");
+const storyProgressTrack = document.getElementById("story-progress-track");
+const storyViewerAvatar = document.getElementById("story-viewer-avatar");
+const storyViewerName = document.getElementById("story-viewer-name");
+const storyViewerTime = document.getElementById("story-viewer-time");
+const storyViewerImage = document.getElementById("story-viewer-image");
+const storyDeleteBtn = document.getElementById("story-delete-btn");
+const storyCloseBtn = document.getElementById("story-close-btn");
+const storyPrevBtn = document.getElementById("story-prev-btn");
+const storyNextBtn = document.getElementById("story-next-btn");
 
 const aliasOverlay = document.getElementById("alias-overlay");
 const aliasFirstname = document.getElementById("alias-firstname");
@@ -109,6 +161,7 @@ const settingsDisplayname = document.getElementById("settings-displayname");
 const settingsUsername = document.getElementById("settings-username");
 const settingsUsernameHint = document.getElementById("settings-username-hint");
 const settingsBio = document.getElementById("settings-bio");
+const settingsBirthday = document.getElementById("settings-birthday");
 const settingsProfileSave = document.getElementById("settings-profile-save");
 const settingsProfileError = document.getElementById("settings-profile-error");
 
@@ -160,6 +213,7 @@ let unsubGroups = null;
 let unsubMessages = null;
 let unsubChatDoc = null;
 let unsubContacts = null;
+let unsubStories = null;
 let chatsInitialized = false;
 let presenceInterval = null;
 let typingClearTimer = null;
@@ -168,6 +222,17 @@ let sessionsUnsub = null;
 let pendingGroupType = "group";
 let pendingGroupAvatarImage = null;
 let pendingGroupMembers = new Map(); // uid -> profile
+
+let currentClearedAt = 0; // ms threshold - messages at/before this are hidden from my view
+let currentChatRawMessages = [];
+let editingMessageId = null;
+let mediaRecorder = null;
+let recordedChunks = [];
+let stories = [];
+let activeStoryGroup = null; // { ownerUid, profile, items: [...] } currently being viewed
+let activeStoryIndex = 0;
+let storyAdvanceTimer = null;
+const STORY_DURATION_MS = 5000;
 
 // ---------- Settings avatar upload ----------
 
@@ -243,9 +308,10 @@ function cleanupSubscriptions() {
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
   if (unsubContacts) unsubContacts();
+  if (unsubStories) unsubStories();
   if (sessionsUnsub) sessionsUnsub();
   if (presenceInterval) clearInterval(presenceInterval);
-  unsubChats = unsubGroups = unsubMessages = unsubChatDoc = unsubContacts = sessionsUnsub = presenceInterval = null;
+  unsubChats = unsubGroups = unsubMessages = unsubChatDoc = unsubContacts = unsubStories = sessionsUnsub = presenceInterval = null;
   chatsInitialized = false;
 }
 
@@ -257,6 +323,7 @@ function enterApp() {
   listenContactsList();
   listenChatsList();
   listenGroupsList();
+  listenStoriesList();
   touchPresence(currentUser.uid);
   presenceInterval = setInterval(() => touchPresence(currentUser.uid), 45000);
   document.addEventListener("visibilitychange", onVisibilityChange);
@@ -556,26 +623,202 @@ function listenContactsList() {
 
 // ---------- Chats list (pinned Избранное + Linkage Notifications, then real chats/groups) ----------
 
-function listenChatsList() {
-  unsubChats = listenMyChats(currentUser.uid, (list, changes) => {
-    chats = list;
-    renderChats();
-    if (chatsInitialized) {
-      changes.forEach((c) => {
-        if (c.type === "removed") return;
-        maybeNotify(c.data);
-      });
+function showChatsLoadError(err) {
+  const isIndexError = err?.code === "failed-precondition" || /index/i.test(err?.message || "");
+  chatListEl.innerHTML = `<div class="empty-list">
+    Не удалось загрузить список чатов.<br />
+    ${
+      isIndexError
+        ? "Firestore просит создать составной индекс — откройте консоль браузера (F12), там будет ссылка вида «Create index», перейдите по ней и нажмите «Create». Через 1-2 минуты обновите страницу."
+        : "Проверьте правила Firestore (firestore.rules) и консоль браузера для деталей."
     }
-    chatsInitialized = true;
-  });
+  </div>`;
+}
+
+function listenChatsList() {
+  unsubChats = listenMyChats(
+    currentUser.uid,
+    (list, changes) => {
+      chats = list;
+      renderChats();
+      if (chatsInitialized) {
+        changes.forEach((c) => {
+          if (c.type === "removed") return;
+          maybeNotify(c.data);
+        });
+      }
+      chatsInitialized = true;
+    },
+    showChatsLoadError
+  );
 }
 
 function listenGroupsList() {
-  unsubGroups = listenMyGroups(currentUser.uid, (list) => {
-    groups = list;
-    renderChats();
+  unsubGroups = listenMyGroups(
+    currentUser.uid,
+    (list) => {
+      groups = list;
+      renderChats();
+    },
+    showChatsLoadError
+  );
+}
+
+// ---------- Stories ----------
+
+function listenStoriesList() {
+  unsubStories = listenRecentStories(
+    (list) => {
+      stories = list;
+      renderStoriesStrip();
+    },
+    (err) => console.error("Stories load failed:", err)
+  );
+}
+
+function renderStoriesStrip() {
+  storiesStripEl.innerHTML = "";
+
+  const byOwner = new Map();
+  stories.forEach((s) => {
+    if (!byOwner.has(s.ownerId)) byOwner.set(s.ownerId, []);
+    byOwner.get(s.ownerId).push(s);
+  });
+  byOwner.forEach((list) => list.sort((a, b) => (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0)));
+
+  const myStories = byOwner.get(currentUser.uid) || [];
+  const myBubble = document.createElement("div");
+  myBubble.className = "story-bubble";
+  myBubble.innerHTML = `
+    <div class="story-ring${myStories.length ? "" : " story-add-badge"}">${avatarHTML(myProfile, currentUser.uid)}</div>
+    <div class="story-bubble-label">Вы</div>
+  `;
+  myBubble.addEventListener("click", () => {
+    if (myStories.length > 0) openStoryViewer(currentUser.uid, myProfile, myStories);
+    else storyAddInput.click();
+  });
+  storiesStripEl.appendChild(myBubble);
+
+  const otherEntries = Array.from(byOwner.entries())
+    .filter(([uid]) => uid !== currentUser.uid)
+    .sort((a, b) => {
+      const ta = a[1][a[1].length - 1]?.createdAt?.toMillis?.() || 0;
+      const tb = b[1][b[1].length - 1]?.createdAt?.toMillis?.() || 0;
+      return tb - ta;
+    });
+
+  otherEntries.forEach(async ([uid, list]) => {
+    const profile = contactsMap.get(uid)?.profile || (await getProfile(uid));
+    if (!profile) return;
+    const bubble = document.createElement("div");
+    bubble.className = "story-bubble";
+    bubble.innerHTML = `
+      <div class="story-ring">${avatarHTML(profile, uid)}</div>
+      <div class="story-bubble-label"></div>
+    `;
+    bubble.querySelector(".story-bubble-label").textContent = profile.displayName;
+    bubble.addEventListener("click", () => openStoryViewer(uid, profile, list));
+    storiesStripEl.appendChild(bubble);
   });
 }
+
+storyAddInput.addEventListener("change", async () => {
+  const file = storyAddInput.files?.[0];
+  storyAddInput.value = "";
+  if (!file) return;
+  try {
+    const dataUrl = await imageFileToDataUrl(file, 1080, 0.7);
+    await addStory(currentUser.uid, dataUrl);
+  } catch (err) {
+    console.error(err);
+    alert(err.message || "Не удалось опубликовать историю");
+  }
+});
+
+function openStoryViewer(ownerUid, profile, items) {
+  activeStoryGroup = { ownerUid, profile, items: [...items] };
+  activeStoryIndex = 0;
+  storyViewerAvatar.innerHTML = avatarHTML(profile, ownerUid);
+  storyViewerName.textContent = profile.displayName;
+  storyDeleteBtn.classList.toggle("hidden", ownerUid !== currentUser.uid);
+  buildStoryProgress();
+  showStoryAt(0);
+  storyViewerOverlay.classList.remove("hidden");
+}
+
+function buildStoryProgress() {
+  storyProgressTrack.innerHTML = "";
+  activeStoryGroup.items.forEach(() => {
+    const bar = document.createElement("div");
+    bar.className = "story-progress-bar";
+    bar.innerHTML = '<div class="story-progress-fill"></div>';
+    storyProgressTrack.appendChild(bar);
+  });
+}
+
+function showStoryAt(index) {
+  clearTimeout(storyAdvanceTimer);
+  if (!activeStoryGroup || index < 0 || index >= activeStoryGroup.items.length) {
+    closeStoryViewer();
+    return;
+  }
+  activeStoryIndex = index;
+  const story = activeStoryGroup.items[index];
+  storyViewerImage.src = story.image;
+  storyViewerTime.textContent = fmtRelative(story.createdAt);
+
+  const bars = storyProgressTrack.querySelectorAll(".story-progress-bar");
+  bars.forEach((bar, i) => {
+    bar.classList.toggle("done", i < index);
+    const fill = bar.querySelector(".story-progress-fill");
+    if (i < index) {
+      fill.style.transition = "none";
+      fill.style.width = "100%";
+    } else if (i === index) {
+      fill.style.transition = "none";
+      fill.style.width = "0%";
+      requestAnimationFrame(() => {
+        fill.style.transition = `width ${STORY_DURATION_MS}ms linear`;
+        fill.style.width = "100%";
+      });
+    } else {
+      fill.style.transition = "none";
+      fill.style.width = "0%";
+    }
+  });
+
+  storyAdvanceTimer = setTimeout(() => showStoryAt(index + 1), STORY_DURATION_MS);
+}
+
+function closeStoryViewer() {
+  clearTimeout(storyAdvanceTimer);
+  storyViewerOverlay.classList.add("hidden");
+  activeStoryGroup = null;
+}
+
+storyPrevBtn.addEventListener("click", () => showStoryAt(activeStoryIndex - 1));
+storyNextBtn.addEventListener("click", () => showStoryAt(activeStoryIndex + 1));
+storyCloseBtn.addEventListener("click", closeStoryViewer);
+
+storyDeleteBtn.addEventListener("click", async () => {
+  if (!activeStoryGroup) return;
+  if (!confirm("Удалить историю?")) return;
+  const story = activeStoryGroup.items[activeStoryIndex];
+  try {
+    await deleteStory(story.id);
+  } catch (err) {
+    console.error(err);
+    alert(err.message || "Не удалось удалить историю");
+    return;
+  }
+  activeStoryGroup.items.splice(activeStoryIndex, 1);
+  if (activeStoryGroup.items.length === 0) {
+    closeStoryViewer();
+  } else {
+    buildStoryProgress();
+    showStoryAt(Math.min(activeStoryIndex, activeStoryGroup.items.length - 1));
+  }
+});
 
 function pinnedItemHTML(id, iconSvg, title, subtitle) {
   const item = document.createElement("div");
@@ -620,8 +863,8 @@ async function renderChats() {
   chatListEl.appendChild(notifItem);
 
   const combined = [
-    ...chats.map((data) => ({ kind: "contact", data })),
-    ...groups.map((data) => ({ kind: "group", data })),
+    ...chats.filter((c) => !(c.hiddenFor || []).includes(currentUser.uid)).map((data) => ({ kind: "contact", data })),
+    ...groups.filter((g) => !(g.hiddenFor || []).includes(currentUser.uid)).map((data) => ({ kind: "group", data })),
   ].sort((a, b) => {
     const ta = a.data.lastMessageAt?.toMillis ? a.data.lastMessageAt.toMillis() : 0;
     const tb = b.data.lastMessageAt?.toMillis ? b.data.lastMessageAt.toMillis() : 0;
@@ -684,6 +927,7 @@ function resetChatView() {
   if (unsubChatDoc) unsubChatDoc();
   unsubMessages = unsubChatDoc = null;
   clearTimeout(typingClearTimer);
+  stopVoiceRecording(true);
 
   emptyState.classList.add("hidden");
   chatHeader.classList.remove("hidden");
@@ -693,6 +937,15 @@ function resetChatView() {
   chatSub.textContent = "";
   chatSub.classList.remove("typing");
   editContactBtn.classList.add("hidden");
+  chatMenuBtn.classList.add("hidden");
+  chatMenuDropdown.classList.add("hidden");
+  emojiPicker.classList.add("hidden");
+  attachErrorEl.textContent = "";
+  currentClearedAt = 0;
+  editingMessageId = null;
+  msgInput.value = "";
+  msgInput.style.height = "auto";
+  updateComposerButtons();
 }
 
 function renderPlainMessages(msgs, isMineFn) {
@@ -751,18 +1004,24 @@ function openContactChat(chatId, otherUid, profile) {
   currentChatType = "contact";
   currentOtherUid = otherUid;
   currentOtherProfile = profile;
+  currentChatRawMessages = [];
+
+  const chatData = chats.find((c) => c.id === chatId);
+  currentClearedAt = chatData?.clearedFor?.[currentUser.uid]?.toMillis?.() || 0;
 
   const contact = contactsMap.get(otherUid);
   chatHeaderAvatar.innerHTML = avatarHTML(profile, otherUid);
   chatTitle.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
   chatSub.textContent = "@" + profile.username;
   editContactBtn.classList.remove("hidden");
+  chatMenuBtn.classList.remove("hidden");
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
   unsubMessages = listenMessages(chatId, (msgs) => {
     if (currentChatId !== chatId) return;
-    renderPlainMessages(msgs, (msg) => msg.senderId === currentUser.uid);
+    currentChatRawMessages = msgs;
+    rerenderMessages();
   });
   unsubChatDoc = listenChatDoc(chatId, (data) => {
     if (currentChatId !== chatId || !data) return;
@@ -780,44 +1039,67 @@ function pluralMembers(n) {
   return `${n} участников`;
 }
 
+let groupSenderCache = new Map();
+let currentGroupRef = null;
+
 function openGroupChat(group) {
   resetChatView();
   currentChatId = group.id;
   currentChatType = group.type;
   currentOtherUid = null;
   currentOtherProfile = null;
+  currentChatRawMessages = [];
+  currentGroupRef = group;
+  groupSenderCache = new Map();
+  currentClearedAt = group.clearedFor?.[currentUser.uid]?.toMillis?.() || 0;
 
   chatHeaderAvatar.innerHTML = groupAvatarHTML(group);
   chatTitle.textContent = group.name;
   chatSub.textContent = pluralMembers((group.members || []).length);
+  chatMenuBtn.classList.remove("hidden");
 
   const canPost = group.type === "group" || (group.admins || []).includes(currentUser.uid);
   composer.classList.toggle("hidden", !canPost);
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
-  const senderCache = new Map();
-  unsubMessages = listenGroupMessages(group.id, async (msgs) => {
+  unsubMessages = listenGroupMessages(group.id, (msgs) => {
     if (currentChatId !== group.id) return;
-    messagesEl.innerHTML = "";
-    if (msgs.length === 0) {
-      messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
-      return;
-    }
-    for (const msg of msgs) {
-      const isMine = msg.senderId === currentUser.uid;
-      let senderName = null;
-      if (!isMine) {
-        if (!senderCache.has(msg.senderId)) {
-          const p = contactsMap.get(msg.senderId)?.profile || (await getProfile(msg.senderId));
-          senderCache.set(msg.senderId, p);
-        }
-        senderName = senderCache.get(msg.senderId)?.displayName || "—";
-      }
-      renderMessage(msg, isMine, senderName);
-    }
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    currentChatRawMessages = msgs;
+    rerenderMessages();
   });
+}
+
+async function renderGroupMessagesList(msgs) {
+  messagesEl.innerHTML = "";
+  if (msgs.length === 0) {
+    messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
+    return;
+  }
+  for (const msg of msgs) {
+    const isMine = msg.senderId === currentUser.uid;
+    let senderName = null;
+    if (!isMine) {
+      if (!groupSenderCache.has(msg.senderId)) {
+        const p = contactsMap.get(msg.senderId)?.profile || (await getProfile(msg.senderId));
+        groupSenderCache.set(msg.senderId, p);
+      }
+      senderName = groupSenderCache.get(msg.senderId)?.displayName || "—";
+    }
+    renderMessage(msg, isMine, senderName);
+  }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function rerenderMessages() {
+  const visible = currentChatRawMessages.filter(
+    (m) => !currentClearedAt || !m.createdAt?.toMillis || m.createdAt.toMillis() > currentClearedAt
+  );
+  if (currentChatType === "contact") {
+    renderPlainMessages(visible, (msg) => msg.senderId === currentUser.uid);
+  } else if (currentChatType === "group" || currentChatType === "channel") {
+    renderGroupMessagesList(visible);
+  }
 }
 
 function updateChatSub(profile, chatData) {
@@ -849,10 +1131,198 @@ backToListBtn.addEventListener("click", () => {
   sidebar.classList.remove("chat-open");
 });
 
+// Returns {edit, del, react} functions bound to the currently open chat, or
+// nulls where an action isn't supported (e.g. read-only Notifications feed).
+function messageOps() {
+  if (currentChatType === "saved") {
+    return {
+      edit: (id, text) => editSavedMessage(currentUser.uid, id, text),
+      del: (id) => deleteSavedMessage(currentUser.uid, id),
+      react: null,
+    };
+  }
+  if (currentChatType === "group" || currentChatType === "channel") {
+    return {
+      edit: (id, text) => editGroupMessage(currentChatId, id, text),
+      del: (id) => deleteGroupMessage(currentChatId, id),
+      react: (id, emoji, add) => toggleGroupReaction(currentChatId, id, emoji, currentUser.uid, add),
+    };
+  }
+  if (currentChatType === "contact") {
+    return {
+      edit: (id, text) => editMessage(currentChatId, id, text),
+      del: (id) => deleteMessage(currentChatId, id),
+      react: (id, emoji, add) => toggleReaction(currentChatId, id, emoji, currentUser.uid, add),
+    };
+  }
+  return { edit: null, del: null, react: null };
+}
+
+const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤"];
+
+function renderBubbleContent(bubble, msg) {
+  bubble.innerHTML = "";
+  if (msg.image) {
+    const img = document.createElement("img");
+    img.className = "msg-image";
+    img.src = msg.image;
+    img.alt = "";
+    img.addEventListener("click", () => window.open(msg.image, "_blank"));
+    bubble.appendChild(img);
+  } else if (msg.voice) {
+    const audio = document.createElement("audio");
+    audio.className = "msg-audio";
+    audio.controls = true;
+    audio.src = msg.voice;
+    bubble.appendChild(audio);
+  } else if (msg.fileData) {
+    const fileType = msg.fileType || "";
+    if (fileType.startsWith("video/")) {
+      const video = document.createElement("video");
+      video.className = "msg-video";
+      video.controls = true;
+      video.src = msg.fileData;
+      bubble.appendChild(video);
+    } else if (fileType.startsWith("audio/")) {
+      const audio = document.createElement("audio");
+      audio.className = "msg-audio";
+      audio.controls = true;
+      audio.src = msg.fileData;
+      bubble.appendChild(audio);
+    } else {
+      const link = document.createElement("a");
+      link.className = "msg-file-card";
+      link.href = msg.fileData;
+      link.download = msg.fileName || "file";
+      link.innerHTML = `
+        <div class="msg-file-icon">📎</div>
+        <div class="msg-file-meta">
+          <div class="msg-file-name"></div>
+          <div class="msg-file-size"></div>
+        </div>
+      `;
+      link.querySelector(".msg-file-name").textContent = msg.fileName || "Файл";
+      link.querySelector(".msg-file-size").textContent = fmtFileSize(msg.fileSize || 0);
+      bubble.appendChild(link);
+    }
+  }
+
+  const hasAttachment = !!(msg.image || msg.voice || msg.fileData);
+  const isPlaceholderCaption = DEFAULT_CAPTIONS.includes(msg.text) || msg.text === `📎 ${msg.fileName}`;
+  if (msg.text && !(hasAttachment && isPlaceholderCaption)) {
+    const p = document.createElement("div");
+    p.className = "bubble-text";
+    p.textContent = msg.text;
+    bubble.appendChild(p);
+  }
+}
+
+function buildReactionsBar(msg, reactFn) {
+  const bar = document.createElement("div");
+  bar.className = "msg-reactions";
+  const reactions = msg.reactions || {};
+  Object.entries(reactions).forEach(([emoji, uids]) => {
+    if (!uids || uids.length === 0) return;
+    const mine = uids.includes(currentUser.uid);
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "reaction-pill" + (mine ? " mine" : "");
+    pill.textContent = `${emoji} ${uids.length}`;
+    pill.addEventListener("click", () => reactFn(msg.id, emoji, !mine));
+    bar.appendChild(pill);
+  });
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "react-add-btn";
+  addBtn.textContent = "🙂+";
+  addBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleReactionPicker(addBtn, msg, reactFn);
+  });
+  bar.appendChild(addBtn);
+  return bar;
+}
+
+function toggleReactionPicker(anchorBtn, msg, reactFn) {
+  const existing = document.querySelector(".react-picker");
+  if (existing) existing.remove();
+  if (existing?.dataset.msgId === msg.id) return;
+
+  const picker = document.createElement("div");
+  picker.className = "react-picker";
+  picker.dataset.msgId = msg.id;
+  REACTION_EMOJIS.forEach((emoji) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = emoji;
+    btn.addEventListener("click", () => {
+      const mine = (msg.reactions?.[emoji] || []).includes(currentUser.uid);
+      reactFn(msg.id, emoji, !mine);
+      picker.remove();
+    });
+    picker.appendChild(btn);
+  });
+  document.body.appendChild(picker);
+  const rect = anchorBtn.getBoundingClientRect();
+  picker.style.left = Math.max(4, rect.left) + "px";
+  picker.style.top = Math.max(4, rect.top - 42) + "px";
+  setTimeout(() => {
+    document.addEventListener("click", function closePicker(ev) {
+      if (!picker.contains(ev.target)) {
+        picker.remove();
+        document.removeEventListener("click", closePicker);
+      }
+    });
+  }, 0);
+}
+
+function startEditingMessage(row, msg, editFn) {
+  const group = row.querySelector(".msg-group");
+  const original = group.innerHTML;
+  group.innerHTML = `
+    <div class="msg-edit-box">
+      <textarea rows="2"></textarea>
+      <div class="msg-edit-actions">
+        <button type="button" class="small-btn secondary" data-act="cancel">Отмена</button>
+        <button type="button" class="small-btn" data-act="save">Сохранить</button>
+      </div>
+    </div>
+  `;
+  const textarea = group.querySelector("textarea");
+  textarea.value = msg.text;
+  textarea.focus();
+  group.querySelector('[data-act="cancel"]').addEventListener("click", () => {
+    group.innerHTML = original;
+  });
+  group.querySelector('[data-act="save"]').addEventListener("click", async () => {
+    try {
+      await editFn(msg.id, textarea.value);
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Не удалось сохранить");
+    }
+  });
+}
+
 function renderMessage(msg, isMine, senderName) {
+  const ops = messageOps();
+  const canEdit = isMine && !!ops.edit;
+  const canDelete = isMine && !!ops.del;
+  const canReact = !!ops.react;
+
   const row = document.createElement("div");
   row.className = "msg-row" + (isMine ? " me" : "");
+
+  const actionsHTML =
+    canEdit || canDelete
+      ? `<div class="msg-actions">
+          ${canEdit ? '<button type="button" class="msg-edit-btn" title="Редактировать">✎</button>' : ""}
+          ${canDelete ? '<button type="button" class="msg-delete-btn" title="Удалить">🗑</button>' : ""}
+        </div>`
+      : "";
+
   row.innerHTML = `
+    ${actionsHTML}
     <div class="msg-group">
       ${senderName ? '<div class="msg-sender"></div>' : ""}
       <div class="bubble"></div>
@@ -860,8 +1330,36 @@ function renderMessage(msg, isMine, senderName) {
     </div>
   `;
   if (senderName) row.querySelector(".msg-sender").textContent = senderName;
-  row.querySelector(".bubble").textContent = msg.text;
-  row.querySelector(".msg-time").textContent = fmtTime(msg.createdAt);
+
+  renderBubbleContent(row.querySelector(".bubble"), msg);
+
+  const timeEl = row.querySelector(".msg-time");
+  timeEl.textContent = fmtTime(msg.createdAt);
+  if (msg.edited) {
+    const tag = document.createElement("span");
+    tag.className = "msg-edited-tag";
+    tag.textContent = "(ред.)";
+    timeEl.appendChild(tag);
+  }
+
+  if (canReact) {
+    row.querySelector(".msg-group").appendChild(buildReactionsBar(msg, ops.react));
+  }
+  if (canEdit) {
+    row.querySelector(".msg-edit-btn").addEventListener("click", () => startEditingMessage(row, msg, ops.edit));
+  }
+  if (canDelete) {
+    row.querySelector(".msg-delete-btn").addEventListener("click", async () => {
+      if (!confirm("Удалить сообщение?")) return;
+      try {
+        await ops.del(msg.id);
+      } catch (err) {
+        console.error(err);
+        alert(err.message || "Не удалось удалить");
+      }
+    });
+  }
+
   messagesEl.appendChild(row);
 }
 
@@ -877,9 +1375,16 @@ msgInput.addEventListener("keydown", (e) => {
   }
 });
 
+function updateComposerButtons() {
+  const hasText = msgInput.value.trim().length > 0;
+  voiceBtn.classList.toggle("hidden", hasText);
+  sendBtn.classList.toggle("hidden", !hasText);
+}
+
 msgInput.addEventListener("input", () => {
   msgInput.style.height = "auto";
   msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
+  updateComposerButtons();
 
   if (currentChatType === "contact") {
     setTyping(currentChatId, currentUser.uid, true);
@@ -888,22 +1393,25 @@ msgInput.addEventListener("input", () => {
   }
 });
 
-async function doSendMessage() {
+async function doSendMessage(attachment) {
   const text = msgInput.value.trim();
-  if (!text || !currentChatId) return;
+  if (!text && !attachment) return;
+  if (!currentChatId) return;
   msgInput.value = "";
   msgInput.style.height = "auto";
+  updateComposerButtons();
   sendBtn.disabled = true;
   clearTimeout(typingClearTimer);
+  closeEmojiPicker();
   try {
     if (currentChatType === "saved") {
       await addSavedMessage(currentUser.uid, text);
     } else if (currentChatType === "notifications") {
       await addBroadcast(currentUser.uid, text);
     } else if (currentChatType === "group" || currentChatType === "channel") {
-      await sendGroupMessage(currentChatId, currentUser.uid, text);
+      await sendGroupMessage(currentChatId, currentUser.uid, text, attachment);
     } else {
-      await sendMessage(currentChatId, currentUser.uid, text);
+      await sendMessage(currentChatId, currentUser.uid, text, attachment);
     }
   } catch (err) {
     console.error(err);
@@ -912,6 +1420,131 @@ async function doSendMessage() {
     sendBtn.disabled = false;
   }
 }
+
+// ---------- Emoji picker ----------
+
+function openEmojiPicker() {
+  emojiPicker.innerHTML = "";
+  EMOJI_PICKER_SET.forEach((emoji) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "emoji-option";
+    btn.textContent = emoji;
+    btn.addEventListener("click", () => {
+      msgInput.value += emoji;
+      msgInput.dispatchEvent(new Event("input"));
+      msgInput.focus();
+    });
+    emojiPicker.appendChild(btn);
+  });
+  emojiPicker.classList.remove("hidden");
+}
+
+function closeEmojiPicker() {
+  emojiPicker.classList.add("hidden");
+}
+
+emojiBtn.addEventListener("click", () => {
+  if (emojiPicker.classList.contains("hidden")) openEmojiPicker();
+  else closeEmojiPicker();
+});
+
+// ---------- File / photo / video attachments ----------
+
+async function buildFileAttachment(file) {
+  if (file.type.startsWith("image/") && file.type !== "image/gif") {
+    const dataUrl = await imageFileToDataUrl(file);
+    return { fields: { image: dataUrl }, previewText: "📷 Фото", defaultCaption: "📷" };
+  }
+  if (file.type === "image/gif") {
+    // GIFs are re-sent as-is (no canvas re-encode) so the animation survives.
+    const dataUrl = await fileToDataUrl(file);
+    return { fields: { image: dataUrl }, previewText: "📷 GIF", defaultCaption: "📷" };
+  }
+  const dataUrl = await fileToDataUrl(file);
+  return {
+    fields: {
+      fileData: dataUrl,
+      fileName: file.name,
+      fileType: file.type || "application/octet-stream",
+      fileSize: file.size,
+    },
+    previewText: `📎 ${file.name}`,
+    defaultCaption: `📎 ${file.name}`,
+  };
+}
+
+attachBtn.addEventListener("click", () => attachInput.click());
+
+attachInput.addEventListener("change", async () => {
+  const file = attachInput.files?.[0];
+  attachInput.value = "";
+  if (!file) return;
+  attachErrorEl.textContent = "";
+  attachBtn.disabled = true;
+  try {
+    const attachment = await buildFileAttachment(file);
+    await doSendMessage(attachment);
+  } catch (err) {
+    console.error(err);
+    attachErrorEl.textContent = err.message || "Не удалось прикрепить файл";
+  } finally {
+    attachBtn.disabled = false;
+  }
+});
+
+// ---------- Voice messages ----------
+
+let activeMicStream = null;
+let voiceDiscard = false;
+
+async function startVoiceRecording() {
+  attachErrorEl.textContent = "";
+  try {
+    activeMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    console.error(err);
+    attachErrorEl.textContent = "Нет доступа к микрофону";
+    return;
+  }
+  recordedChunks = [];
+  voiceDiscard = false;
+  mediaRecorder = new MediaRecorder(activeMicStream);
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) recordedChunks.push(e.data);
+  };
+  mediaRecorder.onstop = async () => {
+    activeMicStream?.getTracks().forEach((t) => t.stop());
+    activeMicStream = null;
+    voiceBtn.classList.remove("recording");
+    if (voiceDiscard || recordedChunks.length === 0) return;
+    try {
+      const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      const dataUrl = await fileToDataUrl(blob);
+      await doSendMessage({ fields: { voice: dataUrl }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" });
+    } catch (err) {
+      console.error(err);
+      attachErrorEl.textContent = err.message || "Не удалось отправить голосовое сообщение";
+    }
+  };
+  mediaRecorder.start();
+  voiceBtn.classList.add("recording");
+}
+
+function stopVoiceRecording(discard) {
+  voiceDiscard = discard;
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+  }
+}
+
+voiceBtn.addEventListener("click", () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    stopVoiceRecording(false);
+  } else {
+    startVoiceRecording();
+  }
+});
 
 // ---------- Contact alias editing ----------
 
@@ -943,6 +1576,51 @@ aliasSaveBtn.addEventListener("click", async () => {
     );
   }
 });
+
+// ---------- Chat menu: clear history / delete chat (per-user, non-destructive) ----------
+
+chatMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  chatMenuDropdown.classList.toggle("hidden");
+});
+
+document.addEventListener("click", (e) => {
+  if (!chatMenuDropdown.classList.contains("hidden") && !chatMenuDropdown.contains(e.target) && e.target !== chatMenuBtn) {
+    chatMenuDropdown.classList.add("hidden");
+  }
+});
+
+chatMenuClearBtn.addEventListener("click", async () => {
+  chatMenuDropdown.classList.add("hidden");
+  if (!confirm("Очистить историю сообщений? Это уберёт их только из вашей ленты.")) return;
+  if (currentChatType === "contact") await clearChatForMe(currentChatId, currentUser.uid);
+  else if (currentChatType === "group" || currentChatType === "channel") await clearGroupForMe(currentChatId, currentUser.uid);
+  currentClearedAt = Date.now();
+  rerenderMessages();
+});
+
+chatMenuDeleteBtn.addEventListener("click", async () => {
+  chatMenuDropdown.classList.add("hidden");
+  if (!confirm("Удалить чат из списка? Он вернётся, если придёт новое сообщение.")) return;
+  if (currentChatType === "contact") await hideChatForMe(currentChatId, currentUser.uid);
+  else if (currentChatType === "group" || currentChatType === "channel") await hideGroupForMe(currentChatId, currentUser.uid);
+  closeCurrentChatView();
+});
+
+function closeCurrentChatView() {
+  if (unsubMessages) unsubMessages();
+  if (unsubChatDoc) unsubChatDoc();
+  unsubMessages = unsubChatDoc = null;
+  currentChatId = null;
+  currentChatType = null;
+  currentOtherUid = null;
+  currentOtherProfile = null;
+  chatHeader.classList.add("hidden");
+  messagesEl.classList.add("hidden");
+  composer.classList.add("hidden");
+  emptyState.classList.remove("hidden");
+  renderChats();
+}
 
 // ---------- Notifications (sound / desktop) ----------
 
@@ -1039,6 +1717,7 @@ function openSettings() {
   settingsUsername.value = myProfile.username || "";
   settingsUsernameHint.textContent = "";
   settingsBio.value = myProfile.bio || "";
+  settingsBirthday.value = myProfile.birthday || "";
 
   privacyLastseen.value = myProfile.privacy?.lastSeenVisibility || "everyone";
 
@@ -1081,6 +1760,7 @@ settingsProfileSave.addEventListener("click", async () => {
     await updateProfileFields(currentUser.uid, {
       displayName: settingsDisplayname.value.trim().slice(0, 40) || myProfile.username,
       bio: settingsBio.value.trim().slice(0, 140),
+      birthday: settingsBirthday.value || null,
       avatarImage: selectedSettingsAvatarImage,
     });
     myProfile = await fetchMyProfile(currentUser.uid);

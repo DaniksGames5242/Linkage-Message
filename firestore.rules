@@ -15,6 +15,23 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == 'danik';
     }
 
+    // Inline-stored attachments (no paid Storage backend) must stay well
+    // under Firestore's 1 MiB document cap.
+    function attachmentsOk() {
+      return (!('image' in request.resource.data) || request.resource.data.image.size() <= 900000)
+        && (!('fileData' in request.resource.data) || request.resource.data.fileData.size() <= 900000)
+        && (!('voice' in request.resource.data) || request.resource.data.voice.size() <= 900000);
+    }
+
+    function isMessageTextEdit() {
+      return request.auth.uid == resource.data.senderId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt']);
+    }
+
+    function isMessageReactionEdit() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']);
+    }
+
     // ---------- users/{uid} : public-ish profile ----------
     match /users/{uid} {
       allow read: if isSignedIn();
@@ -33,8 +50,11 @@ service cloud.firestore {
         allow create: if isMe(uid)
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
-          && request.resource.data.text.size() <= 4000;
-        allow update, delete: if false;
+          && request.resource.data.text.size() <= 4000
+          && attachmentsOk();
+        allow delete: if isMe(uid);
+        allow update: if isMe(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt']);
       }
 
       // ---------- users/{uid}/systemChat/{id} : personal "Linkage Notifications" feed ----------
@@ -76,6 +96,18 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ---------- stories/{id} : 24h ephemeral posts, visible to any signed-in user ----------
+    match /stories/{storyId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.image is string
+        && request.resource.data.image.size() > 0
+        && request.resource.data.image.size() <= 900000;
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow update: if false;
+    }
+
     // ---------- groups/{groupId} : groups & channels ----------
     // type == 'group': any member can post. type == 'channel': only members
     // listed in `admins` can post, everyone else in `members` is read-only.
@@ -105,8 +137,12 @@ service cloud.firestore {
           && request.resource.data.senderId == request.auth.uid
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
-          && request.resource.data.text.size() <= 4000;
-        allow update, delete: if false;
+          && request.resource.data.text.size() <= 4000
+          && attachmentsOk();
+        allow update: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members
+          && (isMessageTextEdit() || isMessageReactionEdit());
+        allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }
 
@@ -130,8 +166,12 @@ service cloud.firestore {
           && request.resource.data.senderId == request.auth.uid
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
-          && request.resource.data.text.size() <= 4000;
-        allow update, delete: if false;
+          && request.resource.data.text.size() <= 4000
+          && attachmentsOk();
+        allow update: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          && (isMessageTextEdit() || isMessageReactionEdit());
+        allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }
   }

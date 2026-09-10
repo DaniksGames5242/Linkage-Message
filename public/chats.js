@@ -4,6 +4,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   addDoc,
   collection,
   query,
@@ -13,6 +14,8 @@ import {
   onSnapshot,
   serverTimestamp,
   deleteField,
+  arrayUnion,
+  arrayRemove,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { chatIdFor } from "./utils.js";
 
@@ -32,53 +35,85 @@ export async function ensureChat(myUid, otherUid) {
   return chatId;
 }
 
-export function listenMyChats(myUid, onChange) {
+export function listenMyChats(myUid, onChange, onError) {
   const q = query(
     collection(db, "chats"),
     where("participants", "array-contains", myUid),
     orderBy("lastMessageAt", "desc"),
     limit(100)
   );
-  return onSnapshot(q, (snap) => {
-    const chats = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    const changes = snap.docChanges().map((c) => ({
-      type: c.type,
-      id: c.doc.id,
-      data: c.doc.data(),
-    }));
-    onChange(chats, changes);
-  });
-}
-
-export function listenMessages(chatId, onChange) {
-  const q = query(
-    collection(db, "chats", chatId, "messages"),
-    orderBy("createdAt", "asc"),
-    limit(500)
+  return onSnapshot(
+    q,
+    (snap) => {
+      const chats = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const changes = snap.docChanges().map((c) => ({
+        type: c.type,
+        id: c.doc.id,
+        data: c.doc.data(),
+      }));
+      onChange(chats, changes);
+    },
+    (err) => {
+      console.error("listenMyChats failed:", err);
+      if (onError) onError(err);
+    }
   );
-  return onSnapshot(q, (snap) => {
-    onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-  });
 }
 
-export async function sendMessage(chatId, senderId, text) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  await addDoc(collection(db, "chats", chatId, "messages"), {
-    text: trimmed,
+export function listenMessages(chatId, onChange, onError) {
+  const q = query(collection(db, "chats", chatId, "messages"), orderBy("createdAt", "asc"), limit(500));
+  return onSnapshot(
+    q,
+    (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    (err) => {
+      console.error("listenMessages failed:", err);
+      if (onError) onError(err);
+    }
+  );
+}
+
+export async function sendMessage(chatId, senderId, text, attachment) {
+  const trimmed = (text || "").trim();
+  const payload = {
+    text: trimmed || attachment?.defaultCaption || "",
     senderId,
     createdAt: serverTimestamp(),
-  });
+  };
+  if (!payload.text) return;
+  if (attachment) Object.assign(payload, attachment.fields);
+
+  await addDoc(collection(db, "chats", chatId, "messages"), payload);
   await setDoc(
     doc(db, "chats", chatId),
     {
-      lastMessage: trimmed,
+      lastMessage: attachment?.previewText || trimmed,
       lastMessageAt: serverTimestamp(),
       lastMessageSenderId: senderId,
       typing: { [senderId]: deleteField() },
+      hiddenFor: [],
     },
     { merge: true }
   );
+}
+
+export async function editMessage(chatId, messageId, newText) {
+  const trimmed = (newText || "").trim();
+  if (!trimmed) throw new Error("Сообщение не может быть пустым");
+  await updateDoc(doc(db, "chats", chatId, "messages", messageId), {
+    text: trimmed,
+    edited: true,
+    editedAt: serverTimestamp(),
+  });
+}
+
+export async function deleteMessage(chatId, messageId) {
+  await deleteDoc(doc(db, "chats", chatId, "messages", messageId));
+}
+
+export async function toggleReaction(chatId, messageId, emoji, uid, isAdding) {
+  await updateDoc(doc(db, "chats", chatId, "messages", messageId), {
+    [`reactions.${emoji}`]: isAdding ? arrayUnion(uid) : arrayRemove(uid),
+  });
 }
 
 export function listenChatDoc(chatId, onChange) {
@@ -95,4 +130,16 @@ export async function setTyping(chatId, uid, isTyping) {
   } catch (_) {
     // chat doc may not exist yet - ignore
   }
+}
+
+// ---------- Delete / clear (per-user, non-destructive for the other side) ----------
+
+export async function hideChatForMe(chatId, uid) {
+  await updateDoc(doc(db, "chats", chatId), { hiddenFor: arrayUnion(uid) });
+}
+
+export async function clearChatForMe(chatId, uid) {
+  await updateDoc(doc(db, "chats", chatId), {
+    [`clearedFor.${uid}`]: serverTimestamp(),
+  });
 }

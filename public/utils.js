@@ -140,3 +140,75 @@ export function describeDevice() {
 
   return `${browser}, ${os}`;
 }
+
+// ---------- Chat attachments ----------
+
+// Firestore hard-caps a document at 1 MiB. We store attachments inline as
+// data URLs (no paid Storage backend), so this is the real ceiling - leave
+// generous headroom for the rest of the message doc and base64 overhead.
+export const MAX_ATTACHMENT_BYTES = 700 * 1024;
+
+export function fmtFileSize(bytes) {
+  if (!bytes && bytes !== 0) return "";
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+// Scales an image down (preserving aspect ratio, no crop) so it comfortably
+// fits inline in a Firestore document.
+export function imageFileToDataUrl(file, maxDim = 1280, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Файл не похож на изображение"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Reads any file as a data URL, rejecting it up front if it would blow past
+// the inline-storage size ceiling (no compression possible for non-images).
+export function fileToDataUrl(file, maxBytes = MAX_ATTACHMENT_BYTES) {
+  return new Promise((resolve, reject) => {
+    if (file.size > maxBytes) {
+      reject(
+        new Error(
+          `Файл слишком большой (${fmtFileSize(file.size)}). Максимум ${fmtFileSize(maxBytes)} — здесь нет платного облачного хранилища, файлы хранятся прямо в базе данных.`
+        )
+      );
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+export const EMOJI_PICKER_SET = [
+  "😀", "😂", "🤣", "😊", "😍", "😘", "😉", "😎", "🤔", "🙄",
+  "😴", "😭", "😡", "🥳", "😱", "🤯", "🥺", "😇", "🤗", "🤭",
+  "👍", "👎", "👏", "🙏", "💪", "🤝", "✌️", "🤞", "👀", "🔥",
+  "💯", "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "💔", "✨",
+  "🎉", "🎂", "🎁", "🌹", "🌟", "⚡", "☀️", "🌈", "🍕", "🍔",
+  "🍺", "☕", "⚽", "🏆", "🎮", "🎧", "📷", "🚀", "💡", "✅",
+];
+
+export const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
