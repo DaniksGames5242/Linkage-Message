@@ -15,12 +15,14 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == 'danik';
     }
 
-    // Inline-stored attachments (no paid Storage backend) must stay well
-    // under Firestore's 1 MiB document cap.
+    // Photo/video/file attachments are uploaded straight to Cloudinary from
+    // the client; only the resulting HTTPS URL is stored here, so this just
+    // sanity-checks the shape (a string, not an oversized blob) rather than
+    // enforcing a byte size.
     function attachmentsOk() {
-      return (!('image' in request.resource.data) || request.resource.data.image.size() <= 900000)
-        && (!('fileData' in request.resource.data) || request.resource.data.fileData.size() <= 900000)
-        && (!('voice' in request.resource.data) || request.resource.data.voice.size() <= 900000);
+      return (!('imageUrl' in request.resource.data) || (request.resource.data.imageUrl is string && request.resource.data.imageUrl.size() <= 500))
+        && (!('fileUrl' in request.resource.data) || (request.resource.data.fileUrl is string && request.resource.data.fileUrl.size() <= 500))
+        && (!('voiceUrl' in request.resource.data) || (request.resource.data.voiceUrl is string && request.resource.data.voiceUrl.size() <= 500));
     }
 
     function isMessageTextEdit() {

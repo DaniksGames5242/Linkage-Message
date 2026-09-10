@@ -53,12 +53,12 @@ import {
   escapeHTML,
   resizeImageToDataUrl,
   imageFileToDataUrl,
-  fileToDataUrl,
   fmtFileSize,
   attachPasswordToggle,
   EMOJI_PICKER_SET,
   REACTION_EMOJIS,
 } from "./utils.js";
+import { uploadToCloudinary } from "./upload.js";
 
 const ADMIN_USERNAME = "danik";
 const SAVED_ID = "__saved__";
@@ -1162,38 +1162,40 @@ const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤"];
 
 function renderBubbleContent(bubble, msg) {
   bubble.innerHTML = "";
-  if (msg.image) {
+  if (msg.imageUrl) {
     const img = document.createElement("img");
     img.className = "msg-image";
-    img.src = msg.image;
+    img.src = msg.imageUrl;
     img.alt = "";
-    img.addEventListener("click", () => window.open(msg.image, "_blank"));
+    img.addEventListener("click", () => window.open(msg.imageUrl, "_blank"));
     bubble.appendChild(img);
-  } else if (msg.voice) {
+  } else if (msg.voiceUrl) {
     const audio = document.createElement("audio");
     audio.className = "msg-audio";
     audio.controls = true;
-    audio.src = msg.voice;
+    audio.src = msg.voiceUrl;
     bubble.appendChild(audio);
-  } else if (msg.fileData) {
+  } else if (msg.fileUrl) {
     const fileType = msg.fileType || "";
     if (fileType.startsWith("video/")) {
       const video = document.createElement("video");
       video.className = "msg-video";
       video.controls = true;
-      video.src = msg.fileData;
+      video.src = msg.fileUrl;
       bubble.appendChild(video);
     } else if (fileType.startsWith("audio/")) {
       const audio = document.createElement("audio");
       audio.className = "msg-audio";
       audio.controls = true;
-      audio.src = msg.fileData;
+      audio.src = msg.fileUrl;
       bubble.appendChild(audio);
     } else {
       const link = document.createElement("a");
       link.className = "msg-file-card";
-      link.href = msg.fileData;
+      link.href = msg.fileUrl;
       link.download = msg.fileName || "file";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
       link.innerHTML = `
         <div class="msg-file-icon">📎</div>
         <div class="msg-file-meta">
@@ -1207,7 +1209,7 @@ function renderBubbleContent(bubble, msg) {
     }
   }
 
-  const hasAttachment = !!(msg.image || msg.voice || msg.fileData);
+  const hasAttachment = !!(msg.imageUrl || msg.voiceUrl || msg.fileUrl);
   const isPlaceholderCaption = DEFAULT_CAPTIONS.includes(msg.text) || msg.text === `📎 ${msg.fileName}`;
   if (msg.text && !(hasAttachment && isPlaceholderCaption)) {
     const p = document.createElement("div");
@@ -1452,19 +1454,31 @@ emojiBtn.addEventListener("click", () => {
 // ---------- File / photo / video attachments ----------
 
 async function buildFileAttachment(file) {
-  if (file.type.startsWith("image/") && file.type !== "image/gif") {
-    const dataUrl = await imageFileToDataUrl(file);
-    return { fields: { image: dataUrl }, previewText: "📷 Фото", defaultCaption: "📷" };
+  if (file.type.startsWith("image/")) {
+    const { url } = await uploadToCloudinary(file, "image");
+    const label = file.type === "image/gif" ? "📷 GIF" : "📷 Фото";
+    return { fields: { imageUrl: url }, previewText: label, defaultCaption: "📷" };
   }
-  if (file.type === "image/gif") {
-    // GIFs are re-sent as-is (no canvas re-encode) so the animation survives.
-    const dataUrl = await fileToDataUrl(file);
-    return { fields: { image: dataUrl }, previewText: "📷 GIF", defaultCaption: "📷" };
+  if (file.type.startsWith("video/")) {
+    const { url } = await uploadToCloudinary(file, "video");
+    return {
+      fields: { fileUrl: url, fileName: file.name, fileType: file.type, fileSize: file.size },
+      previewText: "🎬 Видео",
+      defaultCaption: "🎬",
+    };
   }
-  const dataUrl = await fileToDataUrl(file);
+  if (file.type.startsWith("audio/")) {
+    const { url } = await uploadToCloudinary(file, "video"); // Cloudinary files audio under "video"
+    return {
+      fields: { fileUrl: url, fileName: file.name, fileType: file.type, fileSize: file.size },
+      previewText: `📎 ${file.name}`,
+      defaultCaption: `📎 ${file.name}`,
+    };
+  }
+  const { url } = await uploadToCloudinary(file, "raw");
   return {
     fields: {
-      fileData: dataUrl,
+      fileUrl: url,
       fileName: file.name,
       fileType: file.type || "application/octet-stream",
       fileSize: file.size,
@@ -1520,8 +1534,9 @@ async function startVoiceRecording() {
     if (voiceDiscard || recordedChunks.length === 0) return;
     try {
       const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-      const dataUrl = await fileToDataUrl(blob);
-      await doSendMessage({ fields: { voice: dataUrl }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" });
+      const voiceFile = new File([blob], "voice.webm", { type: blob.type });
+      const { url } = await uploadToCloudinary(voiceFile, "video"); // Cloudinary files audio under "video"
+      await doSendMessage({ fields: { voiceUrl: url }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" });
     } catch (err) {
       console.error(err);
       attachErrorEl.textContent = err.message || "Не удалось отправить голосовое сообщение";

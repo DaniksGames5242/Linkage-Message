@@ -143,11 +143,6 @@ export function describeDevice() {
 
 // ---------- Chat attachments ----------
 
-// Firestore hard-caps a document at 1 MiB. We store attachments inline as
-// data URLs (no paid Storage backend), so this is the real ceiling - leave
-// generous headroom for the rest of the message doc and base64 overhead.
-export const MAX_ATTACHMENT_BYTES = 700 * 1024;
-
 export function fmtFileSize(bytes) {
   if (!bytes && bytes !== 0) return "";
   if (bytes < 1024) return `${bytes} Б`;
@@ -179,25 +174,6 @@ export function imageFileToDataUrl(file, maxDim = 1280, quality = 0.75) {
       };
       img.src = reader.result;
     };
-    reader.readAsDataURL(file);
-  });
-}
-
-// Reads any file as a data URL, rejecting it up front if it would blow past
-// the inline-storage size ceiling (no compression possible for non-images).
-export function fileToDataUrl(file, maxBytes = MAX_ATTACHMENT_BYTES) {
-  return new Promise((resolve, reject) => {
-    if (file.size > maxBytes) {
-      reject(
-        new Error(
-          `Файл слишком большой (${fmtFileSize(file.size)}). Максимум ${fmtFileSize(maxBytes)} — здесь нет платного облачного хранилища, файлы хранятся прямо в базе данных.`
-        )
-      );
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
-    reader.onload = () => resolve(reader.result);
     reader.readAsDataURL(file);
   });
 }
