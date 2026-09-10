@@ -508,15 +508,32 @@ const runSearch = debounce(async (raw) => {
   const addBtn = card.querySelector("#sr-add");
   if (addBtn) {
     addBtn.addEventListener("click", async () => {
-      await addContact(currentUser.uid, uid);
+      addBtn.disabled = true;
+      try {
+        await addContact(currentUser.uid, uid, isContact);
+      } catch (err) {
+        console.error(err);
+        alert(err.message || "Не удалось добавить контакт");
+      } finally {
+        addBtn.disabled = false;
+      }
     });
   }
-  card.querySelector("#sr-message").addEventListener("click", async () => {
-    await addContact(currentUser.uid, uid);
-    const chatId = await ensureChat(currentUser.uid, uid);
-    openContactChat(chatId, uid, profile);
-    searchInput.value = "";
-    searchResultEl.classList.add("hidden");
+  const messageBtn = card.querySelector("#sr-message");
+  messageBtn.addEventListener("click", async () => {
+    messageBtn.disabled = true;
+    try {
+      await addContact(currentUser.uid, uid, isContact);
+      const chatId = await ensureChat(currentUser.uid, uid);
+      openContactChat(chatId, uid, profile);
+      searchInput.value = "";
+      searchResultEl.classList.add("hidden");
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Не удалось открыть чат");
+    } finally {
+      messageBtn.disabled = false;
+    }
   });
 }, 350);
 
@@ -568,23 +585,92 @@ const runNewChatContactSearch = debounce(async (raw) => {
       <div class="search-result-name"></div>
       <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
     </div>
-    <div class="search-result-actions">
-      ${isContact ? "" : '<button class="small-btn secondary" id="ncr-add">Добавить</button>'}
-      <button class="small-btn" id="ncr-message">Написать</button>
-    </div>
   `;
   card.querySelector(".search-result-name").textContent = profile.displayName;
   newChatContactResult.innerHTML = "";
   newChatContactResult.appendChild(card);
 
-  const addBtn = card.querySelector("#ncr-add");
-  if (addBtn) addBtn.addEventListener("click", async () => addContact(currentUser.uid, uid));
+  // Adding a *new* contact via the pencil icon requires naming them (first
+  // name required, last name optional) - just messaging an existing contact
+  // doesn't, and messaging someone without naming them falls back to their
+  // username/nickname everywhere (contactDisplayName()'s existing behaviour).
+  if (!isContact) {
+    const nameFields = document.createElement("div");
+    nameFields.className = "new-contact-name-fields";
+    nameFields.innerHTML = `
+      <div class="field">
+        <label for="ncr-firstname">Имя</label>
+        <input id="ncr-firstname" type="text" maxlength="40" placeholder="Обязательно" />
+      </div>
+      <div class="field">
+        <label for="ncr-lastname">Фамилия</label>
+        <input id="ncr-lastname" type="text" maxlength="40" placeholder="Необязательно" />
+      </div>
+    `;
+    newChatContactResult.appendChild(nameFields);
+  }
 
-  card.querySelector("#ncr-message").addEventListener("click", async () => {
-    await addContact(currentUser.uid, uid);
-    const chatId = await ensureChat(currentUser.uid, uid);
-    openContactChat(chatId, uid, profile);
-    newChatOverlay.classList.add("hidden");
+  const actions = document.createElement("div");
+  actions.className = "search-result-actions";
+  actions.innerHTML = `
+    ${isContact ? "" : '<button class="small-btn secondary" id="ncr-add">Добавить</button>'}
+    <button class="small-btn" id="ncr-message">Написать</button>
+  `;
+  newChatContactResult.appendChild(actions);
+
+  const nameErrorEl = document.createElement("div");
+  nameErrorEl.className = "auth-error";
+  nameErrorEl.id = "ncr-name-error";
+  newChatContactResult.appendChild(nameErrorEl);
+
+  function readContactName() {
+    if (isContact) return {};
+    const firstName = document.getElementById("ncr-firstname").value.trim();
+    const lastName = document.getElementById("ncr-lastname").value.trim();
+    if (!firstName) {
+      nameErrorEl.textContent = "Введите имя контакта";
+      return null;
+    }
+    nameErrorEl.textContent = "";
+    return { firstName, lastName };
+  }
+
+  const addBtn = actions.querySelector("#ncr-add");
+  if (addBtn) {
+    addBtn.addEventListener("click", async () => {
+      const name = readContactName();
+      if (!name) return;
+      addBtn.disabled = true;
+      try {
+        await addContact(currentUser.uid, uid, isContact);
+        await setContactAlias(currentUser.uid, uid, name);
+        newChatOverlay.classList.add("hidden");
+      } catch (err) {
+        console.error(err);
+        nameErrorEl.textContent = err.message || "Не удалось добавить контакт";
+      } finally {
+        addBtn.disabled = false;
+      }
+    });
+  }
+
+  const messageBtn = actions.querySelector("#ncr-message");
+  messageBtn.addEventListener("click", async () => {
+    const name = readContactName();
+    if (!name) return;
+    messageBtn.disabled = true;
+    try {
+      await addContact(currentUser.uid, uid, isContact);
+      if (!isContact) await setContactAlias(currentUser.uid, uid, name);
+      const chatId = await ensureChat(currentUser.uid, uid);
+      openContactChat(chatId, uid, profile);
+      newChatOverlay.classList.add("hidden");
+    } catch (err) {
+      console.error(err);
+      nameErrorEl.textContent = err.message || "Не удалось открыть чат";
+    } finally {
+      messageBtn.disabled = false;
+    }
   });
 }, 350);
 

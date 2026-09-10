@@ -526,6 +526,18 @@ button.primary:disabled {
 .search-result-actions {
   display: flex;
   gap: 6px;
+  margin-top: 10px;
+}
+
+.new-contact-name-fields {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.new-contact-name-fields .field {
+  flex: 1;
+  margin-bottom: 0;
 }
 
 .small-btn {

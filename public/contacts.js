@@ -29,10 +29,15 @@ export async function searchUser(rawQuery, myUid) {
   return { uid: targetUid, profile: profileSnap.data() };
 }
 
-export async function addContact(myUid, contactUid) {
-  await setDoc(doc(db, "users", myUid, "contacts", contactUid), {
-    addedAt: serverTimestamp(),
-  });
+// Idempotent: merges so it never wipes out an existing firstName/lastName
+// alias, and skips the write entirely if already a contact.
+export async function addContact(myUid, contactUid, alreadyContact) {
+  if (alreadyContact) return;
+  await setDoc(
+    doc(db, "users", myUid, "contacts", contactUid),
+    { addedAt: serverTimestamp() },
+    { merge: true }
+  );
 }
 
 export async function setContactAlias(myUid, contactUid, { firstName, lastName }) {
