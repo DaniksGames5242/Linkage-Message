@@ -125,6 +125,18 @@ const aliasLastname = document.getElementById("alias-lastname");
 const aliasCancelBtn = document.getElementById("alias-cancel-btn");
 const aliasSaveBtn = document.getElementById("alias-save-btn");
 
+const chatHeaderInfoBtn = document.getElementById("chat-header-info");
+const profileViewOverlay = document.getElementById("profile-view-overlay");
+const profileViewCloseBtn = document.getElementById("profile-view-close-btn");
+const profileViewAvatar = document.getElementById("profile-view-avatar");
+const profileViewName = document.getElementById("profile-view-name");
+const profileViewUsername = document.getElementById("profile-view-username");
+const profileViewRows = [1, 2, 3].map((i) => ({
+  row: document.getElementById(`profile-view-row-${i}`),
+  label: document.getElementById(`profile-view-row-${i}-label`),
+  value: document.getElementById(`profile-view-row-${i}-value`),
+}));
+
 const newChatOverlay = document.getElementById("new-chat-overlay");
 const newChatCloseBtn = document.getElementById("new-chat-close-btn");
 const newChatMenu = document.getElementById("new-chat-menu");
@@ -167,18 +179,39 @@ const settingsUsername = document.getElementById("settings-username");
 const settingsUsernameHint = document.getElementById("settings-username-hint");
 const settingsBio = document.getElementById("settings-bio");
 const settingsBirthday = document.getElementById("settings-birthday");
+const settingsBirthdayClearBtn = document.getElementById("settings-birthday-clear-btn");
+const settingsDisplaynameCounter = document.getElementById("settings-displayname-counter");
+const settingsBioCounter = document.getElementById("settings-bio-counter");
+const settingsCreatedAt = document.getElementById("settings-created-at");
 const settingsProfileSave = document.getElementById("settings-profile-save");
 const settingsProfileError = document.getElementById("settings-profile-error");
 
 const privacyLastseen = document.getElementById("privacy-lastseen");
+const privacyAvatar = document.getElementById("privacy-avatar");
+const privacyBio = document.getElementById("privacy-bio");
+const privacyBirthday = document.getElementById("privacy-birthday");
+const privacyTyping = document.getElementById("privacy-typing");
 const settingsPrivacySave = document.getElementById("settings-privacy-save");
 const settingsPrivacyError = document.getElementById("settings-privacy-error");
 
+const notifMuteAll = document.getElementById("notif-mute-all");
 const notifSound = document.getElementById("notif-sound");
 const notifDesktop = document.getElementById("notif-desktop");
 const notifPreview = document.getElementById("notif-preview");
+const notifGroups = document.getElementById("notif-groups");
 const settingsNotifSave = document.getElementById("settings-notif-save");
 const settingsNotifError = document.getElementById("settings-notif-error");
+
+const chatsSendOnEnter = document.getElementById("chats-send-on-enter");
+const chatsFontSize = document.getElementById("chats-font-size");
+const chatsCompact = document.getElementById("chats-compact");
+const chatsAccentSwatches = document.querySelectorAll(".accent-swatch");
+const settingsChatsSave = document.getElementById("settings-chats-save");
+const settingsChatsError = document.getElementById("settings-chats-error");
+
+const settingsLanguage = document.getElementById("settings-language");
+const settingsLanguageSave = document.getElementById("settings-language-save");
+const settingsLanguageError = document.getElementById("settings-language-error");
 
 const pwCurrent = document.getElementById("pw-current");
 const pwNew = document.getElementById("pw-new");
@@ -221,6 +254,7 @@ let unsubChatDoc = null;
 let unsubContacts = null;
 let unsubStories = null;
 let chatsInitialized = false;
+let groupsInitialized = false;
 let presenceInterval = null;
 let typingClearTimer = null;
 let sessionsUnsub = null;
@@ -319,6 +353,7 @@ function cleanupSubscriptions() {
   if (presenceInterval) clearInterval(presenceInterval);
   unsubChats = unsubGroups = unsubMessages = unsubChatDoc = unsubContacts = unsubStories = sessionsUnsub = presenceInterval = null;
   chatsInitialized = false;
+  groupsInitialized = false;
 }
 
 // ---------- Main app ----------
@@ -326,6 +361,8 @@ function cleanupSubscriptions() {
 function enterApp() {
   appEl.classList.remove("hidden");
   renderMe();
+  applyLanguage(myProfile.language || "ru");
+  applyChatPrefs(myProfile.chatPrefs || {});
   listenContactsList();
   listenChatsList();
   listenGroupsList();
@@ -343,6 +380,90 @@ function renderMe() {
   menuTriggerBtn.innerHTML = avatarHTML(myProfile, currentUser.uid);
   meName.textContent = myProfile.displayName;
 }
+
+// ---------- Privacy-aware profile field visibility ----------
+
+// visibility is "everyone" | "contacts" | "nobody"; owners always see their own fields.
+function canSeeProfileField(profile, uid, field) {
+  if (!uid || uid === currentUser?.uid) return true;
+  const visibility = profile?.privacy?.[field] || "everyone";
+  if (visibility === "everyone") return true;
+  if (visibility === "nobody") return false;
+  return contactsMap.has(uid);
+}
+
+// Same as avatarHTML(), but returns the colour/initials fallback instead of
+// the real photo when the viewer isn't allowed to see this profile's avatar.
+function visibleAvatarHTML(profile, uid) {
+  if (canSeeProfileField(profile, uid, "avatarVisibility")) return avatarHTML(profile, uid);
+  return avatarHTML({ ...profile, avatarImage: null, avatarEmoji: null }, uid);
+}
+
+// ---------- Contact / group profile viewer ----------
+
+function setProfileViewRow(index, label, value) {
+  const { row, label: labelEl, value: valueEl } = profileViewRows[index];
+  if (!value) {
+    row.classList.add("hidden");
+    return;
+  }
+  labelEl.textContent = label;
+  valueEl.textContent = value;
+  row.classList.remove("hidden");
+}
+
+function openContactProfile(uid, profile) {
+  if (!profile) return;
+  profileViewAvatar.innerHTML = visibleAvatarHTML(profile, uid);
+
+  const contact = contactsMap.get(uid);
+  profileViewName.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
+  profileViewUsername.textContent = "@" + profile.username;
+
+  const canSeeLastSeen =
+    (profile.privacy?.lastSeenVisibility || "everyone") === "everyone" ||
+    ((profile.privacy?.lastSeenVisibility || "everyone") === "contacts" && contactsMap.has(uid));
+  setProfileViewRow(
+    0,
+    "Был(а) в сети",
+    canSeeLastSeen ? (isRecentlyOnline(profile.lastSeenAt) ? "в сети" : profile.lastSeenAt ? fmtRelative(profile.lastSeenAt) : "") : ""
+  );
+  setProfileViewRow(1, "О себе", canSeeProfileField(profile, uid, "bioVisibility") ? profile.bio : "");
+  setProfileViewRow(
+    2,
+    "Дата рождения",
+    canSeeProfileField(profile, uid, "birthdayVisibility") && profile.birthday
+      ? new Date(profile.birthday + "T00:00:00").toLocaleDateString([], { day: "2-digit", month: "long", year: "numeric" })
+      : ""
+  );
+
+  profileViewOverlay.classList.remove("hidden");
+}
+
+function openGroupInfo(group) {
+  if (!group) return;
+  profileViewAvatar.innerHTML = groupAvatarHTML(group);
+  profileViewName.textContent = group.name;
+  profileViewUsername.textContent = group.type === "channel" ? "Канал" : "Группа";
+  setProfileViewRow(0, "Участники", pluralMembers((group.members || []).length));
+  setProfileViewRow(1, "", "");
+  setProfileViewRow(2, "", "");
+
+  profileViewOverlay.classList.remove("hidden");
+}
+
+chatHeaderInfoBtn?.addEventListener("click", () => {
+  if (currentChatType === "contact") {
+    openContactProfile(currentOtherUid, currentOtherProfile);
+  } else if (currentChatType === "group" || currentChatType === "channel") {
+    openGroupInfo(currentGroupRef);
+  }
+});
+
+profileViewCloseBtn?.addEventListener("click", () => profileViewOverlay.classList.add("hidden"));
+profileViewOverlay?.addEventListener("click", (e) => {
+  if (e.target === profileViewOverlay) profileViewOverlay.classList.add("hidden");
+});
 
 // ---------- Avatar click -> settings ----------
 
@@ -370,7 +491,7 @@ const runSearch = debounce(async (raw) => {
   const card = document.createElement("div");
   card.className = "search-result-card";
   card.innerHTML = `
-    ${avatarHTML(profile, uid)}
+    ${visibleAvatarHTML(profile, uid)}
     <div class="search-result-meta">
       <div class="search-result-name"></div>
       <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
@@ -442,7 +563,7 @@ const runNewChatContactSearch = debounce(async (raw) => {
   const card = document.createElement("div");
   card.className = "search-result-card";
   card.innerHTML = `
-    ${avatarHTML(profile, uid)}
+    ${visibleAvatarHTML(profile, uid)}
     <div class="search-result-meta">
       <div class="search-result-name"></div>
       <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
@@ -554,7 +675,7 @@ const runGroupMemberSearch = debounce(async (raw) => {
   const card = document.createElement("div");
   card.className = "search-result-card";
   card.innerHTML = `
-    ${avatarHTML(profile, uid)}
+    ${visibleAvatarHTML(profile, uid)}
     <div class="search-result-meta">
       <div class="search-result-name"></div>
       <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
@@ -662,9 +783,16 @@ function listenChatsList() {
 function listenGroupsList() {
   unsubGroups = listenMyGroups(
     currentUser.uid,
-    (list) => {
+    (list, changes) => {
       groups = list;
       renderChats();
+      if (groupsInitialized) {
+        changes.forEach((c) => {
+          if (c.type === "removed") return;
+          maybeNotifyGroup(c.id, c.data);
+        });
+      }
+      groupsInitialized = true;
     },
     showChatsLoadError
   );
@@ -719,7 +847,7 @@ function renderStoriesStrip() {
     const bubble = document.createElement("div");
     bubble.className = "story-bubble";
     bubble.innerHTML = `
-      <div class="story-ring">${avatarHTML(profile, uid)}</div>
+      <div class="story-ring">${visibleAvatarHTML(profile, uid)}</div>
       <div class="story-bubble-label"></div>
     `;
     bubble.querySelector(".story-bubble-label").textContent = profile.displayName;
@@ -744,7 +872,7 @@ storyAddInput.addEventListener("change", async () => {
 function openStoryViewer(ownerUid, profile, items) {
   activeStoryGroup = { ownerUid, profile, items: [...items] };
   activeStoryIndex = 0;
-  storyViewerAvatar.innerHTML = avatarHTML(profile, ownerUid);
+  storyViewerAvatar.innerHTML = visibleAvatarHTML(profile, ownerUid);
   storyViewerName.textContent = profile.displayName;
   storyDeleteBtn.classList.toggle("hidden", ownerUid !== currentUser.uid);
   buildStoryProgress();
@@ -912,7 +1040,7 @@ async function renderChats() {
     const item = document.createElement("div");
     item.className = "room-item" + (chat.id === currentChatId ? " active" : "");
     item.innerHTML = `
-      ${avatarHTML(profile, otherUid)}
+      ${visibleAvatarHTML(profile, otherUid)}
       <div class="room-meta">
         <div class="room-name"></div>
         <div class="room-last"></div>
@@ -1017,7 +1145,7 @@ function openContactChat(chatId, otherUid, profile) {
   currentClearedAt = chatData?.clearedFor?.[currentUser.uid]?.toMillis?.() || 0;
 
   const contact = contactsMap.get(otherUid);
-  chatHeaderAvatar.innerHTML = avatarHTML(profile, otherUid);
+  chatHeaderAvatar.innerHTML = visibleAvatarHTML(profile, otherUid);
   chatTitle.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
   chatSub.textContent = "@" + profile.username;
   editContactBtn.classList.remove("hidden");
@@ -1435,7 +1563,9 @@ composer.addEventListener("submit", async (e) => {
 });
 
 msgInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
+  if (e.key !== "Enter" || e.shiftKey) return;
+  const sendOnEnter = myProfile?.chatPrefs?.sendOnEnter !== false;
+  if (sendOnEnter || e.ctrlKey || e.metaKey) {
     e.preventDefault();
     doSendMessage();
   }
@@ -1452,7 +1582,7 @@ msgInput.addEventListener("input", () => {
   msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
   updateComposerButtons();
 
-  if (currentChatType === "contact") {
+  if (currentChatType === "contact" && myProfile?.privacy?.typingVisibility !== false) {
     setTyping(currentChatId, currentUser.uid, true);
     clearTimeout(typingClearTimer);
     typingClearTimer = setTimeout(() => setTyping(currentChatId, currentUser.uid, false), 3000);
@@ -1735,6 +1865,7 @@ async function maybeNotify(chatData) {
   if (isViewingThisChat) return;
 
   const notifPrefs = myProfile?.notifications || {};
+  if (notifPrefs.muteAll) return;
   if (notifPrefs.sound !== false) beep();
 
   if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
@@ -1746,6 +1877,106 @@ async function maybeNotify(chatData) {
   }
 }
 
+async function maybeNotifyGroup(groupId, groupData) {
+  if (!groupData.lastMessageSenderId || groupData.lastMessageSenderId === currentUser.uid) return;
+  const isViewingThisGroup = currentChatId === groupId && !document.hidden;
+  if (isViewingThisGroup) return;
+
+  const notifPrefs = myProfile?.notifications || {};
+  if (notifPrefs.muteAll || notifPrefs.groups === false) return;
+  if (notifPrefs.sound !== false) beep();
+
+  if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
+    const body = notifPrefs.preview !== false ? groupData.lastMessage : "Новое сообщение";
+    new Notification(groupData.name || "Новое сообщение", { body });
+  }
+}
+
+// ---------- Language (i18n) ----------
+
+const TRANSLATIONS = {
+  ru: {
+    settings_title: "Настройки",
+    menu_profile: "Профиль",
+    menu_privacy: "Приватность",
+    menu_notifications: "Уведомления",
+    menu_chats: "Чаты",
+    menu_language: "Язык",
+    menu_sessions: "Сессии",
+    save: "Сохранить",
+    logout: "Выйти из аккаунта",
+    change_password: "Сменить пароль",
+    delete_account: "Удалить аккаунт",
+    search_placeholder: "Найти по юзернейму…",
+    composer_placeholder: "Написать сообщение…",
+    empty_state: "Выберите чат слева<br />или найдите контакт по юзернейму",
+  },
+  en: {
+    settings_title: "Settings",
+    menu_profile: "Profile",
+    menu_privacy: "Privacy",
+    menu_notifications: "Notifications",
+    menu_chats: "Chats",
+    menu_language: "Language",
+    menu_sessions: "Sessions",
+    save: "Save",
+    logout: "Log out",
+    change_password: "Change password",
+    delete_account: "Delete account",
+    search_placeholder: "Find by username…",
+    composer_placeholder: "Write a message…",
+    empty_state: "Select a chat on the left<br />or find a contact by username",
+  },
+};
+
+let currentLanguage = "ru";
+
+function t(key) {
+  return TRANSLATIONS[currentLanguage]?.[key] ?? TRANSLATIONS.ru[key] ?? key;
+}
+
+function applyLanguage(lang) {
+  currentLanguage = TRANSLATIONS[lang] ? lang : "ru";
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+    el.placeholder = t(el.dataset.i18nPh);
+  });
+  document.querySelectorAll("[data-i18n-html]").forEach((el) => {
+    el.innerHTML = t(el.dataset.i18nHtml);
+  });
+  document.documentElement.lang = currentLanguage;
+}
+
+// ---------- Chat display preferences ----------
+
+const ACCENT_PRESETS = {
+  blue: ["#5b8cff", "#3f6de0"],
+  purple: ["#8b5cf6", "#6d28d9"],
+  pink: ["#ff6b9d", "#e94e85"],
+  red: ["#e5484d", "#c53a3f"],
+  orange: ["#f5a623", "#d98c0f"],
+  green: ["#22c55e", "#16a34a"],
+  teal: ["#00b8d9", "#0891a8"],
+};
+
+function applyChatPrefs(prefs) {
+  const fontSize = prefs.fontSize || "medium";
+  messagesEl.classList.remove("font-small", "font-large");
+  if (fontSize === "small") messagesEl.classList.add("font-small");
+  if (fontSize === "large") messagesEl.classList.add("font-large");
+  messagesEl.classList.toggle("compact", !!prefs.compact);
+
+  const [accent, accent2] = ACCENT_PRESETS[prefs.accentColor] || ACCENT_PRESETS.blue;
+  document.documentElement.style.setProperty("--accent", accent);
+  document.documentElement.style.setProperty("--accent-2", accent2);
+
+  chatsAccentSwatches.forEach((btn) => {
+    btn.classList.toggle("selected", btn.dataset.color === (prefs.accentColor || "blue"));
+  });
+}
+
 // ---------- Settings overlay ----------
 
 settingsCloseBtn.addEventListener("click", () => settingsOverlay.classList.add("hidden"));
@@ -1753,17 +1984,21 @@ settingsOverlay.addEventListener("click", (e) => {
   if (e.target === settingsOverlay) settingsOverlay.classList.add("hidden");
 });
 
-const SETTINGS_SECTION_TITLES = {
-  profile: "Профиль",
-  privacy: "Приватность",
-  notifications: "Уведомления",
-  sessions: "Сессии",
-};
+function SETTINGS_SECTION_TITLES(section) {
+  return {
+    profile: t("menu_profile"),
+    privacy: t("menu_privacy"),
+    notifications: t("menu_notifications"),
+    chats: t("menu_chats"),
+    language: t("menu_language"),
+    sessions: t("menu_sessions"),
+  }[section];
+}
 
 function showSettingsMenu() {
   settingsMenu.classList.remove("hidden");
   document.querySelectorAll(".settings-tab-panel").forEach((p) => p.classList.add("hidden"));
-  settingsHeaderTitle.textContent = "Настройки";
+  settingsHeaderTitle.textContent = t("settings_title");
   settingsBackBtn.classList.add("hidden");
 }
 
@@ -1772,7 +2007,7 @@ function showSettingsSection(section) {
   document.querySelectorAll(".settings-tab-panel").forEach((p) => {
     p.classList.toggle("hidden", p.dataset.spanel !== section);
   });
-  settingsHeaderTitle.textContent = SETTINGS_SECTION_TITLES[section] || "Настройки";
+  settingsHeaderTitle.textContent = SETTINGS_SECTION_TITLES(section) || t("settings_title");
   settingsBackBtn.classList.remove("hidden");
   if (section === "sessions") loadSessions();
 }
@@ -1783,10 +2018,23 @@ settingsMenuItems.forEach((btn) => {
 
 settingsBackBtn.addEventListener("click", showSettingsMenu);
 
+function updateProfileCounters() {
+  settingsDisplaynameCounter.textContent = `${settingsDisplayname.value.length}/40`;
+  settingsBioCounter.textContent = `${settingsBio.value.length}/140`;
+}
+
+settingsDisplayname.addEventListener("input", updateProfileCounters);
+settingsBio.addEventListener("input", updateProfileCounters);
+settingsBirthdayClearBtn?.addEventListener("click", () => {
+  settingsBirthday.value = "";
+});
+
 function openSettings() {
   settingsProfileError.textContent = "";
   settingsPrivacyError.textContent = "";
   settingsNotifError.textContent = "";
+  settingsChatsError.textContent = "";
+  settingsLanguageError.textContent = "";
   pwError.textContent = "";
   deleteAccountError.textContent = "";
   pwCurrent.value = pwNew.value = pwConfirm.value = "";
@@ -1801,12 +2049,32 @@ function openSettings() {
   settingsUsernameHint.textContent = "";
   settingsBio.value = myProfile.bio || "";
   settingsBirthday.value = myProfile.birthday || "";
+  updateProfileCounters();
+  settingsCreatedAt.textContent = myProfile.createdAt?.toDate
+    ? myProfile.createdAt.toDate().toLocaleDateString([], { day: "2-digit", month: "long", year: "numeric" })
+    : "—";
 
   privacyLastseen.value = myProfile.privacy?.lastSeenVisibility || "everyone";
+  privacyAvatar.value = myProfile.privacy?.avatarVisibility || "everyone";
+  privacyBio.value = myProfile.privacy?.bioVisibility || "everyone";
+  privacyBirthday.value = myProfile.privacy?.birthdayVisibility || "everyone";
+  privacyTyping.checked = myProfile.privacy?.typingVisibility !== false;
 
+  notifMuteAll.checked = !!myProfile.notifications?.muteAll;
   notifSound.checked = myProfile.notifications?.sound !== false;
   notifDesktop.checked = !!myProfile.notifications?.desktop;
   notifPreview.checked = myProfile.notifications?.preview !== false;
+  notifGroups.checked = myProfile.notifications?.groups !== false;
+
+  const chatPrefs = myProfile.chatPrefs || {};
+  chatsSendOnEnter.checked = chatPrefs.sendOnEnter !== false;
+  chatsFontSize.value = chatPrefs.fontSize || "medium";
+  chatsCompact.checked = !!chatPrefs.compact;
+  chatsAccentSwatches.forEach((btn) => {
+    btn.classList.toggle("selected", btn.dataset.color === (chatPrefs.accentColor || "blue"));
+  });
+
+  settingsLanguage.value = myProfile.language || "ru";
 
   showSettingsMenu();
   settingsOverlay.classList.remove("hidden");
@@ -1862,9 +2130,16 @@ settingsPrivacySave.addEventListener("click", async () => {
   settingsPrivacyError.textContent = "";
   settingsPrivacySave.disabled = true;
   try {
-    const privacy = { lastSeenVisibility: privacyLastseen.value };
+    const privacy = {
+      lastSeenVisibility: privacyLastseen.value,
+      avatarVisibility: privacyAvatar.value,
+      bioVisibility: privacyBio.value,
+      birthdayVisibility: privacyBirthday.value,
+      typingVisibility: privacyTyping.checked,
+    };
     await updatePrivacy(currentUser.uid, privacy);
     myProfile.privacy = privacy;
+    renderChats();
     settingsOverlay.classList.add("hidden");
   } catch (err) {
     console.error(err);
@@ -1883,9 +2158,11 @@ settingsNotifSave.addEventListener("click", async () => {
     }
     const desktopEnabled = notifDesktop.checked && "Notification" in window && Notification.permission === "granted";
     const notifications = {
+      muteAll: notifMuteAll.checked,
       sound: notifSound.checked,
       desktop: desktopEnabled,
       preview: notifPreview.checked,
+      groups: notifGroups.checked,
     };
     await updateNotifications(currentUser.uid, notifications);
     myProfile.notifications = notifications;
@@ -1896,6 +2173,53 @@ settingsNotifSave.addEventListener("click", async () => {
     settingsNotifError.textContent = err.message || "Не удалось сохранить";
   } finally {
     settingsNotifSave.disabled = false;
+  }
+});
+
+let selectedChatsAccent = null;
+chatsAccentSwatches.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    selectedChatsAccent = btn.dataset.color;
+    chatsAccentSwatches.forEach((b) => b.classList.toggle("selected", b === btn));
+  });
+});
+
+settingsChatsSave.addEventListener("click", async () => {
+  settingsChatsError.textContent = "";
+  settingsChatsSave.disabled = true;
+  try {
+    const chatPrefs = {
+      sendOnEnter: chatsSendOnEnter.checked,
+      fontSize: chatsFontSize.value,
+      compact: chatsCompact.checked,
+      accentColor: selectedChatsAccent || myProfile.chatPrefs?.accentColor || "blue",
+    };
+    await updateProfileFields(currentUser.uid, { chatPrefs });
+    myProfile.chatPrefs = chatPrefs;
+    applyChatPrefs(chatPrefs);
+    settingsOverlay.classList.add("hidden");
+  } catch (err) {
+    console.error(err);
+    settingsChatsError.textContent = err.message || "Не удалось сохранить";
+  } finally {
+    settingsChatsSave.disabled = false;
+  }
+});
+
+settingsLanguageSave.addEventListener("click", async () => {
+  settingsLanguageError.textContent = "";
+  settingsLanguageSave.disabled = true;
+  try {
+    const language = settingsLanguage.value;
+    await updateProfileFields(currentUser.uid, { language });
+    myProfile.language = language;
+    applyLanguage(language);
+    settingsOverlay.classList.add("hidden");
+  } catch (err) {
+    console.error(err);
+    settingsLanguageError.textContent = err.message || "Не удалось сохранить";
+  } finally {
+    settingsLanguageSave.disabled = false;
   }
 });
 

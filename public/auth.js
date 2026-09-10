@@ -92,14 +92,28 @@ export async function registerAccount({ username, password, confirmPassword, nic
       avatarColor: color,
       avatarImage: avatarImage || null,
       bio: "",
+      birthday: null,
       privacy: {
         lastSeenVisibility: "everyone",
+        avatarVisibility: "everyone",
+        bioVisibility: "everyone",
+        birthdayVisibility: "everyone",
+        typingVisibility: true,
       },
       notifications: {
+        muteAll: false,
         sound: true,
         desktop: false,
         preview: true,
+        groups: true,
       },
+      chatPrefs: {
+        sendOnEnter: true,
+        fontSize: "medium",
+        compact: false,
+        accentColor: "blue",
+      },
+      language: "ru",
       createdAt: serverTimestamp(),
       lastSeenAt: serverTimestamp(),
     });

@@ -47,7 +47,15 @@ export function listenMyGroups(uid, onChange, onError) {
   );
   return onSnapshot(
     q,
-    (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    (snap) => {
+      const groups = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const changes = snap.docChanges().map((c) => ({
+        type: c.type,
+        id: c.doc.id,
+        data: c.doc.data(),
+      }));
+      onChange(groups, changes);
+    },
     (err) => {
       console.error("listenMyGroups failed:", err);
       if (onError) onError(err);
