@@ -7,6 +7,15 @@ export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export const uploadsConfigured = !!CLOUDINARY_CLOUD_NAME && CLOUDINARY_CLOUD_NAME !== "YOUR_CLOUD_NAME";
 
+// Cloudinary's most common setup mistakes, in plain Russian.
+function friendlyUploadError(msg) {
+  if (/File size too large/i.test(msg)) return "Файл слишком большой для бесплатного тарифа Cloudinary";
+  if (/preset not found/i.test(msg)) return `Cloudinary: upload preset «${CLOUDINARY_UPLOAD_PRESET}» не найден — проверьте имя в Settings → Upload`;
+  if (/unsigned/i.test(msg)) return `Cloudinary: preset «${CLOUDINARY_UPLOAD_PRESET}» должен быть в режиме Unsigned`;
+  if (/cloud_name|cloud name/i.test(msg)) return `Cloudinary: неверный Cloud name «${CLOUDINARY_CLOUD_NAME}»`;
+  return msg;
+}
+
 function resourceTypeFor(file) {
   if (file.type.startsWith("image/")) return "image";
   if (file.type.startsWith("video/") || file.type.startsWith("audio/")) return "video";
@@ -49,7 +58,7 @@ export function uploadToCloudinary(file, resourceType, onProgress, signal) {
         resolve({ url: data.secure_url, bytes: data.bytes || file.size });
       } else {
         const msg = data?.error?.message || `Не удалось загрузить файл (код ${xhr.status})`;
-        reject(new Error(/File size too large/i.test(msg) ? "Файл слишком большой для бесплатного тарифа Cloudinary" : msg));
+        reject(new Error(friendlyUploadError(msg)));
       }
     };
     xhr.onerror = () => reject(new Error("Нет соединения с сервером загрузки"));
