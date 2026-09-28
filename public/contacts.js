@@ -72,6 +72,11 @@ export function listenContacts(myUid, onChange) {
   });
 }
 
+// Live profile (presence, avatar, status) of the person whose chat is open.
+export function listenProfile(uid, onChange) {
+  return onSnapshot(doc(db, "users", uid), (snap) => snap.exists() && onChange(snap.data()), () => {});
+}
+
 export async function getProfile(uid) {
   const snap = await getDoc(doc(db, "users", uid));
   return snap.exists() ? snap.data() : null;

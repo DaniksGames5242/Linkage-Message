@@ -13,7 +13,7 @@ import {
 import { e2eSupported, initDevice, forgetDevice, hasDevice, deviceId, devicePublicKey, sealFor, openFrom, NotForThisDevice, fingerprint } from "./e2e.js";
 import { publishDevice } from "./e2e-store.js";
 import { recordCircle, buildVideoNote, circlesSupported, MAX_ZOOM, ensureTriangleClip } from "./circle.js";
-import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName } from "./contacts.js";
+import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName, listenProfile } from "./contacts.js";
 import {
   ensureChat,
   listenMyChats,
@@ -347,6 +347,7 @@ let unsubChats = null;
 let unsubGroups = null;
 let unsubMessages = null;
 let unsubChatDoc = null;
+let unsubPresence = null; // live profile of the open 1:1 chat
 let unsubContacts = null;
 let unsubStories = null;
 let chatsInitialized = false;
@@ -595,6 +596,8 @@ function cleanupSubscriptions() {
   if (unsubGroups) unsubGroups();
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
+  unsubPresence?.();
+  unsubPresence = null;
   if (unsubContacts) unsubContacts();
   if (unsubStories) unsubStories();
   if (sessionsUnsub) sessionsUnsub();
@@ -619,7 +622,8 @@ function enterApp() {
   listenGroupsList();
   listenStoriesList();
   touchPresence(currentUser.uid);
-  presenceInterval = setInterval(() => touchPresence(currentUser.uid), 45000);
+  presenceInterval = setInterval(() => !document.hidden && touchPresence(currentUser.uid), 25000);
+  window.addEventListener("pagehide", () => currentUser && touchPresence(currentUser.uid, false));
   document.addEventListener("visibilitychange", onVisibilityChange);
   setTimeout(openLinkedProfile, 700);
   openLaunchChat();
@@ -677,6 +681,7 @@ function playAppIntro() {
 }
 
 function onVisibilityChange() {
+  if (document.hidden && currentUser) touchPresence(currentUser.uid, false);
   if (!document.hidden && currentUser) {
     touchPresence(currentUser.uid);
     maybeMarkRead();
@@ -773,7 +778,7 @@ function openContactProfile(uid, profile) {
   setProfileViewRow(
     0,
     "Был(а) в сети",
-    canSeeLastSeen ? (isRecentlyOnline(profile.lastSeenAt) ? "в сети" : profile.lastSeenAt ? fmtRelative(profile.lastSeenAt) : "") : ""
+    canSeeLastSeen ? (isRecentlyOnline(profile) ? "в сети" : profile.lastSeenAt ? fmtRelative(profile.lastSeenAt) : "") : ""
   );
   setProfileViewRow(1, "О себе", canSeeProfileField(profile, uid, "bioVisibility") ? profile.bio : "");
   setProfileViewRow(
@@ -2174,6 +2179,8 @@ function resetChatView() {
   unreadWhileAway = 0;
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
+  unsubPresence?.();
+  unsubPresence = null;
   unsubMessages = unsubChatDoc = null;
   clearTimeout(typingClearTimer);
   cancelRecording();
@@ -2726,9 +2733,18 @@ function openContactChat(chatId, otherUid, profile) {
       rerenderMessages();
     });
   });
+  let lastChatData = null;
   unsubChatDoc = listenChatDoc(chatId, (data) => {
     if (currentChatId !== chatId || !data) return;
-    updateChatSub(profile, data);
+    lastChatData = data;
+    updateChatSub(currentOtherProfile || profile, data);
+  });
+  // Presence and profile changes of the other person arrive live.
+  unsubPresence?.();
+  unsubPresence = listenProfile(otherUid, (fresh) => {
+    if (currentChatId !== chatId) return;
+    currentOtherProfile = { ...profile, ...fresh };
+    updateChatSub(currentOtherProfile, lastChatData);
   });
 }
 
@@ -3012,7 +3028,7 @@ function updateChatSub(profile, chatData) {
     chatSub.textContent = "@" + profile.username;
     return;
   }
-  if (isRecentlyOnline(profile.lastSeenAt)) {
+  if (isRecentlyOnline(profile)) {
     chatSub.textContent = "в сети";
   } else if (profile.lastSeenAt) {
     chatSub.textContent = "был(а) " + fmtRelative(profile.lastSeenAt);
@@ -5707,6 +5723,8 @@ function closeCurrentChatView() {
   chatSection.classList.remove("has-pinned");
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
+  unsubPresence?.();
+  unsubPresence = null;
   unsubMessages = unsubChatDoc = null;
   currentChatId = null;
   currentChatType = null;
@@ -7650,7 +7668,7 @@ async function renderGroupMembers(group) {
       b.className = "pick-item";
       b.innerHTML = `${visibleAvatarHTML(profile, uid)}<div class="pick-item-meta"><div class="pick-item-name"></div><div class="pick-item-sub"></div></div>`;
       b.querySelector(".pick-item-name").textContent = uid === me ? `${profile.displayName} (вы)` : profile.displayName;
-      b.querySelector(".pick-item-sub").textContent = isRecentlyOnline(profile.lastSeenAt) ? "в сети" : "@" + profile.username;
+      b.querySelector(".pick-item-sub").textContent = isRecentlyOnline(profile) ? "в сети" : "@" + profile.username;
       if ((group.admins || []).includes(uid)) {
         const badge = document.createElement("span");
         badge.className = "pick-item-badge";

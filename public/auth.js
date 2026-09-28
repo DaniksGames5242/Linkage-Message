@@ -159,9 +159,11 @@ export async function logout() {
   window.location.href = "/login";
 }
 
-export async function touchPresence(uid) {
+// online=false is written when the tab is hidden/closed so "в сети" drops
+// immediately instead of after the heartbeat times out.
+export async function touchPresence(uid, online = true) {
   try {
-    await updateDoc(doc(db, "users", uid), { lastSeenAt: serverTimestamp() });
+    await updateDoc(doc(db, "users", uid), { lastSeenAt: serverTimestamp(), online });
   } catch (_) {
     // profile may not exist yet - ignore
   }

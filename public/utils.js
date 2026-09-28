@@ -54,9 +54,14 @@ export function fmtRelative(ts) {
   return ts.toDate().toLocaleDateString();
 }
 
+// `ts` may be a timestamp or a whole profile ({ online, lastSeenAt }).
 export function isRecentlyOnline(ts) {
+  if (ts && !ts.toDate && "lastSeenAt" in ts) {
+    if (ts.online === false) return false;
+    ts = ts.lastSeenAt;
+  }
   if (!ts || !ts.toDate) return false;
-  return Date.now() - ts.toDate().getTime() < 90 * 1000;
+  return Date.now() - ts.toDate().getTime() < 60 * 1000;
 }
 
 export function escapeHTML(str) {

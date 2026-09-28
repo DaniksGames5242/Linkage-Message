@@ -433,7 +433,6 @@ async function toggleCam() {
 const SPEAKER_RE = /speakerphone|loudspeaker|speaker|динамик|громкоговор/i;
 const EAR_RE = /earpiece|receiver|handset|headset|headphone|наушник|гарнитур|телефон/i;
 const isWebKitOnly = /iphone|ipad|ipod/i.test(navigator.userAgent) || (/safari/i.test(navigator.userAgent) && !/chrome|chromium|crios|android|edg|fxios|firefox/i.test(navigator.userAgent));
-const SPEAKER_GAIN = 1.9;
 const EAR_GAIN = 0.4;
 
 // One AudioContext for the call (meter + output), unlocked by the tap that
@@ -543,14 +542,25 @@ async function applySpeaker() {
       /* not permitted — fall through */
     }
   }
-  if (isWebKitOnly && connectGain()) {
+  // Loud mode always plays through the element itself (the safest path —
+  // iPhones route calls to the loudspeaker anyway); Web Audio is only used
+  // to make the quiet "to the ear" mode quieter on Safari.
+  if (isWebKitOnly && !speaker && connectGain()) {
     const g = out.gain.gain;
     const now = out.ctx.currentTime;
     g.cancelScheduledValues(now);
     g.setValueAtTime(g.value, now);
-    g.linearRampToValueAtTime(speaker ? SPEAKER_GAIN : EAR_GAIN, now + 0.25);
+    g.linearRampToValueAtTime(EAR_GAIN, now + 0.25);
     v.muted = true; // heard through Web Audio instead
     call.speakerMode = "gain";
+    // iOS may suspend/interrupt the context (mic capture, Siri, a call):
+    // never leave the call silent — fall back to the element at once.
+    out.ctx.onstatechange = () => {
+      if (out.ctx.state !== "running" && call?.speakerMode === "gain") {
+        out.broken = true;
+        applySpeaker();
+      }
+    };
     return;
   }
   disconnectGain();
@@ -761,7 +771,7 @@ function newCallState(fields) {
     remoteCam: false,
     remoteStream: null,
     // Phones hold audio calls to the ear; video calls and desktops use the speaker.
-    speaker: fields.kind === "video" || !window.matchMedia("(hover: none)").matches,
+    speaker: fields.kind === "video" || !window.matchMedia("(hover: none)").matches || isWebKitOnly,
   };
 }
 
