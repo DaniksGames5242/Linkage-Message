@@ -131,6 +131,7 @@ import {
   probeFps,
   setMotionScale,
   pauseBackdrop,
+  shake,
 } from "./ui.js";
 
 const ADMIN_USERNAME = "danik";
@@ -606,7 +607,30 @@ if (configLooksEmpty) {
   });
 }
 
+// Lists kept in my profile (folders, pinned/muted/archived chats, unread marks)
+// change on my other devices too: follow them live.
+let unsubMyLists = null;
+const SYNCED_FIELDS = ["folders", "pinnedChats", "mutedChats", "archivedChats", "unreadMarks", "blocked"];
+function listenMyLists() {
+  unsubMyLists?.();
+  unsubMyLists = listenProfile(currentUser.uid, (data) => {
+    let changed = false;
+    SYNCED_FIELDS.forEach((f) => {
+      if (JSON.stringify(data[f] ?? null) !== JSON.stringify(myProfile[f] ?? null)) {
+        myProfile[f] = data[f];
+        changed = true;
+      }
+    });
+    if (!changed) return;
+    renderCustomFolderTabs();
+    renderChats();
+    refreshChatChrome();
+  });
+}
+
 function cleanupSubscriptions() {
+  unsubMyLists?.();
+  unsubMyLists = null;
   if (unsubChats) unsubChats();
   if (unsubGroups) unsubGroups();
   if (unsubMessages) unsubMessages();
@@ -636,6 +660,8 @@ function enterApp() {
   listenChatsList();
   listenGroupsList();
   listenStoriesList();
+  listenMyLists();
+  renderCustomFolderTabs();
   touchPresence(currentUser.uid);
   presenceInterval = setInterval(() => !document.hidden && touchPresence(currentUser.uid), 25000);
   window.addEventListener("pagehide", () => currentUser && touchPresence(currentUser.uid, false));
@@ -1675,6 +1701,7 @@ function userList(field) {
 const isChatPinned = (id) => userList("pinnedChats").includes(id);
 const isChatMuted = (id) => userList("mutedChats").includes(id);
 const isChatArchived = (id) => userList("archivedChats").includes(id);
+const isMarkedUnread = (id) => userList("unreadMarks").includes(id);
 const isBlocked = (uid) => !!uid && userList("blocked").includes(uid);
 
 async function toggleUserList(field, value, add, { success } = {}) {
@@ -1731,11 +1758,12 @@ const ICON_PIN =
 
 // Builds one chat-list row: avatar, name + flags, last line, time + unread.
 function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false, status = null, birthday = false, mentioned = false }) {
+  const markedUnread = !unread && chatId && chatId !== currentChatId && isMarkedUnread(chatId);
   const item = document.createElement("div");
   item.className =
     "room-item" +
     (chatId === currentChatId ? " active" : "") +
-    (unread > 0 ? " has-unread" : "") +
+    (unread > 0 || markedUnread ? " has-unread" : "") +
     (muted ? " muted" : "") +
     (pinned ? " user-pinned" : "");
   item.dataset.key = key;
@@ -1749,7 +1777,7 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
       <div class="room-time"></div>
       <div class="room-badges">${pinned && !unread ? `<span class="room-flag">${ICON_PIN}</span>` : ""}${
     mentioned ? `<span class="mention-badge" title="Вас упомянули">@</span>` : ""
-  }${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}</div>
+  }${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : markedUnread ? '<span class="unread-badge unread-dot"></span>' : ""}</div>
     </div>
   `;
   item.querySelector(".room-name").textContent = name;
@@ -1780,6 +1808,8 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
 // ---------- Context menus ----------
 
 const MI = {
+  unread: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/><circle cx="19" cy="5" r="3" fill="currentColor"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   music: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
   list: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><polyline points="3.5 6 4.5 7 6.5 5"/><polyline points="3.5 12 4.5 13 6.5 11"/><polyline points="3.5 18 4.5 19 6.5 17"/></svg>',
   lock: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
@@ -2020,11 +2050,17 @@ function attachRoomMenu(item, entry) {
           icon: isChatArchived(entry.id) ? MI.unarchive : MI.archive,
           onClick: () => setArchived(entry.id, !isChatArchived(entry.id), item),
         },
-        unread > 0 && {
-          label: "Отметить прочитанным",
-          icon: MI.check,
-          onClick: () => (entry.kind === "group" ? markGroupRead : markChatRead)(entry.id, currentUser.uid).catch(console.error),
-        },
+        unread > 0 || isMarkedUnread(entry.id)
+          ? {
+              label: "Отметить прочитанным",
+              icon: MI.check,
+              onClick: () => {
+                if (isMarkedUnread(entry.id)) toggleUserList("unreadMarks", entry.id, false);
+                if (unread > 0) (entry.kind === "group" ? markGroupRead : markChatRead)(entry.id, currentUser.uid).catch(console.error);
+              },
+            }
+          : entry.id !== currentChatId && { label: "Пометить как непрочитанное", icon: MI.unread, onClick: () => toggleUserList("unreadMarks", entry.id, true) },
+        customFolders().length > 0 && { label: "Добавить в папку", icon: MI.folder, onClick: () => setTimeout(() => openFolderPicker(entry.id, x, y), 60) },
         {
           label: "Удалить чат",
           icon: MI.trash,
@@ -2140,12 +2176,17 @@ let chatListRendered = false;
 
 // ---------- Chat folders ----------
 
-const FOLDERS = ["all", "personal", "groups", "unread"];
+const BUILTIN_FOLDERS = ["all", "personal", "groups", "unread"];
+// User folders live in the profile (users/{uid}.folders), so every device has them.
+const customFolders = () => (Array.isArray(myProfile?.folders) ? myProfile.folders : []);
+const customFolder = (key) => customFolders().find((f) => "f:" + f.id === key);
+let FOLDERS = [...BUILTIN_FOLDERS];
 const folderTabs = document.getElementById("folder-tabs");
 const folderGlider = folderTabs.querySelector(".folder-glider");
 let chatFolder = "all";
 try {
-  if (FOLDERS.includes(localStorage.getItem("lm-folder"))) chatFolder = localStorage.getItem("lm-folder");
+  const saved = localStorage.getItem("lm-folder");
+  if (BUILTIN_FOLDERS.includes(saved) || saved?.startsWith("f:")) chatFolder = saved;
 } catch (_) {}
 let folderSwitched = false;
 let folderDirection = 1;
@@ -2179,7 +2220,7 @@ function moveFolderGlider(animated = true) {
 
 function updateFolderCounts(countFor) {
   let changed = !folderGlider.style.width;
-  folderTabs.querySelectorAll(".folder-tab").forEach((tab) => {
+  folderTabs.querySelectorAll(".folder-tab[data-folder]").forEach((tab) => {
     const badge = tab.querySelector(".folder-count");
     const n = tab.dataset.folder === "all" ? 0 : countFor(tab.dataset.folder);
     const text = n ? String(n > 99 ? "99+" : n) : "";
@@ -2193,9 +2234,168 @@ function updateFolderCounts(countFor) {
   if (changed) moveFolderGlider(false);
 }
 
+// Custom folder tabs + the "+" tab, rebuilt when the profile's folders change.
+let renderedFoldersKey = null;
+function renderCustomFolderTabs() {
+  const list = customFolders();
+  const key = JSON.stringify(list.map((f) => [f.id, f.name]));
+  if (key === renderedFoldersKey) return;
+  renderedFoldersKey = key;
+  folderTabs.querySelectorAll(".folder-tab.custom, .folder-add").forEach((t) => t.remove());
+  list.forEach((f) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "folder-tab custom";
+    b.setAttribute("role", "tab");
+    b.dataset.folder = "f:" + f.id;
+    b.textContent = f.name;
+    const c = document.createElement("span");
+    c.className = "folder-count";
+    b.appendChild(c);
+    onContextGesture(b, (x, y) =>
+      openContextMenu({
+        x,
+        y,
+        items: [
+          { label: "Изменить папку", icon: MI.edit, onClick: () => openFolderEditor(f) },
+          { label: "Удалить папку", icon: MI.trash, danger: true, onClick: () => deleteFolder(f) },
+        ],
+      })
+    );
+    folderTabs.appendChild(b);
+  });
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "folder-tab folder-add";
+  add.title = "Новая папка";
+  add.textContent = "+";
+  add.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openFolderEditor(null);
+  });
+  folderTabs.appendChild(add);
+  FOLDERS = [...BUILTIN_FOLDERS, ...list.map((f) => "f:" + f.id)];
+  if (!FOLDERS.includes(chatFolder)) chatFolder = "all";
+  moveFolderGlider(false);
+}
+
+async function saveFolders(list) {
+  const before = customFolders();
+  myProfile.folders = list;
+  renderCustomFolderTabs();
+  renderChats();
+  try {
+    await updateProfileFields(currentUser.uid, { folders: list });
+  } catch (err) {
+    console.error(err);
+    myProfile.folders = before;
+    renderCustomFolderTabs();
+    renderChats();
+    toast("Не удалось сохранить папку", { tone: "error" });
+  }
+}
+
+function deleteFolder(f) {
+  if (!confirm(`Удалить папку «${f.name}»? Чаты останутся на месте.`)) return;
+  saveFolders(customFolders().filter((x) => x.id !== f.id));
+}
+
+function openFolderPicker(chatId, x, y) {
+  openContextMenu({
+    x,
+    y,
+    items: customFolders().map((f) => {
+      const inside = (f.chats || []).includes(chatId);
+      return {
+        label: (inside ? "✓ " : "") + f.name,
+        icon: MI.folder,
+        onClick: () =>
+          saveFolders(
+            customFolders().map((x) =>
+              x.id === f.id ? { ...x, chats: inside ? x.chats.filter((c) => c !== chatId) : [...new Set([...(x.chats || []), chatId])] } : x
+            )
+          ),
+      };
+    }),
+  });
+}
+
+function folderCandidates() {
+  const me = currentUser.uid;
+  const out = [];
+  chats
+    .filter((c) => !(c.hiddenFor || []).includes(me))
+    .forEach((c) => {
+      const uid = c.participants.find((p) => p !== me);
+      const contact = contactsMap.get(uid);
+      const profile = contact?.profile || profileCache.get(uid)?.profile;
+      if (profile) out.push({ id: c.id, name: contact ? contactDisplayName(contact.alias, profile) : profile.displayName, avatar: visibleAvatarHTML(profile, uid) });
+    });
+  groups.forEach((g) => out.push({ id: g.id, name: g.name, avatar: groupAvatarHTML(g) }));
+  return out;
+}
+
+function openFolderEditor(folder) {
+  const picked = new Set(folder?.chats || []);
+  const wrap = document.createElement("div");
+  wrap.className = "modal-overlay";
+  wrap.innerHTML = `
+    <div class="modal-card glass">
+      <h3>${folder ? "Изменить папку" : "Новая папка"}</h3>
+      <input class="fe-name" maxlength="24" placeholder="Название папки" />
+      <div class="settings-subhead">Чаты в папке</div>
+      <div class="fe-list"></div>
+      <div class="modal-actions"><button type="button" class="small-btn secondary" data-act="cancel">Отмена</button><button type="button" class="small-btn" data-act="save">Сохранить</button></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add("open"));
+  const nameEl = wrap.querySelector(".fe-name");
+  nameEl.value = folder?.name || "";
+  const list = wrap.querySelector(".fe-list");
+  folderCandidates().forEach((c) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pick-item check-item" + (picked.has(c.id) ? " checked" : "");
+    b.innerHTML = `${c.avatar}<div class="pick-item-meta"><div class="pick-item-name"></div></div><span class="check-box"></span>`;
+    b.querySelector(".pick-item-name").textContent = c.name;
+    b.addEventListener("click", () => {
+      if (picked.has(c.id)) picked.delete(c.id);
+      else picked.add(c.id);
+      b.classList.toggle("checked", picked.has(c.id));
+    });
+    list.appendChild(b);
+  });
+  stagger(list.children, { y: 10, blur: 0, step: 22, delay: 80, spring: "smooth" });
+  const close = () => {
+    wrap.classList.remove("open");
+    setTimeout(() => wrap.remove(), 220);
+  };
+  wrap.querySelector('[data-act="cancel"]').addEventListener("click", close);
+  wrap.addEventListener("click", (e) => e.target === wrap && close());
+  wrap.querySelector('[data-act="save"]').addEventListener("click", () => {
+    const name = nameEl.value.trim();
+    if (!name) {
+      shake(nameEl);
+      nameEl.focus();
+      return;
+    }
+    const entry = { id: folder?.id || Math.random().toString(36).slice(2, 10), name, chats: [...picked] };
+    const listNow = customFolders();
+    saveFolders(folder ? listNow.map((f) => (f.id === folder.id ? entry : f)) : [...listNow, entry]);
+    close();
+    if (!folder) {
+      chatFolder = "f:" + entry.id;
+      folderSwitched = true;
+      requestAnimationFrame(() => moveFolderGlider());
+      renderChats();
+    }
+  });
+  setTimeout(() => nameEl.focus(), 80);
+}
+
 folderTabs.addEventListener("click", (e) => {
   const tab = e.target.closest(".folder-tab");
-  if (!tab || tab.dataset.folder === chatFolder) return;
+  if (!tab || tab.classList.contains("folder-add") || tab.dataset.folder === chatFolder) return;
   folderDirection = FOLDERS.indexOf(tab.dataset.folder) > FOLDERS.indexOf(chatFolder) ? 1 : -1;
   chatFolder = tab.dataset.folder;
   try {
@@ -2236,11 +2436,13 @@ async function renderChats() {
   });
   const me = currentUser.uid;
   const unreadFor = (data) => (data.id === currentChatId && !document.hidden ? 0 : Math.max(0, data.unread?.[me] || 0));
+  const isUnread = (data) => unreadFor(data) > 0 || (isMarkedUnread(data.id) && data.id !== currentChatId);
   const inFolder = (e, folder) =>
     folder === "all" ||
     (folder === "personal" && e.kind === "contact") ||
     (folder === "groups" && e.kind === "group") ||
-    (folder === "unread" && (unreadFor(e.data) > 0 || e.data.id === currentChatId));
+    (folder === "unread" && (isUnread(e.data) || e.data.id === currentChatId)) ||
+    (folder.startsWith("f:") && (customFolder(folder)?.chats || []).includes(e.data.id));
   const archived = combined.filter((e) => isChatArchived(e.data.id));
   const active = combined.filter((e) => !isChatArchived(e.data.id));
   if (showingArchive && !archived.length) {
@@ -2248,7 +2450,7 @@ async function renderChats() {
     folderTabs.classList.remove("hidden");
   }
   const visible = showingArchive ? archived : active.filter((e) => inFolder(e, chatFolder));
-  updateFolderCounts((folder) => active.filter((e) => inFolder(e, folder) && unreadFor(e.data) > 0 && !isChatMuted(e.data.id)).length);
+  updateFolderCounts((folder) => active.filter((e) => inFolder(e, folder) && isUnread(e.data) && !isChatMuted(e.data.id)).length);
   if (chatFolder !== "all" || showingArchive) {
     savedItem.remove();
     notifItem.remove();
@@ -3030,7 +3232,12 @@ function openNotificationsChat() {
 
 // ---------- 1:1 contact chat ----------
 
+function clearUnreadMark(id) {
+  if (isMarkedUnread(id)) toggleUserList("unreadMarks", id, false);
+}
+
 function openContactChat(chatId, otherUid, profile) {
+  clearUnreadMark(chatId);
   resetChatView();
   currentChatId = chatId;
   currentChatType = "contact";
@@ -3136,6 +3343,7 @@ function applyGroupComposerState(group) {
 }
 
 function openGroupChat(group) {
+  clearUnreadMark(group.id);
   resetChatView();
   currentChatId = group.id;
   currentChatType = group.type;

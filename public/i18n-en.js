@@ -3,6 +3,14 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Пометить как непрочитанное": "Mark as unread",
+  "Добавить в папку": "Add to folder",
+  "Изменить папку": "Edit folder",
+  "Удалить папку": "Delete folder",
+  "Новая папка": "New folder",
+  "Название папки": "Folder name",
+  "Чаты в папке": "Chats in folder",
+  "Не удалось сохранить папку": "Couldn't save the folder",
   "Без предпросмотра": "Remove preview",
   "Вас упомянули": "You were mentioned",
   "Сообщения скопированы": "Messages copied",
