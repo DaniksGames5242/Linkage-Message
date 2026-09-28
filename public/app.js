@@ -41,6 +41,11 @@ import {
   listenMyGroups,
   listenGroupMessages,
   sendGroupMessage,
+  updateGroupSettings,
+  setMemberPerms,
+  setGroupAdmin,
+  removeGroupMember,
+  joinGroup,
   editGroupMessage,
   deleteGroupMessage,
   toggleGroupReaction,
@@ -1338,6 +1343,7 @@ function listenGroupsList() {
         });
       } else {
         list.forEach((g) => notifiedAt.set(g.id, g.lastMessageAt?.toMillis?.() || 0));
+        handleJoinLink();
       }
       groupsInitialized = true;
     },
@@ -1661,6 +1667,9 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
 // ---------- Context menus ----------
 
 const MI = {
+  lock: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+  link: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+  user: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
   reply: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>',
   copy: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   forward: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg>',
@@ -2533,6 +2542,7 @@ function onCurrentChatDataChanged() {
     if (fresh) {
       currentGroupRef = fresh;
       chatSub.textContent = pluralMembers((fresh.members || []).length);
+      applyGroupComposerState(fresh);
     }
   }
   renderPinnedBar();
@@ -2836,6 +2846,23 @@ function pluralMembers(n) {
 let groupSenderCache = new Map();
 let currentGroupRef = null;
 
+// What a member may do in a group/channel. Mirrors firestore.rules.
+function groupCan(group, uid, what) {
+  if (!group) return true;
+  if ((group.admins || []).includes(uid)) return true;
+  if (group.type === "channel" && (what === "post" || what === "media" || what === "add")) return false;
+  if (group.perms?.[uid]?.[what] === false) return false;
+  if (what === "post" || what === "media") return group.settings?.whoCanPost !== "admins";
+  if (what === "add") return group.settings?.whoCanAdd !== "admins";
+  return true;
+}
+
+function applyGroupComposerState(group) {
+  const canPost = groupCan(group, currentUser.uid, "post");
+  composer.classList.toggle("hidden", !canPost);
+  return canPost;
+}
+
 function openGroupChat(group) {
   resetChatView();
   currentChatId = group.id;
@@ -2852,8 +2879,7 @@ function openGroupChat(group) {
   chatSub.textContent = pluralMembers((group.members || []).length);
   chatMenuBtn.classList.remove("hidden");
 
-  const canPost = group.type === "group" || (group.admins || []).includes(currentUser.uid);
-  composer.classList.toggle("hidden", !canPost);
+  const canPost = applyGroupComposerState(group);
   refreshChatChrome();
   if (canPost) restoreDraft();
 
@@ -5007,6 +5033,10 @@ function sendFiles(files) {
   if (!list.length || !currentChatId) return;
   if (composer.classList.contains("hidden") || currentChatType === "notifications") {
     toast("В этот чат нельзя отправлять файлы", { tone: "error" });
+    return;
+  }
+  if ((currentChatType === "group" || currentChatType === "channel") && !groupCan(currentGroupRef, currentUser.uid, "media")) {
+    toast("Вам запрещено отправлять медиа в этой группе", { tone: "error" });
     return;
   }
   if (!uploadsConfigured) {
@@ -8026,7 +8056,7 @@ async function renderGroupMembers(group) {
   document.getElementById("profile-view-e2e").classList.add("hidden");
   const me = currentUser.uid;
   const isAdmin = (group.admins || []).includes(me);
-  const canAdd = group.type === "group" || isAdmin;
+  const canAdd = groupCan(group, me, "add");
   profileMembers.classList.remove("hidden");
   profileMembersTitle.textContent = pluralMembers((group.members || []).length);
   profileMembersAdd.classList.toggle("hidden", !canAdd);
@@ -8044,6 +8074,9 @@ async function renderGroupMembers(group) {
     }),
     pvAction("Выйти", MI.leave, leaveCurrentGroup, true)
   );
+  if (isAdmin) profileViewActions.prepend(pvAction("Приватность", MI.lock, () => openGroupPrivacy(group)));
+  else if (group.settings?.isPublic || group.settings?.inviteCode)
+    profileViewActions.prepend(pvAction("Ссылка", MI.link, () => copyInviteLink(group)));
 
   const members = group.members || [];
   const profiles = await Promise.all(members.map((uid) => (uid === me ? myProfile : contactsMap.get(uid)?.profile || loadProfile(uid))));
@@ -8065,10 +8098,193 @@ async function renderGroupMembers(group) {
         badge.textContent = uid === group.ownerId ? "владелец" : "админ";
         b.appendChild(badge);
       }
-      if (uid !== me) b.addEventListener("click", () => openContactProfile(uid, profile));
+      const limited = group.perms?.[uid] && !(group.admins || []).includes(uid);
+      if (limited) b.querySelector(".pick-item-sub").textContent += " · ограничен(а)";
+      if (uid !== me)
+        b.addEventListener("click", (e) => {
+          const canManage = isAdmin && uid !== group.ownerId;
+          if (!canManage) return openContactProfile(uid, profile);
+          openMemberMenu(group, uid, profile, e.clientX, e.clientY);
+        });
       profileMembersList.appendChild(b);
     });
   stagger(profileMembersList.children, { y: 10, step: 25, delay: 60 });
+}
+
+function groupInviteLink(group) {
+  const code = group.settings?.inviteCode;
+  return `${location.origin}${location.pathname}?join=${encodeURIComponent(group.id)}${code ? "&code=" + encodeURIComponent(code) : ""}`;
+}
+
+async function copyInviteLink(group) {
+  const link = groupInviteLink(group);
+  try {
+    if (navigator.share && matchMedia("(pointer: coarse)").matches) await navigator.share({ title: group.name, url: link });
+    else await navigator.clipboard.writeText(link), toast("Ссылка скопирована", { icon: "🔗" });
+  } catch {}
+}
+
+function randomCode() {
+  const a = new Uint8Array(9);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => "abcdefghijkmnpqrstuvwxyz23456789"[b % 32]).join("");
+}
+
+function refreshGroupView(groupId) {
+  const fresh = groups.find((g) => g.id === groupId);
+  if (fresh && currentGroupRef?.id === groupId) renderGroupMembers(fresh);
+}
+
+async function patchGroupSettings(group, patch) {
+  try {
+    await updateGroupSettings(group.id, patch);
+    group.settings = { ...(group.settings || {}), ...patch };
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось сохранить (обновите правила Firestore)", { tone: "error", duration: 5000 });
+  }
+}
+
+function openGroupPrivacy(group) {
+  const s = group.settings || {};
+  const isChannel = group.type === "channel";
+  const wrap = document.createElement("div");
+  wrap.className = "modal-overlay group-privacy";
+  wrap.innerHTML = `
+    <div class="modal-card glass">
+      <h3>Приватность</h3>
+      <div class="settings-subhead">Тип</div>
+      <div class="seg" data-key="isPublic">
+        <button type="button" data-v="false">Частная</button>
+        <button type="button" data-v="true">Публичная</button>
+      </div>
+      <p class="hint" data-hint="isPublic"></p>
+      <div class="settings-subhead">Пригласительная ссылка</div>
+      <div class="invite-row"><input readonly class="invite-link" /><button type="button" class="small-btn" data-act="copy">Копировать</button></div>
+      <button type="button" class="small-btn secondary" data-act="reset">Сбросить ссылку</button>
+      ${isChannel ? "" : `
+      <div class="settings-subhead">Кто может добавлять участников</div>
+      <div class="seg" data-key="whoCanAdd"><button type="button" data-v="all">Все</button><button type="button" data-v="admins">Админы</button></div>
+      <div class="settings-subhead">Кто может писать</div>
+      <div class="seg" data-key="whoCanPost"><button type="button" data-v="all">Все</button><button type="button" data-v="admins">Админы</button></div>`}
+      <button type="button" class="small-btn" data-act="done">Готово</button>
+    </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add("open"));
+  const state = { isPublic: !!s.isPublic, whoCanAdd: s.whoCanAdd || "all", whoCanPost: s.whoCanPost || "all" };
+  const linkEl = wrap.querySelector(".invite-link");
+  const paint = () => {
+    wrap.querySelectorAll(".seg").forEach((seg) => {
+      const v = String(state[seg.dataset.key]);
+      seg.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.v === v));
+    });
+    wrap.querySelector('[data-hint="isPublic"]').textContent = state.isPublic
+      ? "Любой, у кого есть ссылка, может вступить и читать без приглашения."
+      : "Вступить можно только по пригласительной ссылке или если вас добавят.";
+    linkEl.value = groupInviteLink(group);
+  };
+  wrap.querySelectorAll(".seg").forEach((seg) =>
+    seg.addEventListener("click", async (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      const key = seg.dataset.key;
+      const v = key === "isPublic" ? b.dataset.v === "true" : b.dataset.v;
+      state[key] = v;
+      paint();
+      await patchGroupSettings(group, { [key]: v });
+    })
+  );
+  wrap.querySelector('[data-act="copy"]').addEventListener("click", async () => {
+    if (!group.settings?.inviteCode) await patchGroupSettings(group, { inviteCode: randomCode() });
+    paint();
+    copyInviteLink(group);
+  });
+  wrap.querySelector('[data-act="reset"]').addEventListener("click", async () => {
+    await patchGroupSettings(group, { inviteCode: randomCode() });
+    paint();
+    toast("Старая ссылка больше не работает", { icon: "🔗" });
+  });
+  const close = () => {
+    wrap.classList.remove("open");
+    setTimeout(() => wrap.remove(), 220);
+    refreshGroupView(group.id);
+  };
+  wrap.querySelector('[data-act="done"]').addEventListener("click", close);
+  wrap.addEventListener("click", (e) => e.target === wrap && close());
+  paint();
+}
+
+function openMemberMenu(group, uid, profile, x, y) {
+  const isMemberAdmin = (group.admins || []).includes(uid);
+  const p = group.perms?.[uid] || {};
+  const toggle = (what) => async () => {
+    const next = { ...p, [what]: p[what] === false ? true : false };
+    try {
+      await setMemberPerms(group.id, uid, next);
+      group.perms = { ...(group.perms || {}), [uid]: next };
+      refreshGroupView(group.id);
+    } catch (err) {
+      console.error(err);
+      toast("Не удалось изменить права", { tone: "error" });
+    }
+  };
+  const mark = (what) => (p[what] === false ? "✕ " : "✓ ");
+  const items = [
+    { label: "Открыть профиль", icon: MI.user || MI.image, onClick: () => openContactProfile(uid, profile) },
+    {
+      label: isMemberAdmin ? "Снять администратора" : "Назначить администратором",
+      icon: MI.lock,
+      onClick: async () => {
+        try {
+          await setGroupAdmin(group.id, uid, !isMemberAdmin);
+          group.admins = isMemberAdmin ? group.admins.filter((a) => a !== uid) : [...(group.admins || []), uid];
+          refreshGroupView(group.id);
+        } catch (err) {
+          console.error(err);
+          toast("Не удалось изменить", { tone: "error" });
+        }
+      },
+    },
+  ];
+  if (!isMemberAdmin && group.type === "group")
+    items.push(
+      { label: mark("post") + "Может писать", onClick: toggle("post") },
+      { label: mark("media") + "Может отправлять медиа", onClick: toggle("media") },
+      { label: mark("add") + "Может добавлять участников", onClick: toggle("add") }
+    );
+  items.push({
+    label: "Удалить из группы",
+    icon: MI.trash,
+    danger: true,
+    onClick: async () => {
+      try {
+        await removeGroupMember(group.id, uid);
+        group.members = (group.members || []).filter((m) => m !== uid);
+        refreshGroupView(group.id);
+        toast(`${profile.displayName} удалён(а)`);
+      } catch (err) {
+        console.error(err);
+        toast("Не удалось удалить", { tone: "error" });
+      }
+    },
+  });
+  openContextMenu({ x, y, items });
+}
+
+// ?join=<groupId>&code=<code> — invite links
+async function handleJoinLink() {
+  const params = new URLSearchParams(location.search);
+  const gid = params.get("join");
+  if (!gid) return;
+  history.replaceState(null, "", location.pathname);
+  if (groups.some((g) => g.id === gid)) return;
+  try {
+    await joinGroup(gid, currentUser.uid, params.get("code"));
+    toast("Вы вступили в группу", { icon: "🎉" });
+  } catch (err) {
+    console.error(err);
+    toast("Ссылка недействительна или группа закрыта", { tone: "error", duration: 5000 });
+  }
 }
 
 function runMemberAddSearch(raw) {

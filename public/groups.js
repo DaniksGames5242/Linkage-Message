@@ -235,3 +235,32 @@ export async function getGroup(groupId) {
   const snap = await getDoc(doc(db, "groups", groupId));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
+
+// ---------- Privacy & per-member permissions (admins only; enforced in rules) ----------
+
+export async function updateGroupSettings(groupId, patch) {
+  const data = {};
+  for (const [k, v] of Object.entries(patch)) data[`settings.${k}`] = v;
+  await updateDoc(doc(db, "groups", groupId), data);
+}
+
+export async function setMemberPerms(groupId, uid, perms) {
+  const clean = Object.fromEntries(Object.entries(perms || {}).filter(([, v]) => v === false));
+  await updateDoc(doc(db, "groups", groupId), {
+    [`perms.${uid}`]: Object.keys(clean).length ? clean : deleteField(),
+  });
+}
+
+export async function setGroupAdmin(groupId, uid, on) {
+  await updateDoc(doc(db, "groups", groupId), { admins: on ? arrayUnion(uid) : arrayRemove(uid) });
+}
+
+export async function removeGroupMember(groupId, uid) {
+  await updateDoc(doc(db, "groups", groupId), { members: arrayRemove(uid), admins: arrayRemove(uid) });
+}
+
+// Joining from an invite link: allowed by the rules when the group is public
+// or the code matches the group's current invite code.
+export async function joinGroup(groupId, uid, code) {
+  await updateDoc(doc(db, "groups", groupId), { members: arrayUnion(uid), joinCode: code || null });
+}
