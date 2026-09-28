@@ -113,6 +113,9 @@ export function attachPasswordToggle(inputEl, btnEl) {
     const showing = inputEl.type === "text";
     inputEl.type = showing ? "password" : "text";
     btnEl.innerHTML = showing ? EYE_CLOSED : EYE_OPEN;
+    btnEl.classList.remove("blink");
+    void btnEl.offsetWidth; // restart the blink animation
+    btnEl.classList.add("blink");
   });
 }
 

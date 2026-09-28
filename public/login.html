@@ -3,18 +3,35 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0806" />
   <title>Вход — Linkage Message</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&display=swap" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <canvas id="bg-canvas" aria-hidden="true"></canvas>
 
   <div id="screen-auth" class="auth-screen">
     <div class="auth-card" id="auth-card">
-      <div class="auth-logo">
-        <div class="dot"></div>
-        <h1>Linkage Message</h1>
+      <div class="auth-logo stagger-in" style="--i: 0">
+        <svg class="brand-mark draw breathe" viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <linearGradient id="auth-grad" gradientUnits="userSpaceOnUse" x1="8" y1="14" x2="56" y2="50">
+              <stop offset="0" stop-color="#FFE27A" />
+              <stop offset=".45" stop-color="#FFB224" />
+              <stop offset="1" stop-color="#FF5E1A" />
+            </linearGradient>
+          </defs>
+          <circle class="bm-ring bm-a" cx="24" cy="32" r="14" stroke="url(#auth-grad)" />
+          <circle class="bm-ring bm-b" cx="40" cy="32" r="14" stroke="url(#auth-grad)" />
+          <path class="bm-gap" d="M27.62 18.48 A14 14 0 0 1 35.47 23.97" />
+          <path class="bm-ring bm-link" d="M27.62 18.48 A14 14 0 0 1 35.47 23.97" stroke="url(#auth-grad)" />
+        </svg>
+        <h1 class="wordmark">Linkage Message</h1>
       </div>
-      <p class="sub" id="auth-sub">Войдите в свой аккаунт</p>
+      <p class="sub stagger-in" style="--i: 1" id="auth-sub">Войдите в свой аккаунт</p>
 
       <form id="auth-form">
         <!-- Register-only fields -->
@@ -34,13 +51,13 @@
           <input id="nickname-input" type="text" maxlength="40" autocomplete="off" />
         </div>
 
-        <div class="field">
+        <div class="field stagger-in" style="--i: 2">
           <label for="username-input">Имя пользователя</label>
           <input id="username-input" type="text" maxlength="20" autocomplete="username" required />
           <div class="field-hint hidden" id="username-hint"></div>
         </div>
 
-        <div class="field">
+        <div class="field stagger-in" style="--i: 3">
           <label for="password-input">Пароль</label>
           <div class="password-field">
             <input id="password-input" type="password" autocomplete="current-password" required />
@@ -57,15 +74,16 @@
           </div>
         </div>
 
-        <button class="primary" type="submit" id="auth-submit">Войти</button>
+        <button class="primary stagger-in" style="--i: 4" type="submit" id="auth-submit">Войти</button>
         <div class="auth-error" id="auth-error"></div>
       </form>
 
-      <button type="button" class="switch-mode-btn" id="switch-mode-btn">Ещё нет аккаунта? Зарегистрируйтесь</button>
+      <button type="button" class="switch-mode-btn stagger-in" style="--i: 5" id="switch-mode-btn">Ещё нет аккаунта? Зарегистрируйтесь</button>
     </div>
   </div>
 
   <script src="no-zoom.js"></script>
+  <script src="bg.js"></script>
   <script src="firebase-config.js"></script>
   <script type="module" src="login.js"></script>
 </body>

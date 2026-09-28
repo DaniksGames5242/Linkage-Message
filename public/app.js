@@ -59,6 +59,36 @@ import {
   REACTION_EMOJIS,
 } from "./utils.js";
 import { uploadToCloudinary } from "./upload.js";
+import {
+  SPRINGS,
+  animate,
+  stagger,
+  showOverlay,
+  hideOverlay,
+  topOverlay,
+  showPopover,
+  hidePopover,
+  reveal,
+  conceal,
+  swapPanels,
+  morphText,
+  scrambleText,
+  captureRects,
+  playFlip,
+  liquidLens,
+  segmentize,
+  syncSegmented,
+  burst,
+  successPulse,
+  watchMessages,
+  magnetize,
+  tilt,
+  accentWave,
+  accentColors,
+  brandMarkSVG,
+  centerOf,
+  reducedMotion,
+} from "./ui.js";
 
 const ADMIN_USERNAME = "danik";
 const SAVED_ID = "__saved__";
@@ -77,6 +107,8 @@ const searchResultEl = document.getElementById("search-result");
 const fabNewChat = document.getElementById("fab-new-chat");
 
 const chatListEl = document.getElementById("chat-list");
+const chatListIndicator = document.getElementById("chat-list-indicator");
+const splashEl = document.getElementById("splash");
 
 const emptyState = document.getElementById("empty-state");
 const chatHeader = document.getElementById("chat-header");
@@ -90,6 +122,8 @@ const chatMenuClearBtn = document.getElementById("chat-menu-clear-btn");
 const chatMenuDeleteBtn = document.getElementById("chat-menu-delete-btn");
 const messagesEl = document.getElementById("messages");
 const composer = document.getElementById("composer");
+const chatSection = document.getElementById("chat");
+const chatDock = document.getElementById("chat-dock");
 const msgInput = document.getElementById("msg-input");
 const sendBtn = document.getElementById("send-btn");
 const backToListBtn = document.getElementById("back-to-list-btn");
@@ -168,7 +202,9 @@ const settingsCloseBtn = document.getElementById("settings-close-btn");
 const settingsBackBtn = document.getElementById("settings-back-btn");
 const settingsHeaderTitle = document.getElementById("settings-header-title");
 const settingsMenu = document.getElementById("settings-menu");
-const settingsMenuItems = document.querySelectorAll(".settings-menu-item");
+const settingsMenuItems = document.querySelectorAll("#settings-menu .settings-menu-item");
+const settingsPanelEl = settingsOverlay.querySelector(".settings-panel");
+const settingsBodyEl = settingsOverlay.querySelector(".settings-body");
 const sessionsLogoutBtn = document.getElementById("sessions-logout-btn");
 const settingsAvatarPreview = document.getElementById("settings-avatar-preview");
 const settingsAvatarPickBtn = document.getElementById("settings-avatar-pick-btn");
@@ -206,6 +242,7 @@ const chatsSendOnEnter = document.getElementById("chats-send-on-enter");
 const chatsFontSize = document.getElementById("chats-font-size");
 const chatsCompact = document.getElementById("chats-compact");
 const chatsAccentSwatches = document.querySelectorAll(".accent-swatch");
+const chatsPreview = document.getElementById("chats-preview");
 const settingsChatsSave = document.getElementById("settings-chats-save");
 const settingsChatsError = document.getElementById("settings-chats-error");
 
@@ -363,6 +400,7 @@ function enterApp() {
   renderMe();
   applyLanguage(myProfile.language || "ru");
   applyChatPrefs(myProfile.chatPrefs || {});
+  playAppIntro();
   listenContactsList();
   listenChatsList();
   listenGroupsList();
@@ -370,6 +408,53 @@ function enterApp() {
   touchPresence(currentUser.uid);
   presenceInterval = setInterval(() => touchPresence(currentUser.uid), 45000);
   document.addEventListener("visibilitychange", onVisibilityChange);
+}
+
+const isMobileLayout = () => window.matchMedia("(max-width: 720px)").matches;
+
+// The splash's logo swells and dissolves while the app condenses out of the
+// backdrop: sidebar from the left, chat pane from the right, list cascading.
+let introPlayed = false;
+function playAppIntro() {
+  if (introPlayed) return;
+  introPlayed = true;
+  if (splashEl) {
+    const mark = splashEl.querySelector(".brand-mark");
+    if (mark) {
+      mark.animate(
+        [
+          { transform: "none", filter: "blur(0px)" },
+          { transform: "scale(3)", filter: "blur(22px)" },
+        ],
+        { duration: reducedMotion ? 60 : 700, easing: "cubic-bezier(.6,0,.2,1)", fill: "forwards" }
+      );
+    }
+    splashEl
+      .animate([{ opacity: 1 }, { opacity: 0 }], { duration: reducedMotion ? 60 : 520, delay: 120, easing: "ease-in", fill: "forwards" })
+      .finished.then(() => splashEl.remove(), () => splashEl.remove());
+  }
+  animate(
+    sidebar,
+    [
+      { opacity: 0, transform: "translateX(-48px) scale(.95)", filter: "blur(14px)" },
+      { opacity: 1, transform: "none", filter: "blur(0px)" },
+    ],
+    { spring: "smooth", delay: 180 }
+  );
+  if (!isMobileLayout()) {
+    animate(
+      chatSection,
+      [
+        { opacity: 0, transform: "translateX(48px) scale(.97)", filter: "blur(14px)" },
+        { opacity: 1, transform: "none", filter: "blur(0px)" },
+      ],
+      { spring: "smooth", delay: 280 }
+    );
+  }
+  stagger([document.getElementById("sidebar-header"), document.getElementById("search-box")], { y: 14, step: 90, delay: 320 });
+  animate(fabNewChat, [{ transform: "scale(0) rotate(-140deg)" }, { transform: "none" }], { spring: "jelly", delay: 750 });
+  storiesStripEl.classList.add("strip-intro");
+  setTimeout(() => storiesStripEl.classList.remove("strip-intro"), 2200);
 }
 
 function onVisibilityChange() {
@@ -437,7 +522,16 @@ function openContactProfile(uid, profile) {
       : ""
   );
 
-  profileViewOverlay.classList.remove("hidden");
+  showOverlay(profileViewOverlay);
+  staggerProfileView();
+}
+
+function staggerProfileView() {
+  animate(profileViewAvatar, [{ transform: "scale(.3) rotate(-25deg)", opacity: 0 }, { transform: "none", opacity: 1 }], {
+    spring: "jelly",
+    delay: 90,
+  });
+  stagger([profileViewName, profileViewUsername, ...profileViewRows.map((r) => r.row)], { y: 14, step: 55, delay: 160 });
 }
 
 function openGroupInfo(group) {
@@ -449,7 +543,8 @@ function openGroupInfo(group) {
   setProfileViewRow(1, "", "");
   setProfileViewRow(2, "", "");
 
-  profileViewOverlay.classList.remove("hidden");
+  showOverlay(profileViewOverlay);
+  staggerProfileView();
 }
 
 chatHeaderInfoBtn?.addEventListener("click", () => {
@@ -460,9 +555,9 @@ chatHeaderInfoBtn?.addEventListener("click", () => {
   }
 });
 
-profileViewCloseBtn?.addEventListener("click", () => profileViewOverlay.classList.add("hidden"));
+profileViewCloseBtn?.addEventListener("click", () => hideOverlay(profileViewOverlay));
 profileViewOverlay?.addEventListener("click", (e) => {
-  if (e.target === profileViewOverlay) profileViewOverlay.classList.add("hidden");
+  if (e.target === profileViewOverlay) hideOverlay(profileViewOverlay);
 });
 
 // ---------- Avatar click -> settings ----------
@@ -542,25 +637,40 @@ searchInput.addEventListener("input", () => runSearch(searchInput.value));
 // ---------- New chat modal (contact / group / channel) ----------
 
 fabNewChat.addEventListener("click", () => openNewChatMenu());
-newChatCloseBtn.addEventListener("click", () => newChatOverlay.classList.add("hidden"));
+newChatCloseBtn.addEventListener("click", () => hideOverlay(newChatOverlay));
 newChatOverlay.addEventListener("click", (e) => {
-  if (e.target === newChatOverlay) newChatOverlay.classList.add("hidden");
+  if (e.target === newChatOverlay) hideOverlay(newChatOverlay);
 });
 
-function showNewChatStep(step) {
-  [newChatMenu, newChatContactStep, newChatGroupStep].forEach((el) => el.classList.add("hidden"));
-  step.classList.remove("hidden");
+const newChatPanel = newChatOverlay.querySelector(".new-chat-panel");
+
+function showNewChatStep(step, direction = 0) {
+  const steps = [newChatMenu, newChatContactStep, newChatGroupStep];
+  const outgoing = steps.find((el) => !el.classList.contains("hidden"));
+  const mutate = () => {
+    steps.forEach((el) => el.classList.add("hidden"));
+    step.classList.remove("hidden");
+  };
+  if (!direction || outgoing === step) {
+    mutate();
+    return;
+  }
+  swapPanels({ container: newChatPanel, clip: newChatPanel, outgoing, incoming: step, direction, mutate });
 }
 
 function openNewChatMenu() {
   newChatUsernameInput.value = "";
   newChatContactResult.innerHTML = "";
   showNewChatStep(newChatMenu);
-  newChatOverlay.classList.remove("hidden");
+  showOverlay(newChatOverlay);
+  stagger(newChatMenu.children, { y: 16, step: 45, delay: 110 });
 }
 
-newChatContactBtn.addEventListener("click", () => showNewChatStep(newChatContactStep));
-newChatContactBackBtn.addEventListener("click", () => showNewChatStep(newChatMenu));
+newChatContactBtn.addEventListener("click", () => {
+  showNewChatStep(newChatContactStep, 1);
+  setTimeout(() => newChatUsernameInput.focus(), 250);
+});
+newChatContactBackBtn.addEventListener("click", () => showNewChatStep(newChatMenu, -1));
 
 const runNewChatContactSearch = debounce(async (raw) => {
   const q = raw.trim();
@@ -644,7 +754,7 @@ const runNewChatContactSearch = debounce(async (raw) => {
       try {
         await addContact(currentUser.uid, uid, isContact);
         await setContactAlias(currentUser.uid, uid, name);
-        newChatOverlay.classList.add("hidden");
+        hideOverlay(newChatOverlay);
       } catch (err) {
         console.error(err);
         nameErrorEl.textContent = err.message || "Не удалось добавить контакт";
@@ -664,7 +774,7 @@ const runNewChatContactSearch = debounce(async (raw) => {
       if (!isContact) await setContactAlias(currentUser.uid, uid, name);
       const chatId = await ensureChat(currentUser.uid, uid);
       openContactChat(chatId, uid, profile);
-      newChatOverlay.classList.add("hidden");
+      hideOverlay(newChatOverlay);
     } catch (err) {
       console.error(err);
       nameErrorEl.textContent = err.message || "Не удалось открыть чат";
@@ -679,8 +789,7 @@ newChatUsernameInput.addEventListener("input", () => runNewChatContactSearch(new
 // ---------- New chat modal: group / channel creation ----------
 
 function renderGroupAvatarPreview() {
-  const color = "#5b8cff";
-  newChatGroupAvatarPreview.style.background = color;
+  newChatGroupAvatarPreview.style.background = "linear-gradient(135deg, #ffd84a, #ffa41b 50%, #ff6a1a)";
   if (pendingGroupAvatarImage) {
     newChatGroupAvatarPreview.innerHTML = `<img src="${pendingGroupAvatarImage}" alt="" />`;
   } else {
@@ -715,12 +824,12 @@ function openNewChatGroupStep(type) {
   newChatGroupError.textContent = "";
   renderGroupAvatarPreview();
   renderGroupMemberChips();
-  showNewChatStep(newChatGroupStep);
+  showNewChatStep(newChatGroupStep, 1);
 }
 
 newChatGroupOpenBtn.addEventListener("click", () => openNewChatGroupStep("group"));
 newChatChannelOpenBtn.addEventListener("click", () => openNewChatGroupStep("channel"));
-newChatGroupBackBtn.addEventListener("click", () => showNewChatStep(newChatMenu));
+newChatGroupBackBtn.addEventListener("click", () => showNewChatStep(newChatMenu, -1));
 
 newChatGroupAvatarPickBtn.addEventListener("click", () => newChatGroupAvatarInput.click());
 
@@ -814,7 +923,7 @@ newChatGroupCreateBtn.addEventListener("click", async () => {
       lastMessage: "",
       lastMessageSenderId: null,
     };
-    newChatOverlay.classList.add("hidden");
+    hideOverlay(newChatOverlay);
     openGroupChat(newGroup);
   } catch (err) {
     console.error(err);
@@ -927,11 +1036,12 @@ function renderStoriesStrip() {
       return tb - ta;
     });
 
-  otherEntries.forEach(async ([uid, list]) => {
+  otherEntries.forEach(async ([uid, list], index) => {
     const profile = contactsMap.get(uid)?.profile || (await getProfile(uid));
     if (!profile) return;
     const bubble = document.createElement("div");
     bubble.className = "story-bubble";
+    bubble.style.setProperty("--i", index + 1);
     bubble.innerHTML = `
       <div class="story-ring">${visibleAvatarHTML(profile, uid)}</div>
       <div class="story-bubble-label"></div>
@@ -963,7 +1073,7 @@ function openStoryViewer(ownerUid, profile, items) {
   storyDeleteBtn.classList.toggle("hidden", ownerUid !== currentUser.uid);
   buildStoryProgress();
   showStoryAt(0);
-  storyViewerOverlay.classList.remove("hidden");
+  showOverlay(storyViewerOverlay);
 }
 
 function buildStoryProgress() {
@@ -985,6 +1095,9 @@ function showStoryAt(index) {
   activeStoryIndex = index;
   const story = activeStoryGroup.items[index];
   storyViewerImage.src = story.image;
+  storyViewerImage.classList.remove("kenburns");
+  void storyViewerImage.offsetWidth; // restart the slow zoom for every story
+  storyViewerImage.classList.add("kenburns");
   storyViewerTime.textContent = fmtRelative(story.createdAt);
 
   const bars = storyProgressTrack.querySelectorAll(".story-progress-bar");
@@ -1012,7 +1125,7 @@ function showStoryAt(index) {
 
 function closeStoryViewer() {
   clearTimeout(storyAdvanceTimer);
-  storyViewerOverlay.classList.add("hidden");
+  hideOverlay(storyViewerOverlay);
   activeStoryGroup = null;
 }
 
@@ -1043,6 +1156,7 @@ storyDeleteBtn.addEventListener("click", async () => {
 function pinnedItemHTML(id, iconSvg, title, subtitle) {
   const item = document.createElement("div");
   item.className = "room-item pinned-item" + (id === currentChatId ? " active" : "");
+  item.dataset.key = id;
   item.innerHTML = `
     <div class="avatar pinned-avatar">${iconSvg}</div>
     <div class="room-meta">
@@ -1069,18 +1183,25 @@ function groupAvatarHTML(group) {
   return `<div class="avatar" style="background:${color}">${icon}</div>`;
 }
 
+// Builds the list off-screen, then swaps it in one go (so overlapping async
+// renders can't interleave) and FLIP-animates rows to their new positions.
+let renderChatsToken = 0;
+let chatListRendered = false;
+
 async function renderChats() {
-  chatListEl.innerHTML = "";
+
+  const token = ++renderChatsToken;
+  const frag = document.createDocumentFragment();
 
   const savedItem = pinnedItemHTML(SAVED_ID, SAVED_ICON, "Избранное", "Ваши заметки");
-  savedItem.querySelector(".pinned-avatar").style.background = "#5b8cff";
+  savedItem.querySelector(".pinned-avatar").classList.add("pa-saved");
   savedItem.addEventListener("click", openSavedChat);
-  chatListEl.appendChild(savedItem);
+  frag.appendChild(savedItem);
 
   const notifItem = pinnedItemHTML(NOTIFICATIONS_ID, BELL_ICON, "Linkage Notifications", "Обновления и уведомления о входе");
-  notifItem.querySelector(".pinned-avatar").style.background = "#8b5cf6";
+  notifItem.querySelector(".pinned-avatar").classList.add("pa-notif");
   notifItem.addEventListener("click", openNotificationsChat);
-  chatListEl.appendChild(notifItem);
+  frag.appendChild(notifItem);
 
   const combined = [
     ...chats.filter((c) => !(c.hiddenFor || []).includes(currentUser.uid)).map((data) => ({ kind: "contact", data })),
@@ -1096,6 +1217,7 @@ async function renderChats() {
       const group = entry.data;
       const item = document.createElement("div");
       item.className = "room-item" + (group.id === currentChatId ? " active" : "");
+      item.dataset.key = "g:" + group.id;
       item.innerHTML = `
         ${groupAvatarHTML(group)}
         <div class="room-meta">
@@ -1111,7 +1233,7 @@ async function renderChats() {
         ? "Канал"
         : "Группа";
       item.addEventListener("click", () => openGroupChat(group));
-      chatListEl.appendChild(item);
+      frag.appendChild(item);
       continue;
     }
 
@@ -1125,6 +1247,7 @@ async function renderChats() {
 
     const item = document.createElement("div");
     item.className = "room-item" + (chat.id === currentChatId ? " active" : "");
+    item.dataset.key = "c:" + chat.id;
     item.innerHTML = `
       ${visibleAvatarHTML(profile, otherUid)}
       <div class="room-meta">
@@ -1136,8 +1259,49 @@ async function renderChats() {
     const lastPrefix = chat.lastMessageSenderId === currentUser.uid ? "Вы: " : "";
     item.querySelector(".room-last").textContent = chat.lastMessage ? lastPrefix + chat.lastMessage : "Нет сообщений";
     item.addEventListener("click", () => openContactChat(chat.id, otherUid, profile));
-    chatListEl.appendChild(item);
+    frag.appendChild(item);
   }
+
+  if (token !== renderChatsToken) return; // a newer render superseded this one
+  const prevRects = captureRects(chatListEl);
+  chatListEl.replaceChildren(frag);
+  if (!chatListRendered) {
+    chatListRendered = true;
+    stagger(chatListEl.children, { x: -28, y: 0, blur: 8, step: 38, delay: 420 });
+  } else {
+    playFlip(chatListEl, prevRects);
+  }
+  moveChatIndicator();
+}
+
+// Glides the selection pill to the active chat, stretching like a droplet
+// on the way.
+let indicatorY = null;
+function moveChatIndicator() {
+  const active = chatListEl.querySelector(".room-item.active");
+  if (!active) {
+    chatListIndicator.classList.remove("visible");
+    indicatorY = null;
+    return;
+  }
+  const y = chatListEl.offsetTop + active.offsetTop;
+  chatListIndicator.style.height = active.offsetHeight + "px";
+  chatListIndicator.style.transform = `translateY(${y}px)`;
+  if (indicatorY === null) {
+    animate(chatListIndicator, [{ scale: "0.85", opacity: 0 }, { scale: "1", opacity: 1 }], { spring: "bouncy" });
+  } else if (Math.abs(indicatorY - y) > 1 && !reducedMotion) {
+    const stretch = Math.min(1 + Math.abs(y - indicatorY) / 380, 1.7);
+    chatListIndicator.animate(
+      [
+        { transform: `translateY(${indicatorY}px)`, scale: "1 1" },
+        { scale: `0.93 ${stretch}`, offset: 0.3 },
+        { transform: `translateY(${y}px)`, scale: "1 1" },
+      ],
+      SPRINGS.bouncy
+    );
+  }
+  indicatorY = y;
+  chatListIndicator.classList.add("visible");
 }
 
 // ---------- Shared chat-view plumbing ----------
@@ -1149,11 +1313,14 @@ function resetChatView() {
   clearTimeout(typingClearTimer);
   stopVoiceRecording(true);
 
+  const comingFromEmpty = !emptyState.classList.contains("hidden");
   emptyState.classList.add("hidden");
   chatHeader.classList.remove("hidden");
   messagesEl.classList.remove("hidden");
   composer.classList.remove("hidden");
   sidebar.classList.add("chat-open");
+  msgAnim.chatId = null; // next snapshot is this chat's first render
+  playChatEnter(comingFromEmpty);
   chatSub.textContent = "";
   chatSub.classList.remove("typing");
   editContactBtn.classList.add("hidden");
@@ -1169,14 +1336,148 @@ function resetChatView() {
   updateComposerButtons();
 }
 
+// The header and dock float in; when switching between chats only the
+// header's contents slide, so the glass itself feels continuous.
+function playChatEnter(fromEmpty) {
+  if (fromEmpty) {
+    animate(
+      chatHeader,
+      [
+        { opacity: 0, transform: "translateY(-22px) scale(.96)", filter: "blur(10px)" },
+        { opacity: 1, transform: "none", filter: "blur(0px)" },
+      ],
+      { spring: "smooth" }
+    );
+    animate(
+      chatDock,
+      [
+        { opacity: 0, transform: "translateY(30px) scale(.96)" },
+        { opacity: 1, transform: "none" },
+      ],
+      { spring: "smooth", delay: 70 }
+    );
+  } else {
+    animate(
+      chatHeaderInfoBtn,
+      [
+        { opacity: 0, transform: "translateX(-16px)", filter: "blur(8px)" },
+        { opacity: 1, transform: "none", filter: "blur(0px)" },
+      ],
+      { spring: "smooth" }
+    );
+  }
+  animate(chatHeaderAvatar, [{ transform: "scale(.4) rotate(-25deg)" }, { transform: "none" }], { spring: "jelly", delay: 60 });
+}
+
+// ---------- Message list animation bookkeeping ----------
+// Snapshots re-render the whole list, so we remember which message ids were
+// already on screen: the first render of a chat cascades in, afterwards only
+// genuinely new messages (and changed reactions) animate.
+
+const msgAnim = { chatId: null, seen: new Set(), reactions: new Map() };
+
+function snapshotScroll() {
+  const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 160;
+  return { top: messagesEl.scrollTop, nearBottom };
+}
+
+function finishMessagesRender(snap) {
+  const rows = Array.from(messagesEl.querySelectorAll(".msg-row"));
+
+  if (msgAnim.chatId !== currentChatId) {
+    msgAnim.chatId = currentChatId;
+    msgAnim.seen = new Set(rows.map((r) => r.dataset.msgId));
+    msgAnim.reactions = new Map(rows.map((r) => [r.dataset.msgId, r.dataset.rx]));
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    rows
+      .slice(-14)
+      .reverse()
+      .forEach((row, i) => {
+        animate(
+          row.querySelector(".msg-group"),
+          [
+            { opacity: 0, transform: "translateY(34px) scale(.9)", filter: "blur(8px)" },
+            { opacity: 1, transform: "none", filter: "blur(0px)" },
+          ],
+          { spring: "bouncy", delay: 40 + i * 32 }
+        );
+      });
+    return;
+  }
+
+  const fresh = rows.filter((r) => !msgAnim.seen.has(r.dataset.msgId));
+  fresh.forEach((r) => msgAnim.seen.add(r.dataset.msgId));
+
+  rows.forEach((row) => {
+    const prev = msgAnim.reactions.get(row.dataset.msgId);
+    if (prev !== undefined && prev !== row.dataset.rx) popChangedReactions(row, prev);
+    msgAnim.reactions.set(row.dataset.msgId, row.dataset.rx);
+  });
+
+  messagesEl.scrollTop = snap.top;
+  if (snap.nearBottom || fresh.some((r) => r.classList.contains("me"))) {
+    messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+  }
+
+  const [glow] = accentColors(0.55);
+  fresh.forEach((row, i) => {
+    const group = row.querySelector(".msg-group");
+    if (row.classList.contains("me")) {
+      // Launches up out of the composer.
+      animate(
+        group,
+        [
+          { opacity: 0, transform: "translateY(70px) scale(.6)", filter: "blur(10px)" },
+          { opacity: 1, transform: "none", filter: "blur(0px)" },
+        ],
+        { spring: "bouncy", delay: i * 45 }
+      );
+    } else {
+      // Inflates out of its tail corner with a ripple of light.
+      animate(
+        group,
+        [
+          { opacity: 0, transform: "scale(.35) rotate(-8deg)", filter: "blur(12px)" },
+          { opacity: 1, transform: "none", filter: "blur(0px)" },
+        ],
+        { spring: "jelly", delay: i * 45 }
+      );
+      const bubble = row.querySelector(".bubble");
+      bubble?.animate([{ boxShadow: `0 0 0 0 ${glow}` }, { boxShadow: "0 0 0 16px rgba(0,0,0,0)" }], {
+        duration: 1000,
+        delay: 120 + i * 45,
+        easing: "cubic-bezier(.2,.7,.2,1)",
+      });
+    }
+  });
+}
+
+function popChangedReactions(row, prevJson) {
+  let prev = {};
+  let now = {};
+  try {
+    prev = JSON.parse(prevJson || "{}");
+    now = JSON.parse(row.dataset.rx || "{}");
+  } catch (_) {
+    return;
+  }
+  row.querySelectorAll(".reaction-pill").forEach((pill) => {
+    const e = pill.dataset.emoji;
+    if ((prev[e] || []).length !== (now[e] || []).length) pill.classList.add("pop");
+  });
+}
+
 function renderPlainMessages(msgs, isMineFn) {
+  const snap = snapshotScroll();
   messagesEl.innerHTML = "";
   if (msgs.length === 0) {
     messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
+    msgAnim.chatId = currentChatId;
+    msgAnim.seen = new Set();
     return;
   }
   msgs.forEach((msg) => renderMessage(msg, isMineFn(msg)));
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  finishMessagesRender(snap);
 }
 
 // ---------- Избранное (Saved) ----------
@@ -1188,7 +1489,7 @@ function openSavedChat() {
   currentOtherUid = null;
   currentOtherProfile = null;
 
-  chatHeaderAvatar.innerHTML = `<div class="avatar pinned-avatar" style="background:#5b8cff">${SAVED_ICON}</div>`;
+  chatHeaderAvatar.innerHTML = `<div class="avatar pinned-avatar pa-saved">${SAVED_ICON}</div>`;
   chatTitle.textContent = "Избранное";
   chatSub.textContent = "Заметки, которые видите только вы";
 
@@ -1206,7 +1507,7 @@ function openNotificationsChat() {
   currentOtherUid = null;
   currentOtherProfile = null;
 
-  chatHeaderAvatar.innerHTML = `<div class="avatar pinned-avatar" style="background:#8b5cf6">${BELL_ICON}</div>`;
+  chatHeaderAvatar.innerHTML = `<div class="avatar pinned-avatar pa-notif">${BELL_ICON}</div>`;
   chatTitle.textContent = "Linkage Notifications";
   chatSub.textContent = myProfile.username === ADMIN_USERNAME ? "Только вы можете писать сюда всем" : "Официальный канал уведомлений";
 
@@ -1291,25 +1592,33 @@ function openGroupChat(group) {
   });
 }
 
+let groupRenderToken = 0;
+
 async function renderGroupMessagesList(msgs) {
+  const token = ++groupRenderToken;
+  const chatId = currentChatId;
+  // Resolve sender names first so the DOM swap below is synchronous.
+  for (const msg of msgs) {
+    if (msg.senderId === currentUser.uid || groupSenderCache.has(msg.senderId)) continue;
+    const p = contactsMap.get(msg.senderId)?.profile || (await getProfile(msg.senderId));
+    groupSenderCache.set(msg.senderId, p);
+  }
+  if (token !== groupRenderToken || chatId !== currentChatId) return;
+
+  const snap = snapshotScroll();
   messagesEl.innerHTML = "";
   if (msgs.length === 0) {
     messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
+    msgAnim.chatId = currentChatId;
+    msgAnim.seen = new Set();
     return;
   }
   for (const msg of msgs) {
     const isMine = msg.senderId === currentUser.uid;
-    let senderName = null;
-    if (!isMine) {
-      if (!groupSenderCache.has(msg.senderId)) {
-        const p = contactsMap.get(msg.senderId)?.profile || (await getProfile(msg.senderId));
-        groupSenderCache.set(msg.senderId, p);
-      }
-      senderName = groupSenderCache.get(msg.senderId)?.displayName || "—";
-    }
+    const senderName = isMine ? null : groupSenderCache.get(msg.senderId)?.displayName || "—";
     renderMessage(msg, isMine, senderName);
   }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  finishMessagesRender(snap);
 }
 
 function rerenderMessages() {
@@ -1350,6 +1659,7 @@ function updateChatSub(profile, chatData) {
 
 backToListBtn.addEventListener("click", () => {
   sidebar.classList.remove("chat-open");
+  hidePopover(chatMenuDropdown);
 });
 
 // Returns {edit, del, react} functions bound to the currently open chat, or
@@ -1405,13 +1715,24 @@ function startReply(msg) {
   replyToMessage = msg;
   replyPreviewSenderEl.textContent = replySenderLabel(msg);
   replyPreviewTextEl.textContent = replyPreviewText(msg).slice(0, 120);
-  replyPreviewEl.classList.remove("hidden");
+  if (replyPreviewEl.classList.contains("hidden") || replyPreviewEl.classList.contains("is-closing")) {
+    reveal(replyPreviewEl);
+  } else {
+    animate(
+      replyPreviewEl.querySelector(".reply-preview-body"),
+      [
+        { opacity: 0, transform: "translateY(8px)", filter: "blur(6px)" },
+        { opacity: 1, transform: "none", filter: "blur(0px)" },
+      ],
+      { spring: "smooth" }
+    );
+  }
   msgInput.focus();
 }
 
 function cancelReply() {
   replyToMessage = null;
-  replyPreviewEl?.classList.add("hidden");
+  conceal(replyPreviewEl);
 }
 
 replyCancelBtn?.addEventListener("click", cancelReply);
@@ -1493,8 +1814,12 @@ function buildReactionsBar(msg, reactFn) {
     const pill = document.createElement("button");
     pill.type = "button";
     pill.className = "reaction-pill" + (mine ? " mine" : "");
+    pill.dataset.emoji = emoji;
     pill.textContent = `${emoji} ${uids.length}`;
-    pill.addEventListener("click", () => reactFn(msg.id, emoji, !mine));
+    pill.addEventListener("click", (e) => {
+      if (!mine) burst(e.clientX, e.clientY, { content: emoji, count: 6, spread: 46 });
+      reactFn(msg.id, emoji, !mine);
+    });
     bar.appendChild(pill);
   });
   const addBtn = document.createElement("button");
@@ -1510,8 +1835,8 @@ function buildReactionsBar(msg, reactFn) {
 }
 
 function toggleReactionPicker(anchorBtn, msg, reactFn) {
-  const existing = document.querySelector(".react-picker");
-  if (existing) existing.remove();
+  const existing = document.querySelector(".react-picker:not([data-closing])");
+  if (existing) closeReactionPicker(existing);
   if (existing?.dataset.msgId === msg.id) return;
 
   const picker = document.createElement("div");
@@ -1523,23 +1848,51 @@ function toggleReactionPicker(anchorBtn, msg, reactFn) {
     btn.textContent = emoji;
     btn.addEventListener("click", () => {
       const mine = (msg.reactions?.[emoji] || []).includes(currentUser.uid);
+      if (!mine) burst(...centerOf(btn), { content: emoji, count: 8, spread: 60 });
       reactFn(msg.id, emoji, !mine);
-      picker.remove();
+      closeReactionPicker(picker);
     });
     picker.appendChild(btn);
   });
   document.body.appendChild(picker);
   const rect = anchorBtn.getBoundingClientRect();
-  picker.style.left = Math.max(4, rect.left) + "px";
-  picker.style.top = Math.max(4, rect.top - 42) + "px";
+  const maxLeft = window.innerWidth - picker.offsetWidth - 8;
+  picker.style.left = Math.max(8, Math.min(rect.left, maxLeft)) + "px";
+  picker.style.top = Math.max(8, rect.top - picker.offsetHeight - 8) + "px";
+  picker.style.transformOrigin = `${rect.left + rect.width / 2 - parseFloat(picker.style.left)}px 100%`;
+  animate(
+    picker,
+    [
+      { opacity: 0, transform: "translateY(12px) scale(.4)", filter: "blur(8px)" },
+      { opacity: 1, transform: "none", filter: "blur(0px)" },
+    ],
+    { spring: "bouncy" }
+  );
+  stagger(picker.children, { y: 14, blur: 0, scale: 0.2, step: 30, delay: 40, spring: "jelly" });
   setTimeout(() => {
     document.addEventListener("click", function closePicker(ev) {
-      if (!picker.contains(ev.target)) {
-        picker.remove();
+      if (!picker.isConnected) {
+        document.removeEventListener("click", closePicker);
+      } else if (!picker.contains(ev.target)) {
+        closeReactionPicker(picker);
         document.removeEventListener("click", closePicker);
       }
     });
   }, 0);
+}
+
+function closeReactionPicker(picker) {
+  if (!picker.isConnected || picker.dataset.closing) return;
+  picker.dataset.closing = "1";
+  picker
+    .animate(
+      [
+        { opacity: 1, transform: "none", filter: "blur(0px)" },
+        { opacity: 0, transform: "translateY(8px) scale(.6)", filter: "blur(6px)" },
+      ],
+      { duration: reducedMotion ? 60 : 180, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" }
+    )
+    .finished.then(() => picker.remove(), () => picker.remove());
 }
 
 function startEditingMessage(row, msg, editFn) {
@@ -1570,6 +1923,8 @@ function startEditingMessage(row, msg, editFn) {
   });
 }
 
+const touchOnly = window.matchMedia("(hover: none)").matches;
+
 function renderMessage(msg, isMine, senderName) {
   const ops = messageOps();
   const canEdit = isMine && !!ops.edit;
@@ -1580,6 +1935,7 @@ function renderMessage(msg, isMine, senderName) {
   const row = document.createElement("div");
   row.className = "msg-row" + (isMine ? " me" : "");
   row.dataset.msgId = msg.id;
+  row.dataset.rx = JSON.stringify(msg.reactions || {});
 
   const actionsHTML =
     canReply || canEdit || canDelete
@@ -1622,6 +1978,14 @@ function renderMessage(msg, isMine, senderName) {
   if (canReact) {
     row.querySelector(".msg-group").appendChild(buildReactionsBar(msg, ops.react));
   }
+  if (touchOnly && (canReact || canReply || canEdit || canDelete)) {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("button, a, img, audio, video, textarea")) return;
+      const opening = !row.classList.contains("actions-open");
+      messagesEl.querySelectorAll(".msg-row.actions-open").forEach((r) => r.classList.remove("actions-open"));
+      row.classList.toggle("actions-open", opening);
+    });
+  }
   if (canReply) {
     row.querySelector(".msg-reply-btn").addEventListener("click", () => startReply(msg));
   }
@@ -1631,16 +1995,43 @@ function renderMessage(msg, isMine, senderName) {
   if (canDelete) {
     row.querySelector(".msg-delete-btn").addEventListener("click", async () => {
       if (!confirm("Удалить сообщение?")) return;
+      await dissolveRow(row);
       try {
         await ops.del(msg.id);
       } catch (err) {
         console.error(err);
+        row.getAnimations({ subtree: true }).forEach((a) => a.cancel());
+        row.style.overflow = "";
         alert(err.message || "Не удалось удалить");
       }
     });
   }
 
   messagesEl.appendChild(row);
+}
+
+// The bubble shatters into sparks and the gap it leaves closes up.
+function dissolveRow(row) {
+  if (reducedMotion) return Promise.resolve();
+  const group = row.querySelector(".msg-group");
+  const [x, y] = centerOf(group);
+  burst(x, y, { count: 14, spread: 80, colors: [...accentColors(), "#fff3c4"] });
+  group.animate(
+    [
+      { opacity: 1, transform: "none", filter: "blur(0px)" },
+      { opacity: 0, transform: "scale(.55) translateY(-12px)", filter: "blur(16px)" },
+    ],
+    { duration: 380, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" }
+  );
+  row.style.overflow = "hidden";
+  const collapse = row.animate(
+    [
+      { height: row.offsetHeight + "px", marginBottom: getComputedStyle(row).marginBottom },
+      { height: "0px", marginBottom: "0px" },
+    ],
+    { duration: 300, delay: 220, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" }
+  );
+  return collapse.finished.catch(() => {});
 }
 
 composer.addEventListener("submit", async (e) => {
@@ -1684,7 +2075,19 @@ async function doSendMessage(attachment) {
     : null;
   msgInput.value = "";
   msgInput.style.height = "auto";
-  updateComposerButtons();
+  if (text && !attachment && !reducedMotion && !sendBtn.classList.contains("hidden")) {
+    // Let the arrow fly off before the send button morphs back into the mic.
+    sendBtn.classList.remove("launch");
+    void sendBtn.offsetWidth;
+    sendBtn.classList.add("launch");
+    burst(...centerOf(sendBtn), { count: 8, spread: 42, colors: [...accentColors(), "#fff3c4"] });
+    setTimeout(() => {
+      sendBtn.classList.remove("launch");
+      updateComposerButtons();
+    }, 420);
+  } else {
+    updateComposerButtons();
+  }
   sendBtn.disabled = true;
   clearTimeout(typingClearTimer);
   closeEmojiPicker();
@@ -1720,18 +2123,29 @@ function openEmojiPicker() {
       msgInput.value += emoji;
       msgInput.dispatchEvent(new Event("input"));
       msgInput.focus();
+      animate(btn, [{ transform: "scale(1.6) rotate(-12deg)" }, { transform: "none" }], { spring: "jelly" });
     });
     emojiPicker.appendChild(btn);
   });
-  emojiPicker.classList.remove("hidden");
+  reveal(emojiPicker);
+  // Emojis ripple in diagonally from the corner nearest the button.
+  const cols = getComputedStyle(emojiPicker).gridTemplateColumns.split(" ").length || 8;
+  Array.from(emojiPicker.children).forEach((btn, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    animate(btn, [{ opacity: 0, transform: "scale(.2) translateY(14px)" }, { opacity: 1, transform: "none" }], {
+      spring: "jelly",
+      delay: 40 + (col + row) * 16,
+    });
+  });
 }
 
 function closeEmojiPicker() {
-  emojiPicker.classList.add("hidden");
+  conceal(emojiPicker);
 }
 
 emojiBtn.addEventListener("click", () => {
-  if (emojiPicker.classList.contains("hidden")) openEmojiPicker();
+  if (emojiPicker.classList.contains("hidden") || emojiPicker.classList.contains("is-closing")) openEmojiPicker();
   else closeEmojiPicker();
 });
 
@@ -1852,12 +2266,12 @@ editContactBtn.addEventListener("click", () => {
   const contact = contactsMap.get(currentOtherUid);
   aliasFirstname.value = contact?.alias?.firstName || "";
   aliasLastname.value = contact?.alias?.lastName || "";
-  aliasOverlay.classList.remove("hidden");
+  showOverlay(aliasOverlay);
 });
 
-aliasCancelBtn.addEventListener("click", () => aliasOverlay.classList.add("hidden"));
+aliasCancelBtn.addEventListener("click", () => hideOverlay(aliasOverlay));
 aliasOverlay.addEventListener("click", (e) => {
-  if (e.target === aliasOverlay) aliasOverlay.classList.add("hidden");
+  if (e.target === aliasOverlay) hideOverlay(aliasOverlay);
 });
 
 aliasSaveBtn.addEventListener("click", async () => {
@@ -1866,7 +2280,7 @@ aliasSaveBtn.addEventListener("click", async () => {
     firstName: aliasFirstname.value,
     lastName: aliasLastname.value,
   });
-  aliasOverlay.classList.add("hidden");
+  hideOverlay(aliasOverlay);
   const contact = contactsMap.get(currentOtherUid);
   if (contact) {
     chatTitle.textContent = contactDisplayName(
@@ -1880,26 +2294,42 @@ aliasSaveBtn.addEventListener("click", async () => {
 
 chatMenuBtn.addEventListener("click", (e) => {
   e.stopPropagation();
-  chatMenuDropdown.classList.toggle("hidden");
+  if (chatMenuDropdown.classList.contains("hidden") || chatMenuDropdown.classList.contains("is-closing")) {
+    showPopover(chatMenuDropdown, { originX: "right" });
+  } else {
+    hidePopover(chatMenuDropdown);
+  }
 });
 
 document.addEventListener("click", (e) => {
-  if (!chatMenuDropdown.classList.contains("hidden") && !chatMenuDropdown.contains(e.target) && e.target !== chatMenuBtn) {
-    chatMenuDropdown.classList.add("hidden");
+  if (!chatMenuDropdown.classList.contains("hidden") && !chatMenuDropdown.contains(e.target) && !chatMenuBtn.contains(e.target)) {
+    hidePopover(chatMenuDropdown);
   }
 });
 
 chatMenuClearBtn.addEventListener("click", async () => {
-  chatMenuDropdown.classList.add("hidden");
+  hidePopover(chatMenuDropdown);
   if (!confirm("Очистить историю сообщений? Это уберёт их только из вашей ленты.")) return;
   if (currentChatType === "contact") await clearChatForMe(currentChatId, currentUser.uid);
   else if (currentChatType === "group" || currentChatType === "channel") await clearGroupForMe(currentChatId, currentUser.uid);
+  // Sweep the visible bubbles away before the list empties.
+  const rows = Array.from(messagesEl.querySelectorAll(".msg-row")).slice(-20).reverse();
+  rows.forEach((row, i) => {
+    row.querySelector(".msg-group")?.animate(
+      [
+        { opacity: 1, transform: "none", filter: "blur(0px)" },
+        { opacity: 0, transform: "translateY(-30px) scale(.8)", filter: "blur(10px)" },
+      ],
+      { duration: 320, delay: i * 18, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" }
+    );
+  });
+  await new Promise((r) => setTimeout(r, reducedMotion ? 0 : 320 + rows.length * 18));
   currentClearedAt = Date.now();
   rerenderMessages();
 });
 
 chatMenuDeleteBtn.addEventListener("click", async () => {
-  chatMenuDropdown.classList.add("hidden");
+  hidePopover(chatMenuDropdown);
   if (!confirm("Удалить чат из списка? Он вернётся, если придёт новое сообщение.")) return;
   if (currentChatType === "contact") await hideChatForMe(currentChatId, currentUser.uid);
   else if (currentChatType === "group" || currentChatType === "channel") await hideGroupForMe(currentChatId, currentUser.uid);
@@ -1918,6 +2348,15 @@ function closeCurrentChatView() {
   messagesEl.classList.add("hidden");
   composer.classList.add("hidden");
   emptyState.classList.remove("hidden");
+  sidebar.classList.remove("chat-open");
+  animate(
+    emptyState,
+    [
+      { opacity: 0, transform: "scale(.9)", filter: "blur(12px)" },
+      { opacity: 1, transform: "none", filter: "blur(0px)" },
+    ],
+    { spring: "smooth" }
+  );
   renderChats();
 }
 
@@ -2021,10 +2460,11 @@ function t(key) {
   return TRANSLATIONS[currentLanguage]?.[key] ?? TRANSLATIONS.ru[key] ?? key;
 }
 
-function applyLanguage(lang) {
+function applyLanguage(lang, animated = false) {
   currentLanguage = TRANSLATIONS[lang] ? lang : "ru";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
-    el.textContent = t(el.dataset.i18n);
+    if (animated) scrambleText(el, t(el.dataset.i18n));
+    else el.textContent = t(el.dataset.i18n);
   });
   document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
     el.placeholder = t(el.dataset.i18nPh);
@@ -2037,14 +2477,17 @@ function applyLanguage(lang) {
 
 // ---------- Chat display preferences ----------
 
+// [accent, accent-2, text colour on the accent]
+const DEFAULT_ACCENT = "amber";
 const ACCENT_PRESETS = {
-  blue: ["#5b8cff", "#3f6de0"],
-  purple: ["#8b5cf6", "#6d28d9"],
-  pink: ["#ff6b9d", "#e94e85"],
-  red: ["#e5484d", "#c53a3f"],
-  orange: ["#f5a623", "#d98c0f"],
-  green: ["#22c55e", "#16a34a"],
-  teal: ["#00b8d9", "#0891a8"],
+  amber: ["#ffa41b", "#ff6a1a", "#1f1100"],
+  blue: ["#5b8cff", "#3f6de0", "#ffffff"],
+  purple: ["#8b5cf6", "#6d28d9", "#ffffff"],
+  pink: ["#ff6b9d", "#e94e85", "#ffffff"],
+  red: ["#e5484d", "#c53a3f", "#ffffff"],
+  orange: ["#f5a623", "#d98c0f", "#1f1100"],
+  green: ["#22c55e", "#16a34a", "#04210f"],
+  teal: ["#00b8d9", "#0891a8", "#00191f"],
 };
 
 function applyChatPrefs(prefs) {
@@ -2054,20 +2497,38 @@ function applyChatPrefs(prefs) {
   if (fontSize === "large") messagesEl.classList.add("font-large");
   messagesEl.classList.toggle("compact", !!prefs.compact);
 
-  const [accent, accent2] = ACCENT_PRESETS[prefs.accentColor] || ACCENT_PRESETS.blue;
+  const accentKey = ACCENT_PRESETS[prefs.accentColor] ? prefs.accentColor : DEFAULT_ACCENT;
+  const [accent, accent2, onAccent] = ACCENT_PRESETS[accentKey];
   document.documentElement.style.setProperty("--accent", accent);
   document.documentElement.style.setProperty("--accent-2", accent2);
+  document.documentElement.style.setProperty("--on-accent", onAccent);
 
   chatsAccentSwatches.forEach((btn) => {
-    btn.classList.toggle("selected", btn.dataset.color === (prefs.accentColor || "blue"));
+    btn.classList.toggle("selected", btn.dataset.color === accentKey);
   });
 }
 
+// Mirrors the (unsaved) choices in the Chats tab onto the live preview.
+function updateChatsPreview() {
+  if (!chatsPreview) return;
+  chatsPreview.classList.toggle("font-small", chatsFontSize.value === "small");
+  chatsPreview.classList.toggle("font-large", chatsFontSize.value === "large");
+  chatsPreview.classList.toggle("compact", chatsCompact.checked);
+  const key = selectedChatsAccent || myProfile?.chatPrefs?.accentColor || DEFAULT_ACCENT;
+  const [a, b, on] = ACCENT_PRESETS[key] || ACCENT_PRESETS[DEFAULT_ACCENT];
+  chatsPreview.style.setProperty("--pv-accent", a);
+  chatsPreview.style.setProperty("--pv-accent-2", b);
+  chatsPreview.style.setProperty("--pv-on-accent", on);
+}
+
+chatsFontSize.addEventListener("change", updateChatsPreview);
+chatsCompact.addEventListener("change", updateChatsPreview);
+
 // ---------- Settings overlay ----------
 
-settingsCloseBtn.addEventListener("click", () => settingsOverlay.classList.add("hidden"));
+settingsCloseBtn.addEventListener("click", () => hideOverlay(settingsOverlay));
 settingsOverlay.addEventListener("click", (e) => {
-  if (e.target === settingsOverlay) settingsOverlay.classList.add("hidden");
+  if (e.target === settingsOverlay) hideOverlay(settingsOverlay);
 });
 
 function SETTINGS_SECTION_TITLES(section) {
@@ -2081,20 +2542,46 @@ function SETTINGS_SECTION_TITLES(section) {
   }[section];
 }
 
-function showSettingsMenu() {
-  settingsMenu.classList.remove("hidden");
-  document.querySelectorAll(".settings-tab-panel").forEach((p) => p.classList.add("hidden"));
-  settingsHeaderTitle.textContent = t("settings_title");
-  settingsBackBtn.classList.add("hidden");
+function visibleSettingsView() {
+  if (!settingsMenu.classList.contains("hidden")) return settingsMenu;
+  return Array.from(document.querySelectorAll(".settings-tab-panel")).find((p) => !p.classList.contains("hidden")) || null;
+}
+
+// Sections slide sideways like pages of glass while the panel's height
+// morphs to fit, and the title decodes into the new name.
+function showSettingsMenu(animated = false) {
+  const outgoing = visibleSettingsView();
+  const mutate = () => {
+    settingsMenu.classList.remove("hidden");
+    document.querySelectorAll(".settings-tab-panel").forEach((p) => p.classList.add("hidden"));
+    settingsBackBtn.classList.add("hidden");
+    settingsBodyEl.scrollTop = 0;
+  };
+  if (!animated || outgoing === settingsMenu) {
+    mutate();
+    settingsHeaderTitle.textContent = t("settings_title");
+    return;
+  }
+  swapPanels({ container: settingsPanelEl, clip: settingsBodyEl, outgoing, incoming: settingsMenu, direction: -1, mutate });
+  morphText(settingsHeaderTitle, t("settings_title"), -1);
 }
 
 function showSettingsSection(section) {
-  settingsMenu.classList.add("hidden");
-  document.querySelectorAll(".settings-tab-panel").forEach((p) => {
-    p.classList.toggle("hidden", p.dataset.spanel !== section);
-  });
-  settingsHeaderTitle.textContent = SETTINGS_SECTION_TITLES(section) || t("settings_title");
-  settingsBackBtn.classList.remove("hidden");
+  const outgoing = visibleSettingsView();
+  const panel = document.querySelector(`.settings-tab-panel[data-spanel="${section}"]`);
+  const mutate = () => {
+    settingsMenu.classList.add("hidden");
+    document.querySelectorAll(".settings-tab-panel").forEach((p) => {
+      p.classList.toggle("hidden", p.dataset.spanel !== section);
+    });
+    settingsBackBtn.classList.remove("hidden");
+    settingsBodyEl.scrollTop = 0;
+    if (panel) syncSegmented(panel);
+    if (section === "chats") updateChatsPreview();
+  };
+  swapPanels({ container: settingsPanelEl, clip: settingsBodyEl, outgoing, incoming: panel, direction: 1, mutate });
+  morphText(settingsHeaderTitle, SETTINGS_SECTION_TITLES(section) || t("settings_title"), 1);
+  animate(settingsBackBtn, [{ transform: "scale(0) rotate(90deg)", opacity: 0 }, { transform: "none", opacity: 1 }], { spring: "jelly" });
   if (section === "sessions") loadSessions();
 }
 
@@ -2102,7 +2589,7 @@ settingsMenuItems.forEach((btn) => {
   btn.addEventListener("click", () => showSettingsSection(btn.dataset.section));
 });
 
-settingsBackBtn.addEventListener("click", showSettingsMenu);
+settingsBackBtn.addEventListener("click", () => showSettingsMenu(true));
 
 function updateProfileCounters() {
   settingsDisplaynameCounter.textContent = `${settingsDisplayname.value.length}/40`;
@@ -2156,14 +2643,17 @@ function openSettings() {
   chatsSendOnEnter.checked = chatPrefs.sendOnEnter !== false;
   chatsFontSize.value = chatPrefs.fontSize || "medium";
   chatsCompact.checked = !!chatPrefs.compact;
+  selectedChatsAccent = null;
+  const accentKey = ACCENT_PRESETS[chatPrefs.accentColor] ? chatPrefs.accentColor : DEFAULT_ACCENT;
   chatsAccentSwatches.forEach((btn) => {
-    btn.classList.toggle("selected", btn.dataset.color === (chatPrefs.accentColor || "blue"));
+    btn.classList.toggle("selected", btn.dataset.color === accentKey);
   });
 
   settingsLanguage.value = myProfile.language || "ru";
 
   showSettingsMenu();
-  settingsOverlay.classList.remove("hidden");
+  showOverlay(settingsOverlay);
+  stagger(settingsMenu.children, { y: 18, step: 38, delay: 110 });
 }
 
 const checkSettingsUsernameDebounced = debounce(async (raw) => {
@@ -2203,7 +2693,8 @@ settingsProfileSave.addEventListener("click", async () => {
     myProfile = await fetchMyProfile(currentUser.uid);
     renderMe();
     renderChats();
-    settingsOverlay.classList.add("hidden");
+    await successPulse(settingsProfileSave);
+    hideOverlay(settingsOverlay);
   } catch (err) {
     console.error(err);
     settingsProfileError.textContent = err.message || "Не удалось сохранить";
@@ -2226,7 +2717,8 @@ settingsPrivacySave.addEventListener("click", async () => {
     await updatePrivacy(currentUser.uid, privacy);
     myProfile.privacy = privacy;
     renderChats();
-    settingsOverlay.classList.add("hidden");
+    await successPulse(settingsPrivacySave);
+    hideOverlay(settingsOverlay);
   } catch (err) {
     console.error(err);
     settingsPrivacyError.textContent = err.message || "Не удалось сохранить";
@@ -2253,7 +2745,8 @@ settingsNotifSave.addEventListener("click", async () => {
     await updateNotifications(currentUser.uid, notifications);
     myProfile.notifications = notifications;
     notifDesktop.checked = desktopEnabled;
-    settingsOverlay.classList.add("hidden");
+    await successPulse(settingsNotifSave);
+    hideOverlay(settingsOverlay);
   } catch (err) {
     console.error(err);
     settingsNotifError.textContent = err.message || "Не удалось сохранить";
@@ -2267,6 +2760,9 @@ chatsAccentSwatches.forEach((btn) => {
   btn.addEventListener("click", () => {
     selectedChatsAccent = btn.dataset.color;
     chatsAccentSwatches.forEach((b) => b.classList.toggle("selected", b === btn));
+    const [a, b] = ACCENT_PRESETS[btn.dataset.color] || ACCENT_PRESETS[DEFAULT_ACCENT];
+    burst(...centerOf(btn), { count: 10, spread: 44, colors: [a, b, "#fff3c4"] });
+    updateChatsPreview();
   });
 });
 
@@ -2274,16 +2770,26 @@ settingsChatsSave.addEventListener("click", async () => {
   settingsChatsError.textContent = "";
   settingsChatsSave.disabled = true;
   try {
+    const prevAccent = myProfile.chatPrefs?.accentColor || DEFAULT_ACCENT;
     const chatPrefs = {
       sendOnEnter: chatsSendOnEnter.checked,
       fontSize: chatsFontSize.value,
       compact: chatsCompact.checked,
-      accentColor: selectedChatsAccent || myProfile.chatPrefs?.accentColor || "blue",
+      accentColor: selectedChatsAccent || myProfile.chatPrefs?.accentColor || DEFAULT_ACCENT,
     };
     await updateProfileFields(currentUser.uid, { chatPrefs });
     myProfile.chatPrefs = chatPrefs;
-    applyChatPrefs(chatPrefs);
-    settingsOverlay.classList.add("hidden");
+    await successPulse(settingsChatsSave);
+    if (chatPrefs.accentColor !== prevAccent) {
+      // The new colour washes across the whole app from the chosen swatch.
+      const swatch = Array.from(chatsAccentSwatches).find((b) => b.dataset.color === chatPrefs.accentColor);
+      const [x, y] = swatch ? centerOf(swatch) : centerOf(settingsChatsSave);
+      accentWave(() => applyChatPrefs(chatPrefs), { x, y });
+      setTimeout(() => hideOverlay(settingsOverlay), reducedMotion ? 0 : 650);
+    } else {
+      applyChatPrefs(chatPrefs);
+      hideOverlay(settingsOverlay);
+    }
   } catch (err) {
     console.error(err);
     settingsChatsError.textContent = err.message || "Не удалось сохранить";
@@ -2299,8 +2805,9 @@ settingsLanguageSave.addEventListener("click", async () => {
     const language = settingsLanguage.value;
     await updateProfileFields(currentUser.uid, { language });
     myProfile.language = language;
-    applyLanguage(language);
-    settingsOverlay.classList.add("hidden");
+    await successPulse(settingsLanguageSave);
+    hideOverlay(settingsOverlay);
+    applyLanguage(language, true);
   } catch (err) {
     console.error(err);
     settingsLanguageError.textContent = err.message || "Не удалось сохранить";
@@ -2388,11 +2895,12 @@ sessionsLogoutBtn.addEventListener("click", async () => {
 });
 
 deleteAccountOpenBtn.addEventListener("click", () => {
-  deleteAccountConfirm.classList.remove("hidden");
+  reveal(deleteAccountConfirm);
+  setTimeout(() => deleteAccountConfirm.scrollIntoView({ behavior: "smooth", block: "nearest" }), 120);
 });
 
 deleteAccountCancelBtn.addEventListener("click", () => {
-  deleteAccountConfirm.classList.add("hidden");
+  conceal(deleteAccountConfirm);
   deleteAccountPassword.value = "";
   deleteAccountError.textContent = "";
 });
@@ -2414,3 +2922,117 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
     deleteAccountConfirmBtn.disabled = false;
   }
 });
+
+// ---------- Motion & material wiring ----------
+
+document.getElementById("sidebar-brand-slot").innerHTML = brandMarkSVG("sidebar-brand breathe");
+document.getElementById("empty-orb-mark").innerHTML = brandMarkSVG();
+tilt(document.getElementById("empty-orb"), 22);
+
+// Real edge refraction on the floating glass (Chromium only; elsewhere the
+// frosted fallback from the stylesheet stays in place).
+[
+  [chatHeader, { bezel: 14, strength: 34 }],
+  [composer, { bezel: 16, strength: 36 }],
+  [replyPreviewEl, { bezel: 12, strength: 28 }],
+  [emojiPicker, { bezel: 18, strength: 34 }],
+].forEach(([el, opts]) => {
+  el.dataset.lens = "";
+  liquidLens(el, opts);
+});
+
+magnetize(fabNewChat, 0.3);
+magnetize(sendBtn, 0.22);
+magnetize(voiceBtn, 0.18);
+
+[privacyLastseen, privacyAvatar, privacyBio, privacyBirthday, chatsFontSize, settingsLanguage].forEach(segmentize);
+
+watchMessages(document.querySelectorAll(".auth-error, .attach-error"));
+
+// Messages scroll underneath the floating dock; keep its height in sync so
+// the last bubble always clears it.
+new ResizeObserver(() => {
+  const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 160;
+  chatSection.style.setProperty("--dock-h", chatDock.offsetHeight + "px");
+  if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}).observe(chatDock);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!storyViewerOverlay.classList.contains("hidden")) {
+    closeStoryViewer();
+    return;
+  }
+  const top = topOverlay();
+  if (top) {
+    hideOverlay(top);
+    return;
+  }
+  if (!chatMenuDropdown.classList.contains("hidden")) hidePopover(chatMenuDropdown);
+  else if (!emojiPicker.classList.contains("hidden")) closeEmojiPicker();
+});
+
+// Mobile: swipe from the left edge to drag the chat away and reveal the list.
+(function enableSwipeBack() {
+  let startX = 0;
+  let startY = 0;
+  let dx = 0;
+  let tracking = false;
+  let dragging = false;
+
+  chatSection.addEventListener(
+    "touchstart",
+    (e) => {
+      if (!isMobileLayout() || !sidebar.classList.contains("chat-open") || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (t.clientX > 32) return;
+      startX = t.clientX;
+      startY = t.clientY;
+      dx = 0;
+      tracking = true;
+      dragging = false;
+    },
+    { passive: true }
+  );
+
+  chatSection.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!tracking) return;
+      const t = e.touches[0];
+      dx = Math.max(0, t.clientX - startX);
+      if (!dragging) {
+        if (Math.abs(t.clientY - startY) > 10 && Math.abs(t.clientY - startY) > dx) {
+          tracking = false;
+          return;
+        }
+        if (dx < 8) return;
+        dragging = true;
+        chatSection.classList.add("dragging");
+        sidebar.classList.add("peek");
+      }
+      const progress = Math.min(dx / window.innerWidth, 1);
+      chatSection.style.transform = `translateX(${dx}px)`;
+      sidebar.style.setProperty("--peek", progress.toFixed(3));
+    },
+    { passive: true }
+  );
+
+  const end = () => {
+    if (!tracking) return;
+    tracking = false;
+    if (!dragging) return;
+    dragging = false;
+    const goBack = dx > window.innerWidth * 0.3;
+    chatSection.classList.remove("dragging");
+    sidebar.classList.remove("peek");
+    chatSection.style.transform = "";
+    sidebar.style.removeProperty("--peek");
+    if (goBack) {
+      sidebar.classList.remove("chat-open");
+      hidePopover(chatMenuDropdown);
+    }
+  };
+  chatSection.addEventListener("touchend", end, { passive: true });
+  chatSection.addEventListener("touchcancel", end, { passive: true });
+})();

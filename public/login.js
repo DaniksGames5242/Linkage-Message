@@ -10,6 +10,7 @@ import {
   attachPasswordToggle,
   describeDevice,
 } from "./utils.js";
+import { animate, stagger, tilt, shake, successPulse, watchMessages, reducedMotion } from "./ui.js";
 
 const authCard = document.getElementById("auth-card");
 const authSub = document.getElementById("auth-sub");
@@ -58,11 +59,28 @@ function applyMode() {
   usernameHint.classList.add("hidden");
 }
 
+// Switching modes morphs the card's height on a spring while the extra
+// register fields condense into place one by one.
 switchModeBtn.addEventListener("click", () => {
+  const before = authCard.getBoundingClientRect().height;
   mode = mode === "login" ? "register" : "login";
-  authCard.classList.add("card-flip");
-  setTimeout(() => authCard.classList.remove("card-flip"), 260);
   applyMode();
+  const after = authCard.getBoundingClientRect().height;
+  if (!reducedMotion) {
+    authCard.style.overflow = "hidden";
+    animate(authCard, [{ height: before + "px" }, { height: after + "px" }], { spring: "smooth" }).finished.then(
+      () => (authCard.style.overflow = ""),
+      () => (authCard.style.overflow = "")
+    );
+  }
+  const blurIn = [
+    { opacity: 0, filter: "blur(8px)", transform: "translateY(6px)" },
+    { opacity: 1, filter: "blur(0px)", transform: "none" },
+  ];
+  [authSub, authSubmit, switchModeBtn].forEach((el, i) => animate(el, blurIn, { spring: "smooth", delay: i * 40 }));
+  if (mode === "register") {
+    stagger([registerAvatarField, nicknameField, confirmPasswordField], { y: 18, blur: 10, step: 70, delay: 60 });
+  }
 });
 
 const checkUsernameDebounced = debounce(async (raw) => {
@@ -127,11 +145,15 @@ function goToApp() {
   window.location.href = "/";
 }
 
+tilt(authCard, 5);
+watchMessages([authError]);
+
 authForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (configLooksEmpty) return;
   authError.textContent = "";
   authSubmit.disabled = true;
+  let succeeded = false;
   try {
     if (mode === "register") {
       const user = await registerAccount({
@@ -149,12 +171,15 @@ authForm.addEventListener("submit", async (e) => {
       });
       await addPersonalNotice(user.uid, `Выполнен вход в аккаунт: ${describeDevice()}.`);
     }
+    succeeded = true;
+    await successPulse(authSubmit);
     goToApp();
   } catch (err) {
     console.error(err);
     authError.textContent = err.message || "Не удалось войти";
+    shake(authCard);
   } finally {
-    authSubmit.disabled = false;
+    if (!succeeded) authSubmit.disabled = false;
   }
 });
 
