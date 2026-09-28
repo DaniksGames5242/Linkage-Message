@@ -15,6 +15,8 @@ import {
   serverTimestamp,
   arrayUnion,
   arrayRemove,
+  increment,
+  deleteField,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 export async function createGroup({ type, name, avatarImage, avatarColor, ownerId, memberUids }) {
@@ -75,7 +77,7 @@ export function listenGroupMessages(groupId, onChange, onError) {
   );
 }
 
-export async function sendGroupMessage(groupId, senderId, text, attachment, replyTo) {
+export async function sendGroupMessage(groupId, senderId, text, attachment, replyTo, extra, memberUids = []) {
   const trimmed = (text || "").trim();
   const payload = {
     text: trimmed || attachment?.defaultCaption || "",
@@ -85,7 +87,9 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
   if (!payload.text) return;
   if (attachment) Object.assign(payload, attachment.fields);
   if (replyTo) payload.replyTo = replyTo;
+  if (extra) Object.assign(payload, extra);
 
+  const others = memberUids.filter((uid) => uid && uid !== senderId);
   await addDoc(collection(db, "groups", groupId, "messages"), payload);
   await setDoc(
     doc(db, "groups", groupId),
@@ -94,9 +98,33 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
       lastMessageAt: serverTimestamp(),
       lastMessageSenderId: senderId,
       hiddenFor: [],
+      unread: Object.fromEntries(others.map((uid) => [uid, increment(1)])),
     },
     { merge: true }
   );
+}
+
+export async function markGroupRead(groupId, uid) {
+  await updateDoc(doc(db, "groups", groupId), {
+    [`unread.${uid}`]: 0,
+    [`lastRead.${uid}`]: serverTimestamp(),
+  });
+}
+
+export async function setGroupPinnedMessage(groupId, pinned) {
+  await updateDoc(doc(db, "groups", groupId), { pinned: pinned || deleteField() });
+}
+
+export async function addGroupMembers(groupId, uids) {
+  if (!uids.length) return;
+  await updateDoc(doc(db, "groups", groupId), { members: arrayUnion(...uids) });
+}
+
+export async function leaveGroup(groupId, uid) {
+  await updateDoc(doc(db, "groups", groupId), {
+    members: arrayRemove(uid),
+    admins: arrayRemove(uid),
+  });
 }
 
 export async function editGroupMessage(groupId, messageId, newText) {

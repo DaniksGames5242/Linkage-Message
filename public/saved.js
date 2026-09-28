@@ -24,14 +24,15 @@ export function listenSavedMessages(uid, onChange, onError) {
   );
 }
 
-export async function addSavedMessage(uid, text, replyTo) {
-  const trimmed = text.trim();
+export async function addSavedMessage(uid, text, replyTo, extra) {
+  const trimmed = (text || "").trim();
   if (!trimmed) return;
   const payload = {
     text: trimmed,
     createdAt: serverTimestamp(),
   };
   if (replyTo) payload.replyTo = replyTo;
+  if (extra) Object.assign(payload, extra);
   await addDoc(collection(db, "users", uid, "savedMessages"), payload);
 }
 

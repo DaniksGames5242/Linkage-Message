@@ -23,6 +23,8 @@ import {
   setTyping,
   hideChatForMe,
   clearChatForMe,
+  markChatRead,
+  setChatPinnedMessage,
 } from "./chats.js";
 import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
 import { listenNotificationsFeed, addBroadcast } from "./notify.js";
@@ -36,9 +38,14 @@ import {
   toggleGroupReaction,
   hideGroupForMe,
   clearGroupForMe,
+  markGroupRead,
+  setGroupPinnedMessage,
+  addGroupMembers,
+  leaveGroup,
 } from "./groups.js";
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
-import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications } from "./settings.js";
+import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
+import { initCalls, startCall, fmtDuration } from "./call-ui.js";
 import {
   colorForUid,
   initials,
@@ -88,6 +95,7 @@ import {
   brandMarkSVG,
   centerOf,
   reducedMotion,
+  toast,
 } from "./ui.js";
 
 const ADMIN_USERNAME = "danik";
@@ -124,6 +132,36 @@ const messagesEl = document.getElementById("messages");
 const composer = document.getElementById("composer");
 const chatSection = document.getElementById("chat");
 const chatDock = document.getElementById("chat-dock");
+const callAudioBtn = document.getElementById("call-audio-btn");
+const callVideoBtn = document.getElementById("call-video-btn");
+const chatSearchBtn = document.getElementById("chat-search-btn");
+const chatSearchBar = document.getElementById("chat-search-bar");
+const chatSearchInput = document.getElementById("chat-search-input");
+const chatSearchCount = document.getElementById("chat-search-count");
+const pinnedBar = document.getElementById("pinned-bar");
+const pinnedBarText = document.getElementById("pinned-bar-text");
+const pinnedBarUnpin = document.getElementById("pinned-bar-unpin");
+const scrollBottomBtn = document.getElementById("scroll-bottom-btn");
+const scrollBottomBadge = document.getElementById("scroll-bottom-badge");
+const blockedBar = document.getElementById("blocked-bar");
+const blockedBarUnblock = document.getElementById("blocked-bar-unblock");
+const chatMenuMuteBtn = document.getElementById("chat-menu-mute-btn");
+const chatMenuPinBtn = document.getElementById("chat-menu-pin-btn");
+const chatMenuBlockBtn = document.getElementById("chat-menu-block-btn");
+const chatMenuLeaveBtn = document.getElementById("chat-menu-leave-btn");
+const lightboxEl = document.getElementById("lightbox");
+const lightboxImg = document.getElementById("lightbox-img");
+const lightboxDownload = document.getElementById("lightbox-download");
+const forwardOverlay = document.getElementById("forward-overlay");
+const forwardSearch = document.getElementById("forward-search");
+const forwardList = document.getElementById("forward-list");
+const profileViewActions = document.getElementById("profile-view-actions");
+const profileMembers = document.getElementById("profile-members");
+const profileMembersTitle = document.getElementById("profile-members-title");
+const profileMembersAdd = document.getElementById("profile-members-add");
+const profileMembersInput = document.getElementById("profile-members-input");
+const profileMembersResult = document.getElementById("profile-members-result");
+const profileMembersList = document.getElementById("profile-members-list");
 const msgInput = document.getElementById("msg-input");
 const sendBtn = document.getElementById("send-btn");
 const backToListBtn = document.getElementById("back-to-list-btn");
@@ -401,6 +439,7 @@ function enterApp() {
   applyLanguage(myProfile.language || "ru");
   applyChatPrefs(myProfile.chatPrefs || {});
   playAppIntro();
+  setupCalls();
   listenContactsList();
   listenChatsList();
   listenGroupsList();
@@ -458,7 +497,11 @@ function playAppIntro() {
 }
 
 function onVisibilityChange() {
-  if (!document.hidden && currentUser) touchPresence(currentUser.uid);
+  if (!document.hidden && currentUser) {
+    touchPresence(currentUser.uid);
+    maybeMarkRead();
+    renderChats();
+  }
 }
 
 function renderMe() {
@@ -522,6 +565,7 @@ function openContactProfile(uid, profile) {
       : ""
   );
 
+  renderContactProfileActions(uid);
   showOverlay(profileViewOverlay);
   staggerProfileView();
 }
@@ -531,7 +575,11 @@ function staggerProfileView() {
     spring: "jelly",
     delay: 90,
   });
-  stagger([profileViewName, profileViewUsername, ...profileViewRows.map((r) => r.row)], { y: 14, step: 55, delay: 160 });
+  stagger([profileViewName, profileViewUsername, ...profileViewRows.map((r) => r.row), ...profileViewActions.children], {
+    y: 14,
+    step: 45,
+    delay: 160,
+  });
 }
 
 function openGroupInfo(group) {
@@ -543,6 +591,7 @@ function openGroupInfo(group) {
   setProfileViewRow(1, "", "");
   setProfileViewRow(2, "", "");
 
+  renderGroupMembers(group);
   showOverlay(profileViewOverlay);
   staggerProfileView();
 }
@@ -963,10 +1012,11 @@ function listenChatsList() {
     (list, changes) => {
       chats = list;
       renderChats();
+      if (currentChatType === "contact") onCurrentChatDataChanged();
       if (chatsInitialized) {
         changes.forEach((c) => {
           if (c.type === "removed") return;
-          maybeNotify(c.data);
+          maybeNotify({ id: c.id, ...c.data });
         });
       }
       chatsInitialized = true;
@@ -981,6 +1031,7 @@ function listenGroupsList() {
     (list, changes) => {
       groups = list;
       renderChats();
+      if (currentChatType === "group" || currentChatType === "channel") onCurrentChatDataChanged();
       if (groupsInitialized) {
         changes.forEach((c) => {
           if (c.type === "removed") return;
@@ -1153,6 +1204,300 @@ storyDeleteBtn.addEventListener("click", async () => {
   }
 });
 
+// ---------- Per-user chat lists (pinned / muted chats, blocked people) ----------
+
+function userList(field) {
+  return Array.isArray(myProfile?.[field]) ? myProfile[field] : [];
+}
+const isChatPinned = (id) => userList("pinnedChats").includes(id);
+const isChatMuted = (id) => userList("mutedChats").includes(id);
+const isBlocked = (uid) => !!uid && userList("blocked").includes(uid);
+
+async function toggleUserList(field, value, add, { success } = {}) {
+  const before = userList(field);
+  myProfile[field] = add ? [...new Set([...before, value])] : before.filter((v) => v !== value);
+  renderChats();
+  refreshChatChrome();
+  try {
+    await toggleUserListValue(currentUser.uid, field, value, add);
+    if (success) toast(success);
+  } catch (err) {
+    console.error(err);
+    myProfile[field] = before;
+    renderChats();
+    refreshChatChrome();
+    toast("Не удалось сохранить", { tone: "error" });
+  }
+}
+
+// ---------- Drafts (kept per chat in this browser) ----------
+
+const draftKey = (chatId) => `lm-draft:${chatId}`;
+function readDraft(chatId) {
+  try {
+    return localStorage.getItem(draftKey(chatId)) || "";
+  } catch (_) {
+    return "";
+  }
+}
+function writeDraft(chatId, text) {
+  if (!chatId) return;
+  try {
+    if (text.trim()) localStorage.setItem(draftKey(chatId), text);
+    else localStorage.removeItem(draftKey(chatId));
+  } catch (_) {
+    /* storage unavailable */
+  }
+}
+
+function fmtListTime(ts) {
+  if (!ts?.toDate) return "";
+  const d = ts.toDate();
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const diffDays = (now - d) / 86400000;
+  if (diffDays < 6) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
+}
+
+const ICON_MUTED =
+  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M13.73 21a2 2 0 0 1-3.46 0M18.63 13A17.9 17.9 0 0 1 18 8M6.26 6.26A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+const ICON_PIN =
+  '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M16 3a1 1 0 0 1 .7 1.7L15.4 6l2.6 5.2 1.3-1.3a1 1 0 1 1 1.4 1.4L17.4 14.6l3.3 3.3a1 1 0 0 1-1.4 1.4L16 16l-3.3 3.3a1 1 0 0 1-1.4-1.4l3.3-3.3-.7-.7-5.2-2.6-1.3 1.3A1 1 0 1 1 6 11.2L10.9 6.3A1 1 0 0 1 16 3z" transform="rotate(0)"/></svg>';
+
+// Builds one chat-list row: avatar, name + flags, last line, time + unread.
+function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false }) {
+  const item = document.createElement("div");
+  item.className =
+    "room-item" +
+    (chatId === currentChatId ? " active" : "") +
+    (unread > 0 ? " has-unread" : "") +
+    (muted ? " muted" : "") +
+    (pinned ? " user-pinned" : "");
+  item.dataset.key = key;
+  item.innerHTML = `
+    ${avatar}
+    <div class="room-meta">
+      <div class="room-name-row"><div class="room-name"></div>${muted ? `<span class="room-flag">${ICON_MUTED}</span>` : ""}</div>
+      <div class="room-last"></div>
+    </div>
+    <div class="room-side">
+      <div class="room-time"></div>
+      <div class="room-badges">${pinned && !unread ? `<span class="room-flag">${ICON_PIN}</span>` : ""}${
+    unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""
+  }</div>
+    </div>
+  `;
+  item.querySelector(".room-name").textContent = name;
+  const lastEl = item.querySelector(".room-last");
+  const draft = chatId && chatId !== currentChatId ? readDraft(chatId) : "";
+  if (typing) {
+    lastEl.innerHTML = '<span class="typing-label">печатает…</span>';
+  } else if (draft) {
+    lastEl.innerHTML = '<span class="draft-label">Черновик: </span>';
+    lastEl.append(draft);
+  } else {
+    lastEl.textContent = last;
+  }
+  item.querySelector(".room-time").textContent = fmtListTime(lastAt);
+  item.addEventListener("click", onClick);
+  return item;
+}
+
+// ---------- Context menus ----------
+
+const MI = {
+  reply: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  forward: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+  bellOff: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13.73 21a2 2 0 0 1-3.46 0M18.63 13A17.9 17.9 0 0 1 18 8M6.26 6.26A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  block: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>',
+  phone: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
+  video: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
+  leave: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
+};
+
+let activeCtx = null;
+
+function closeContextMenu(instant = false) {
+  const ctxState = activeCtx;
+  activeCtx = null;
+  if (!ctxState) return;
+  const { menu, backdrop } = ctxState;
+  if (instant || reducedMotion) {
+    menu.remove();
+    backdrop.remove();
+    return;
+  }
+  backdrop.remove();
+  menu
+    .animate(
+      [
+        { opacity: 1, transform: "none" },
+        { opacity: 0, transform: "scale(.85)" },
+      ],
+      { duration: 160, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" }
+    )
+    .finished.then(() => menu.remove(), () => menu.remove());
+  setTimeout(() => menu.remove(), 400);
+}
+
+// A glass menu that blooms out of the pointer. `reactions` adds an emoji
+// strip on top (for messages).
+function openContextMenu({ x, y, reactions = null, items }) {
+  closeContextMenu(true);
+  const backdrop = document.createElement("div");
+  backdrop.className = "ctx-backdrop";
+  const menu = document.createElement("div");
+  menu.className = "ctx-menu";
+  menu.setAttribute("role", "menu");
+  if (reactions) {
+    const strip = document.createElement("div");
+    strip.className = "ctx-reactions";
+    reactions.emojis.forEach((emoji) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = emoji;
+      if (reactions.mine.has(emoji)) b.classList.add("mine");
+      b.addEventListener("click", () => {
+        reactions.onPick(emoji, b);
+        closeContextMenu();
+      });
+      strip.appendChild(b);
+    });
+    menu.appendChild(strip);
+  }
+  items.filter(Boolean).forEach((it) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ctx-item" + (it.danger ? " danger" : "");
+    b.innerHTML = `${it.icon || ""}<span></span>`;
+    b.querySelector("span").textContent = it.label;
+    b.addEventListener("click", () => {
+      closeContextMenu();
+      it.onClick();
+    });
+    menu.appendChild(b);
+  });
+  backdrop.addEventListener("click", () => closeContextMenu());
+  backdrop.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    closeContextMenu();
+  });
+  document.body.append(backdrop, menu);
+
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+  const left = Math.max(8, Math.min(x, window.innerWidth - w - 8));
+  let top = y;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, y - h);
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+  menu.style.transformOrigin = `${x - left}px ${y - top}px`;
+  activeCtx = { menu, backdrop };
+  // Transform/opacity only: animating a blur on a backdrop-filtered surface
+  // is expensive on weak GPUs.
+  animate(menu, [{ opacity: 0, transform: "scale(.3)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  stagger(menu.querySelectorAll(".ctx-reactions button"), { y: 12, blur: 0, scale: 0.3, step: 28, delay: 40, spring: "jelly" });
+  stagger(menu.querySelectorAll(".ctx-item"), { x: -10, y: 0, blur: 0, step: 26, delay: 60, spring: "smooth" });
+}
+
+// Long-press (touch) + right-click (mouse) both open a context menu.
+function onContextGesture(el, handler) {
+  el.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    handler(e.clientX, e.clientY);
+  });
+  let timer = null;
+  let start = null;
+  el.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      start = { x: t.clientX, y: t.clientY };
+      timer = setTimeout(() => {
+        timer = null;
+        el._suppressClick = true;
+        if (navigator.vibrate) navigator.vibrate(12);
+        handler(start.x, start.y);
+      }, 480);
+    },
+    { passive: true }
+  );
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+  };
+  el.addEventListener(
+    "touchmove",
+    (e) => {
+      const t = e.touches[0];
+      if (start && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) cancel();
+    },
+    { passive: true }
+  );
+  el.addEventListener("touchend", cancel, { passive: true });
+  el.addEventListener("touchcancel", cancel, { passive: true });
+  el.addEventListener(
+    "click",
+    (e) => {
+      if (el._suppressClick) {
+        el._suppressClick = false;
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    },
+    true
+  );
+}
+
+function attachRoomMenu(item, entry) {
+  onContextGesture(item, (x, y) => {
+    const pinned = isChatPinned(entry.id);
+    const muted = isChatMuted(entry.id);
+    const unread = entry.data.unread?.[currentUser.uid] || 0;
+    openContextMenu({
+      x,
+      y,
+      items: [
+        { label: pinned ? "Открепить" : "Закрепить", icon: MI.pin, onClick: () => toggleUserList("pinnedChats", entry.id, !pinned) },
+        {
+          label: muted ? "Включить уведомления" : "Без звука",
+          icon: muted ? MI.bell : MI.bellOff,
+          onClick: () => toggleUserList("mutedChats", entry.id, !muted),
+        },
+        unread > 0 && {
+          label: "Отметить прочитанным",
+          icon: MI.check,
+          onClick: () => (entry.kind === "group" ? markGroupRead : markChatRead)(entry.id, currentUser.uid).catch(console.error),
+        },
+        {
+          label: "Удалить чат",
+          icon: MI.trash,
+          danger: true,
+          onClick: async () => {
+            if (!confirm("Удалить чат из списка? Он вернётся, если придёт новое сообщение.")) return;
+            try {
+              if (entry.kind === "group") await hideGroupForMe(entry.id, currentUser.uid);
+              else await hideChatForMe(entry.id, currentUser.uid);
+              if (currentChatId === entry.id) closeCurrentChatView();
+            } catch (err) {
+              console.error(err);
+              toast("Не удалось удалить чат", { tone: "error" });
+            }
+          },
+        },
+      ],
+    });
+  });
+}
+
 function pinnedItemHTML(id, iconSvg, title, subtitle) {
   const item = document.createElement("div");
   item.className = "room-item pinned-item" + (id === currentChatId ? " active" : "");
@@ -1235,10 +1580,15 @@ async function renderChats() {
     ...chats.filter((c) => !(c.hiddenFor || []).includes(currentUser.uid)).map((data) => ({ kind: "contact", data })),
     ...groups.filter((g) => !(g.hiddenFor || []).includes(currentUser.uid)).map((data) => ({ kind: "group", data })),
   ].sort((a, b) => {
-    const ta = a.data.lastMessageAt?.toMillis ? a.data.lastMessageAt.toMillis() : 0;
-    const tb = b.data.lastMessageAt?.toMillis ? b.data.lastMessageAt.toMillis() : 0;
+    const pa = isChatPinned(a.data.id) ? 1 : 0;
+    const pb = isChatPinned(b.data.id) ? 1 : 0;
+    if (pa !== pb) return pb - pa;
+    const ta = a.data.lastMessageAt?.toMillis ? a.data.lastMessageAt.toMillis() : Date.now();
+    const tb = b.data.lastMessageAt?.toMillis ? b.data.lastMessageAt.toMillis() : Date.now();
     return tb - ta;
   });
+  const me = currentUser.uid;
+  const unreadFor = (data) => (data.id === currentChatId && !document.hidden ? 0 : Math.max(0, data.unread?.[me] || 0));
 
   const neededUids = [
     ...new Set(
@@ -1260,24 +1610,20 @@ async function renderChats() {
   for (const entry of combined) {
     if (entry.kind === "group") {
       const group = entry.data;
-      const item = document.createElement("div");
-      item.className = "room-item" + (group.id === currentChatId ? " active" : "");
-      item.dataset.key = "g:" + group.id;
-      item.innerHTML = `
-        ${groupAvatarHTML(group)}
-        <div class="room-meta">
-          <div class="room-name"></div>
-          <div class="room-last"></div>
-        </div>
-      `;
-      item.querySelector(".room-name").textContent = group.name;
-      const lastPrefix = group.lastMessageSenderId === currentUser.uid ? "Вы: " : "";
-      item.querySelector(".room-last").textContent = group.lastMessage
-        ? lastPrefix + group.lastMessage
-        : group.type === "channel"
-        ? "Канал"
-        : "Группа";
-      item.addEventListener("click", () => openGroupChat(group));
+      const lastPrefix = group.lastMessageSenderId === me ? "Вы: " : "";
+      const item = buildRoomItem({
+        key: "g:" + group.id,
+        chatId: group.id,
+        avatar: groupAvatarHTML(group),
+        name: group.name,
+        last: group.lastMessage ? lastPrefix + group.lastMessage : group.type === "channel" ? "Канал" : "Группа",
+        lastAt: group.lastMessageAt,
+        unread: unreadFor(group),
+        muted: isChatMuted(group.id),
+        pinned: isChatPinned(group.id),
+        onClick: () => openGroupChat(group),
+      });
+      attachRoomMenu(item, { id: group.id, kind: "group", data: group });
       frag.appendChild(item);
       continue;
     }
@@ -1290,20 +1636,22 @@ async function renderChats() {
 
     const name = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
 
-    const item = document.createElement("div");
-    item.className = "room-item" + (chat.id === currentChatId ? " active" : "");
-    item.dataset.key = "c:" + chat.id;
-    item.innerHTML = `
-      ${visibleAvatarHTML(profile, otherUid)}
-      <div class="room-meta">
-        <div class="room-name"></div>
-        <div class="room-last"></div>
-      </div>
-    `;
-    item.querySelector(".room-name").textContent = name;
-    const lastPrefix = chat.lastMessageSenderId === currentUser.uid ? "Вы: " : "";
-    item.querySelector(".room-last").textContent = chat.lastMessage ? lastPrefix + chat.lastMessage : "Нет сообщений";
-    item.addEventListener("click", () => openContactChat(chat.id, otherUid, profile));
+    const lastPrefix = chat.lastMessageSenderId === me ? "Вы: " : "";
+    const typingAt = chat.typing?.[otherUid]?.toDate?.()?.getTime?.() || 0;
+    const item = buildRoomItem({
+      key: "c:" + chat.id,
+      chatId: chat.id,
+      avatar: visibleAvatarHTML(profile, otherUid),
+      name,
+      last: chat.lastMessage ? lastPrefix + chat.lastMessage : "Нет сообщений",
+      lastAt: chat.lastMessageAt,
+      unread: unreadFor(chat),
+      muted: isChatMuted(chat.id),
+      pinned: isChatPinned(chat.id),
+      typing: Date.now() - typingAt < 6000 && !isBlocked(otherUid),
+      onClick: () => openContactChat(chat.id, otherUid, profile),
+    });
+    attachRoomMenu(item, { id: chat.id, kind: "contact", data: chat, otherUid });
     frag.appendChild(item);
   }
 
@@ -1317,6 +1665,11 @@ async function renderChats() {
     playFlip(chatListEl, prevRects);
   }
   moveChatIndicator();
+
+  const totalUnread = combined
+    .filter((e) => !isChatMuted(e.data.id))
+    .reduce((sum, e) => sum + unreadFor(e.data), 0);
+  document.title = totalUnread > 0 ? `(${totalUnread}) Linkage Message` : "Linkage Message";
 }
 
 // Glides the selection pill to the active chat, stretching like a droplet
@@ -1352,6 +1705,10 @@ function moveChatIndicator() {
 // ---------- Shared chat-view plumbing ----------
 
 function resetChatView() {
+  if (currentChatId) writeDraft(currentChatId, msgInput.value);
+  closeChatSearch(true);
+  scrollBottomBtn.classList.add("hidden");
+  unreadWhileAway = 0;
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
   unsubMessages = unsubChatDoc = null;
@@ -1379,7 +1736,182 @@ function resetChatView() {
   msgInput.value = "";
   msgInput.style.height = "auto";
   updateComposerButtons();
+  blockedBar.classList.add("hidden");
+  pinnedBar.classList.add("hidden");
+  chatSection.classList.remove("has-pinned");
+  [callAudioBtn, callVideoBtn].forEach((b) => b.classList.add("hidden"));
+  chatSearchBtn.classList.remove("hidden");
 }
+
+function restoreDraft() {
+  const draft = readDraft(currentChatId);
+  if (!draft) return;
+  msgInput.value = draft;
+  msgInput.style.height = "auto";
+  msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
+  updateComposerButtons();
+}
+
+function currentChatData() {
+  if (currentChatType === "contact") return chats.find((c) => c.id === currentChatId) || null;
+  if (currentChatType === "group" || currentChatType === "channel") return groups.find((g) => g.id === currentChatId) || currentGroupRef;
+  return null;
+}
+
+// Header buttons, chat menu labels, the blocked bar and the pinned banner
+// all depend on the open chat + my per-user lists.
+function refreshChatChrome() {
+  if (!currentChatId) return;
+  const isContact = currentChatType === "contact";
+  const isGroupish = currentChatType === "group" || currentChatType === "channel";
+  const blocked = isContact && isBlocked(currentOtherUid);
+  callAudioBtn.classList.toggle("hidden", !isContact || blocked);
+  callVideoBtn.classList.toggle("hidden", !isContact || blocked);
+
+  const muted = isChatMuted(currentChatId);
+  const pinned = isChatPinned(currentChatId);
+  chatMenuMuteBtn.classList.toggle("hidden", !(isContact || isGroupish));
+  chatMenuMuteBtn.textContent = muted ? "Включить уведомления" : "Выключить уведомления";
+  chatMenuPinBtn.classList.toggle("hidden", !(isContact || isGroupish));
+  chatMenuPinBtn.textContent = pinned ? "Открепить чат" : "Закрепить чат";
+  chatMenuBlockBtn.classList.toggle("hidden", !isContact);
+  chatMenuBlockBtn.textContent = blocked ? "Разблокировать" : "Заблокировать";
+  chatMenuLeaveBtn.classList.toggle("hidden", !isGroupish);
+  document.getElementById("chat-menu-rename-btn").classList.toggle("hidden", !isContact);
+  chatMenuLeaveBtn.textContent = currentChatType === "channel" ? "Покинуть канал" : "Покинуть группу";
+
+  if (isContact) {
+    composer.classList.toggle("hidden", blocked);
+    if (blocked) reveal(blockedBar);
+    else if (!blockedBar.classList.contains("hidden")) conceal(blockedBar);
+  }
+  renderPinnedBar();
+}
+
+function canPinInCurrentChat() {
+  if (currentChatType === "contact" || currentChatType === "group") return true;
+  if (currentChatType === "channel") return (currentGroupRef?.admins || []).includes(currentUser.uid);
+  return false;
+}
+
+function renderPinnedBar() {
+  const pinned = currentChatData()?.pinned;
+  if (pinned?.id) {
+    pinnedBarText.textContent = pinned.text || "Сообщение";
+    pinnedBar.dataset.id = pinned.id;
+    pinnedBarUnpin.classList.toggle("hidden", !canPinInCurrentChat());
+    if (pinnedBar.classList.contains("hidden") || pinnedBar.classList.contains("is-closing")) reveal(pinnedBar);
+    chatSection.classList.add("has-pinned");
+  } else {
+    if (!pinnedBar.classList.contains("hidden")) conceal(pinnedBar);
+    chatSection.classList.remove("has-pinned");
+  }
+}
+
+pinnedBar.addEventListener("click", (e) => {
+  if (e.target.closest("#pinned-bar-unpin")) return;
+  if (pinnedBar.dataset.id) scrollToMessage(pinnedBar.dataset.id);
+});
+pinnedBarUnpin.addEventListener("click", () => setPinnedMessage(null));
+
+async function setPinnedMessage(msg) {
+  const payload = msg ? { id: msg.id, text: replyPreviewText(msg).slice(0, 120), senderName: replySenderLabel(msg) } : null;
+  try {
+    if (currentChatType === "contact") await setChatPinnedMessage(currentChatId, payload);
+    else await setGroupPinnedMessage(currentChatId, payload);
+    toast(msg ? "Сообщение закреплено" : "Сообщение откреплено", { icon: "📌" });
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось закрепить", { tone: "error" });
+  }
+}
+
+// ---------- Read state ----------
+
+const markedReadAt = new Map(); // chatId -> lastMessageAt ms already marked
+let markingRead = false;
+
+function maybeMarkRead() {
+  if (document.hidden || !currentChatId || markingRead) return;
+  const isContact = currentChatType === "contact";
+  const isGroupish = currentChatType === "group" || currentChatType === "channel";
+  if (!isContact && !isGroupish) return;
+  const data = currentChatData();
+  if (!data) return;
+  const me = currentUser.uid;
+  const unread = data.unread?.[me] || 0;
+  const lastMsgMs = data.lastMessageAt?.toMillis?.() || 0;
+  const fromOther = data.lastMessageSenderId && data.lastMessageSenderId !== me;
+  const lastReadMs = data.lastRead?.[me]?.toMillis?.() || 0;
+  const needsReceipt = fromOther && lastMsgMs > lastReadMs && (markedReadAt.get(currentChatId) || 0) < lastMsgMs;
+  if (unread <= 0 && !needsReceipt) return;
+  markingRead = true;
+  markedReadAt.set(currentChatId, lastMsgMs);
+  (isContact ? markChatRead : markGroupRead)(currentChatId, me)
+    .catch((err) => console.warn("markRead failed:", err))
+    .finally(() => {
+      markingRead = false;
+    });
+}
+
+const TICK_ONE =
+  '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8.5 6.5 12 13 4.5"/></svg>';
+const TICK_TWO =
+  '<svg viewBox="0 0 20 16" width="18" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 8.5 5 12 11.5 4.5"/><polyline points="8 11 9 12 15.5 4.5"/></svg>';
+const TICK_CLOCK =
+  '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><polyline points="8 5 8 8 10 9.5"/></svg>';
+
+// ✓ sent · ✓✓ read (accent) · clock while the write is pending.
+function refreshReceipts() {
+  const data = currentChatData();
+  const me = currentUser.uid;
+  let readUpTo = 0;
+  if (data?.lastRead) {
+    Object.entries(data.lastRead).forEach(([uid, ts]) => {
+      if (uid !== me) readUpTo = Math.max(readUpTo, ts?.toMillis?.() || 0);
+    });
+  }
+  messagesEl.querySelectorAll(".msg-row.me .msg-tick").forEach((tick) => {
+    const ts = Number(tick.closest(".msg-row").dataset.ts || 0);
+    const state = !ts ? "pending" : ts <= readUpTo ? "read" : "sent";
+    if (tick.dataset.state === state) return;
+    tick.dataset.state = state;
+    tick.classList.toggle("read", state === "read");
+    tick.innerHTML = state === "pending" ? TICK_CLOCK : state === "read" ? TICK_TWO : TICK_ONE;
+  });
+}
+
+function onCurrentChatDataChanged() {
+  if (!currentChatId) return;
+  if (currentChatType === "group" || currentChatType === "channel") {
+    const fresh = groups.find((g) => g.id === currentChatId);
+    if (fresh) {
+      currentGroupRef = fresh;
+      chatSub.textContent = pluralMembers((fresh.members || []).length);
+    }
+  }
+  renderPinnedBar();
+  refreshReceipts();
+  maybeMarkRead();
+}
+
+// ---------- Scroll-to-bottom button ----------
+
+let unreadWhileAway = 0;
+function updateScrollBottomBtn() {
+  const away = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight > 380;
+  if (!away) unreadWhileAway = 0;
+  scrollBottomBtn.classList.toggle("hidden", !away || messagesEl.classList.contains("hidden"));
+  scrollBottomBadge.textContent = unreadWhileAway > 99 ? "99+" : String(unreadWhileAway);
+  scrollBottomBadge.classList.toggle("hidden", unreadWhileAway === 0);
+}
+messagesEl.addEventListener("scroll", () => {
+  updateScrollBottomBtn();
+  if (activeCtx) closeContextMenu();
+}, { passive: true });
+scrollBottomBtn.addEventListener("click", () => {
+  messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+});
 
 // The header and dock float in; when switching between chats only the
 // header's contents slide, so the glass itself feels continuous.
@@ -1428,6 +1960,9 @@ function snapshotScroll() {
 
 function finishMessagesRender(snap) {
   const rows = Array.from(messagesEl.querySelectorAll(".msg-row"));
+  refreshReceipts();
+  maybeMarkRead();
+  if (chatSearchQuery) applyChatSearch(false);
 
   if (msgAnim.chatId !== currentChatId) {
     msgAnim.chatId = currentChatId;
@@ -1452,6 +1987,10 @@ function finishMessagesRender(snap) {
 
   const fresh = rows.filter((r) => !msgAnim.seen.has(r.dataset.msgId));
   fresh.forEach((r) => msgAnim.seen.add(r.dataset.msgId));
+  if (!snap.nearBottom) {
+    unreadWhileAway += fresh.filter((r) => !r.classList.contains("me")).length;
+  }
+  requestAnimationFrame(updateScrollBottomBtn);
 
   rows.forEach((row) => {
     const prev = msgAnim.reactions.get(row.dataset.msgId);
@@ -1521,7 +2060,7 @@ function renderPlainMessages(msgs, isMineFn) {
     msgAnim.seen = new Set();
     return;
   }
-  msgs.forEach((msg) => renderMessage(msg, isMineFn(msg)));
+  renderMessageList(msgs, (msg) => renderMessage(msg, isMineFn(msg)));
   finishMessagesRender(snap);
 }
 
@@ -1539,6 +2078,7 @@ function openSavedChat() {
   chatSub.textContent = "Заметки, которые видите только вы";
 
   renderChats();
+  restoreDraft();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка…</div>';
   unsubMessages = listenSavedMessages(currentUser.uid, (msgs) => renderPlainMessages(msgs, () => true));
 }
@@ -1582,6 +2122,8 @@ function openContactChat(chatId, otherUid, profile) {
   chatSub.textContent = "@" + profile.username;
   editContactBtn.classList.remove("hidden");
   chatMenuBtn.classList.remove("hidden");
+  refreshChatChrome();
+  restoreDraft();
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
@@ -1627,6 +2169,8 @@ function openGroupChat(group) {
 
   const canPost = group.type === "group" || (group.admins || []).includes(currentUser.uid);
   composer.classList.toggle("hidden", !canPost);
+  refreshChatChrome();
+  if (canPost) restoreDraft();
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
@@ -1661,11 +2205,11 @@ async function renderGroupMessagesList(msgs) {
     msgAnim.seen = new Set();
     return;
   }
-  for (const msg of msgs) {
+  renderMessageList(msgs, (msg) => {
     const isMine = msg.senderId === currentUser.uid;
     const senderName = isMine ? null : groupSenderCache.get(msg.senderId)?.displayName || "—";
     renderMessage(msg, isMine, senderName);
-  }
+  });
   finishMessagesRender(snap);
 }
 
@@ -1795,12 +2339,17 @@ function scrollToMessage(messageId) {
 
 function renderBubbleContent(bubble, msg) {
   bubble.innerHTML = "";
+  if (msg.call) {
+    renderCallBubble(bubble, msg);
+    return;
+  }
   if (msg.imageUrl) {
     const img = document.createElement("img");
     img.className = "msg-image";
     img.src = msg.imageUrl;
     img.alt = "";
-    img.addEventListener("click", () => window.open(msg.imageUrl, "_blank"));
+    img.loading = "lazy";
+    img.addEventListener("click", () => openLightbox(img));
     bubble.appendChild(img);
   } else if (msg.voiceUrl) {
     const audio = document.createElement("audio");
@@ -1847,7 +2396,7 @@ function renderBubbleContent(bubble, msg) {
   if (msg.text && !(hasAttachment && isPlaceholderCaption)) {
     const p = document.createElement("div");
     p.className = "bubble-text";
-    p.textContent = msg.text;
+    appendLinkified(p, msg.text);
     bubble.appendChild(p);
   }
 }
@@ -1984,15 +2533,12 @@ function renderMessage(msg, isMine, senderName) {
   row.className = "msg-row" + (isMine ? " me" : "");
   row.dataset.msgId = msg.id;
   row.dataset.rx = JSON.stringify(msg.reactions || {});
+  row.dataset.ts = String(msg.createdAt?.toMillis?.() || 0);
 
-  const actionsHTML =
-    canReply || canEdit || canDelete
-      ? `<div class="msg-actions">
-          ${canReply ? '<button type="button" class="msg-reply-btn" title="Ответить">↩</button>' : ""}
-          ${canEdit ? '<button type="button" class="msg-edit-btn" title="Редактировать">✎</button>' : ""}
-          ${canDelete ? '<button type="button" class="msg-delete-btn" title="Удалить">🗑</button>' : ""}
-        </div>`
-      : "";
+  const actionsHTML = `<div class="msg-actions">
+      ${canReply ? '<button type="button" class="msg-reply-btn" title="Ответить">↩</button>' : ""}
+      <button type="button" class="msg-more-btn" title="Ещё">⋯</button>
+    </div>`;
 
   row.innerHTML = `
     ${actionsHTML}
@@ -2004,6 +2550,12 @@ function renderMessage(msg, isMine, senderName) {
     </div>
   `;
   if (senderName) row.querySelector(".msg-sender").textContent = senderName;
+  if (msg.forwardedFrom?.name) {
+    const fwd = document.createElement("div");
+    fwd.className = "msg-forwarded";
+    fwd.textContent = `↪ Переслано от ${msg.forwardedFrom.name}`;
+    row.querySelector(".bubble").before(fwd);
+  }
 
   if (msg.replyTo) {
     const quote = row.querySelector(".msg-reply-quote");
@@ -2022,40 +2574,316 @@ function renderMessage(msg, isMine, senderName) {
     tag.textContent = "(ред.)";
     timeEl.appendChild(tag);
   }
+  if (currentChatData()?.pinned?.id === msg.id) {
+    const pin = document.createElement("span");
+    pin.className = "msg-pin-tag";
+    pin.textContent = "📌";
+    timeEl.prepend(pin);
+  }
+  if (isMine && ["contact", "group", "channel"].includes(currentChatType)) {
+    const tick = document.createElement("span");
+    tick.className = "msg-tick";
+    timeEl.appendChild(tick);
+  }
 
   if (canReact) {
     row.querySelector(".msg-group").appendChild(buildReactionsBar(msg, ops.react));
   }
-  if (touchOnly && (canReact || canReply || canEdit || canDelete)) {
-    row.addEventListener("click", (e) => {
-      if (e.target.closest("button, a, img, audio, video, textarea")) return;
-      const opening = !row.classList.contains("actions-open");
-      messagesEl.querySelectorAll(".msg-row.actions-open").forEach((r) => r.classList.remove("actions-open"));
-      row.classList.toggle("actions-open", opening);
-    });
-  }
+  const menuCtx = { row, msg, isMine, ops, canEdit, canDelete, canReact, canReply };
   if (canReply) {
     row.querySelector(".msg-reply-btn").addEventListener("click", () => startReply(msg));
   }
-  if (canEdit) {
-    row.querySelector(".msg-edit-btn").addEventListener("click", () => startEditingMessage(row, msg, ops.edit));
-  }
-  if (canDelete) {
-    row.querySelector(".msg-delete-btn").addEventListener("click", async () => {
-      if (!confirm("Удалить сообщение?")) return;
-      await dissolveRow(row);
-      try {
-        await ops.del(msg.id);
-      } catch (err) {
-        console.error(err);
-        row.getAnimations({ subtree: true }).forEach((a) => a.cancel());
-        row.style.overflow = "";
-        alert(err.message || "Не удалось удалить");
-      }
+  row.querySelector(".msg-more-btn").addEventListener("click", (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    openMessageMenu(menuCtx, r.left, r.bottom + 6);
+  });
+  const bubbleArea = row.querySelector(".msg-group");
+  onContextGesture(bubbleArea, (x, y) => openMessageMenu(menuCtx, x, y));
+  if (touchOnly) {
+    // Tap a bubble to get its actions (links, media and buttons keep working).
+    bubbleArea.addEventListener("click", (e) => {
+      if (e.target.closest("button, a, img, audio, video, textarea, .msg-reply-quote")) return;
+      const r = row.querySelector(".bubble").getBoundingClientRect();
+      openMessageMenu(menuCtx, isMine ? r.right - 220 : r.left, r.bottom + 6);
     });
   }
 
   messagesEl.appendChild(row);
+}
+
+function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, canReply }, x, y) {
+  const hasText = !!msg.text && !msg.call && !DEFAULT_CAPTIONS.includes(msg.text);
+  const pinnedId = currentChatData()?.pinned?.id;
+  const reactions = canReact
+    ? {
+        emojis: REACTION_EMOJIS,
+        mine: new Set(Object.entries(msg.reactions || {}).filter(([, u]) => (u || []).includes(currentUser.uid)).map(([e]) => e)),
+        onPick: (emoji, btn) => {
+          const mine = (msg.reactions?.[emoji] || []).includes(currentUser.uid);
+          if (!mine) burst(...centerOf(btn), { content: emoji, count: 8, spread: 60 });
+          ops.react(msg.id, emoji, !mine);
+        },
+      }
+    : null;
+  openContextMenu({
+    x,
+    y,
+    reactions,
+    items: [
+      canReply && { label: "Ответить", icon: MI.reply, onClick: () => startReply(msg) },
+      hasText && {
+        label: "Копировать",
+        icon: MI.copy,
+        onClick: () =>
+          navigator.clipboard
+            ?.writeText(msg.text)
+            .then(() => toast("Текст скопирован", { icon: "📋" }))
+            .catch(() => toast("Не удалось скопировать", { tone: "error" })),
+      },
+      !msg.call && { label: "Переслать", icon: MI.forward, onClick: () => openForward(msg) },
+      canPinInCurrentChat() && {
+        label: pinnedId === msg.id ? "Открепить" : "Закрепить",
+        icon: MI.pin,
+        onClick: () => setPinnedMessage(pinnedId === msg.id ? null : msg),
+      },
+      canEdit && hasText && { label: "Изменить", icon: MI.edit, onClick: () => startEditingMessage(row, msg, ops.edit) },
+      canDelete && { label: "Удалить", icon: MI.trash, danger: true, onClick: () => deleteMessageRow(row, msg, ops) },
+    ],
+  });
+}
+
+async function deleteMessageRow(row, msg, ops) {
+  if (!confirm("Удалить сообщение?")) return;
+  await dissolveRow(row);
+  try {
+    await ops.del(msg.id);
+    if (currentChatData()?.pinned?.id === msg.id) setPinnedMessage(null);
+  } catch (err) {
+    console.error(err);
+    row.getAnimations({ subtree: true }).forEach((a) => a.cancel());
+    row.style.overflow = "";
+    toast(err.message || "Не удалось удалить", { tone: "error" });
+  }
+}
+
+// ---------- Forwarding ----------
+
+let forwardingMsg = null;
+
+function forwardTargets() {
+  const me = currentUser.uid;
+  const list = [
+    {
+      key: SAVED_ID,
+      name: "Избранное",
+      sub: "Заметки",
+      avatar: `<div class="avatar pinned-avatar pa-saved">${SAVED_ICON}</div>`,
+      send: (text, attachment, extra) => addSavedMessage(me, text, null, { ...extra, ...(attachment?.fields || {}) }),
+    },
+  ];
+  chats
+    .filter((c) => !(c.hiddenFor || []).includes(me))
+    .forEach((c) => {
+      const otherUid = c.participants.find((p) => p !== me);
+      if (isBlocked(otherUid)) return;
+      const contact = contactsMap.get(otherUid);
+      const profile = contact?.profile || profileCache.get(otherUid)?.profile;
+      if (!profile) return;
+      list.push({
+        key: c.id,
+        name: contact ? contactDisplayName(contact.alias, profile) : profile.displayName,
+        sub: "@" + profile.username,
+        avatar: visibleAvatarHTML(profile, otherUid),
+        send: (text, attachment, extra) => sendMessage(c.id, me, text, attachment, null, extra),
+      });
+    });
+  groups
+    .filter((g) => g.type === "group" || (g.admins || []).includes(me))
+    .forEach((g) => {
+      list.push({
+        key: g.id,
+        name: g.name,
+        sub: g.type === "channel" ? "Канал" : pluralMembers((g.members || []).length),
+        avatar: groupAvatarHTML(g),
+        send: (text, attachment, extra) => sendGroupMessage(g.id, me, text, attachment, null, extra, g.members || []),
+      });
+    });
+  return list;
+}
+
+function renderForwardList() {
+  const q = forwardSearch.value.trim().toLowerCase();
+  forwardList.innerHTML = "";
+  forwardTargets()
+    .filter((t) => !q || t.name.toLowerCase().includes(q) || t.sub.toLowerCase().includes(q))
+    .forEach((t) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "pick-item";
+      b.innerHTML = `${t.avatar}<div class="pick-item-meta"><div class="pick-item-name"></div><div class="pick-item-sub"></div></div>`;
+      b.querySelector(".pick-item-name").textContent = t.name;
+      b.querySelector(".pick-item-sub").textContent = t.sub;
+      b.addEventListener("click", async () => {
+        const msg = forwardingMsg;
+        if (!msg) return;
+        b.disabled = true;
+        const fields = {};
+        ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize"].forEach((k) => {
+          if (msg[k] !== undefined && msg[k] !== null) fields[k] = msg[k];
+        });
+        const attachment = Object.keys(fields).length ? { fields, previewText: replyPreviewText(msg), defaultCaption: msg.text } : null;
+        const extra = { forwardedFrom: { name: msg.forwardedFrom?.name || replySenderLabel(msg) } };
+        try {
+          await t.send(msg.text || replyPreviewText(msg), attachment, extra);
+          b.classList.add("sent");
+          burst(...centerOf(b), { count: 10, spread: 50, colors: ["#7ff0b4", "#2fcf7f", ...accentColors()] });
+        } catch (err) {
+          console.error(err);
+          b.disabled = false;
+          toast("Не удалось переслать", { tone: "error" });
+        }
+      });
+      forwardList.appendChild(b);
+    });
+}
+
+function openForward(msg) {
+  forwardingMsg = msg;
+  forwardSearch.value = "";
+  renderForwardList();
+  showOverlay(forwardOverlay);
+  stagger(forwardList.children, { y: 14, step: 30, delay: 100 });
+}
+
+forwardSearch.addEventListener("input", renderForwardList);
+document.getElementById("forward-close-btn").addEventListener("click", () => hideOverlay(forwardOverlay));
+forwardOverlay.addEventListener("click", (e) => {
+  if (e.target === forwardOverlay) hideOverlay(forwardOverlay);
+});
+
+// ---------- Photo viewer ----------
+
+let lightboxSource = null;
+function openLightbox(img) {
+  lightboxSource = img;
+  lightboxImg.src = img.src;
+  lightboxDownload.href = img.src;
+  lightboxEl.classList.remove("hidden");
+  const from = img.getBoundingClientRect();
+  const to = lightboxImg.getBoundingClientRect();
+  animate(lightboxEl, [{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: "ease-out" });
+  if (to.width && from.width) {
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    animate(lightboxImg, [{ transform: `translate(${dx}px, ${dy}px) scale(${from.width / to.width})` }, { transform: "none" }], {
+      spring: "smooth",
+    });
+  }
+}
+
+function closeLightbox() {
+  if (lightboxEl.classList.contains("hidden")) return;
+  const done = () => {
+    lightboxEl.classList.add("hidden");
+    lightboxEl.getAnimations({ subtree: true }).forEach((a) => a.cancel());
+  };
+  const from = lightboxImg.getBoundingClientRect();
+  const to = lightboxSource?.isConnected ? lightboxSource.getBoundingClientRect() : null;
+  if (to && to.width && !reducedMotion) {
+    const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+    const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+    lightboxImg.animate([{ transform: "none" }, { transform: `translate(${dx}px, ${dy}px) scale(${to.width / from.width})` }], {
+      duration: 300,
+      easing: "cubic-bezier(.4,0,.2,1)",
+      fill: "forwards",
+    });
+  }
+  lightboxEl
+    .animate([{ opacity: 1 }, { opacity: 0 }], { duration: reducedMotion ? 60 : 300, easing: "ease-in", fill: "forwards" })
+    .finished.then(done, done);
+}
+
+lightboxEl.addEventListener("click", (e) => {
+  if (!e.target.closest(".lightbox-bar")) closeLightbox();
+});
+document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
+
+// ---------- Links ----------
+
+const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]|www\.[^\s<>"']+[^\s<>"'.,;:!?)\]])/gi;
+function appendLinkified(parent, text) {
+  let last = 0;
+  text.replace(URL_RE, (match, _g, offset) => {
+    if (offset > last) parent.append(text.slice(last, offset));
+    const a = document.createElement("a");
+    a.href = match.startsWith("http") ? match : "https://" + match;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = match;
+    parent.append(a);
+    last = offset + match.length;
+    return match;
+  });
+  if (last < text.length) parent.append(text.slice(last));
+}
+
+// ---------- Date separators ----------
+
+function dayLabel(ms) {
+  const d = new Date(ms);
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86400000);
+  if (d.toDateString() === today.toDateString()) return "Сегодня";
+  if (d.toDateString() === yesterday.toDateString()) return "Вчера";
+  const opts = { day: "numeric", month: "long" };
+  if (d.getFullYear() !== today.getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("ru-RU", opts);
+}
+
+function renderMessageList(msgs, render) {
+  let prevDay = "";
+  msgs.forEach((msg) => {
+    const ms = msg.createdAt?.toMillis?.() || Date.now();
+    const day = new Date(ms).toDateString();
+    if (day !== prevDay) {
+      prevDay = day;
+      const sep = document.createElement("div");
+      sep.className = "date-sep";
+      sep.textContent = dayLabel(ms);
+      messagesEl.appendChild(sep);
+    }
+    render(msg);
+  });
+}
+
+// ---------- Call log bubbles ----------
+
+function renderCallBubble(bubble, msg) {
+  const call = msg.call;
+  const mine = msg.senderId === currentUser.uid;
+  const video = call.kind === "video";
+  const bad = !mine && call.result !== "completed";
+  const titles = {
+    completed: mine ? "Исходящий" : "Входящий",
+    missed: mine ? "Без ответа" : "Пропущенный",
+    declined: mine ? "Отклонённый" : "Отклонённый",
+    busy: mine ? "Абонент занят" : "Пропущенный",
+    cancelled: mine ? "Отменённый" : "Пропущенный",
+  };
+  bubble.classList.add("call-bubble");
+  bubble.innerHTML = `
+    <div class="call-bubble-icon${bad || (mine && call.result !== "completed") ? " bad" : ""}">${video ? MI.video : MI.phone}</div>
+    <div class="call-bubble-meta">
+      <div class="call-bubble-title"></div>
+      <div class="call-bubble-sub"></div>
+    </div>
+    <button type="button" class="call-bubble-again" title="Перезвонить">${video ? MI.video : MI.phone}</button>`;
+  bubble.querySelector(".call-bubble-title").textContent = `${titles[call.result] || "Звонок"} ${video ? "видеозвонок" : "звонок"}`;
+  bubble.querySelector(".call-bubble-sub").textContent =
+    call.result === "completed" && call.duration ? fmtDuration(call.duration) : fmtTime(msg.createdAt);
+  const again = bubble.querySelector(".call-bubble-again");
+  if (currentChatType !== "contact" || isBlocked(currentOtherUid)) again.remove();
+  else again.addEventListener("click", () => callCurrentContact(call.kind));
 }
 
 // The bubble shatters into sparks and the gap it leaves closes up.
@@ -2107,12 +2935,23 @@ msgInput.addEventListener("input", () => {
   msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
   updateComposerButtons();
 
+  saveDraftSoon();
   if (currentChatType === "contact" && myProfile?.privacy?.typingVisibility !== false) {
-    setTyping(currentChatId, currentUser.uid, true);
+    // One write per ~2.5 s is enough for "печатает…" on the other side.
+    if (Date.now() - lastTypingPing > 2500) {
+      lastTypingPing = Date.now();
+      setTyping(currentChatId, currentUser.uid, true);
+    }
     clearTimeout(typingClearTimer);
-    typingClearTimer = setTimeout(() => setTyping(currentChatId, currentUser.uid, false), 3000);
+    typingClearTimer = setTimeout(() => {
+      lastTypingPing = 0;
+      setTyping(currentChatId, currentUser.uid, false);
+    }, 3500);
   }
 });
+
+let lastTypingPing = 0;
+const saveDraftSoon = debounce(() => writeDraft(currentChatId, msgInput.value), 400);
 
 async function doSendMessage(attachment) {
   const text = msgInput.value.trim();
@@ -2123,6 +2962,8 @@ async function doSendMessage(attachment) {
     : null;
   msgInput.value = "";
   msgInput.style.height = "auto";
+  writeDraft(currentChatId, "");
+  lastTypingPing = 0;
   if (text && !attachment && !reducedMotion && !sendBtn.classList.contains("hidden")) {
     // Let the arrow fly off before the send button morphs back into the mic.
     sendBtn.classList.remove("launch");
@@ -2146,13 +2987,17 @@ async function doSendMessage(attachment) {
     } else if (currentChatType === "notifications") {
       await addBroadcast(currentUser.uid, text);
     } else if (currentChatType === "group" || currentChatType === "channel") {
-      await sendGroupMessage(currentChatId, currentUser.uid, text, attachment, replyPayload);
+      await sendGroupMessage(currentChatId, currentUser.uid, text, attachment, replyPayload, null, currentGroupRef?.members || []);
     } else {
       await sendMessage(currentChatId, currentUser.uid, text, attachment, replyPayload);
     }
   } catch (err) {
     console.error(err);
-    alert("Не удалось отправить сообщение: " + err.message);
+    if (err?.code === "permission-denied" && currentChatType === "contact") {
+      toast("Сообщение не доставлено: пользователь ограничил вам отправку сообщений", { tone: "error", duration: 4500 });
+    } else {
+      toast("Не удалось отправить сообщение: " + (err.message || ""), { tone: "error", duration: 4500 });
+    }
   } finally {
     sendBtn.disabled = false;
   }
@@ -2385,6 +3230,12 @@ chatMenuDeleteBtn.addEventListener("click", async () => {
 });
 
 function closeCurrentChatView() {
+  if (currentChatId) writeDraft(currentChatId, msgInput.value);
+  closeChatSearch(true);
+  scrollBottomBtn.classList.add("hidden");
+  pinnedBar.classList.add("hidden");
+  blockedBar.classList.add("hidden");
+  chatSection.classList.remove("has-pinned");
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
   unsubMessages = unsubChatDoc = null;
@@ -2427,8 +3278,21 @@ function beep() {
   }
 }
 
+// Chat docs also change for typing indicators, read receipts, pins… — only
+// notify once per new last message.
+const notifiedAt = new Map();
+function isNewLastMessage(id, data) {
+  const at = data.lastMessageAt?.toMillis?.();
+  if (!at) return false;
+  if ((notifiedAt.get(id) || 0) >= at) return false;
+  notifiedAt.set(id, at);
+  return true;
+}
+
 async function maybeNotify(chatData) {
   if (!chatData.lastMessageSenderId || chatData.lastMessageSenderId === currentUser.uid) return;
+  if (!isNewLastMessage(chatData.id, chatData)) return;
+  if (isChatMuted(chatData.id) || isBlocked(chatData.lastMessageSenderId)) return;
   const isViewingThisChat =
     currentChatId &&
     chatData.participants &&
@@ -2452,6 +3316,8 @@ async function maybeNotify(chatData) {
 
 async function maybeNotifyGroup(groupId, groupData) {
   if (!groupData.lastMessageSenderId || groupData.lastMessageSenderId === currentUser.uid) return;
+  if (!isNewLastMessage(groupId, groupData)) return;
+  if (isChatMuted(groupId)) return;
   const isViewingThisGroup = currentChatId === groupId && !document.hidden;
   if (isViewingThisGroup) return;
 
@@ -2971,6 +3837,375 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
   }
 });
 
+// ---------- Search inside the open chat ----------
+
+let chatSearchQuery = "";
+let chatSearchHits = [];
+let chatSearchIndex = -1;
+
+function openChatSearch() {
+  chatSearchBar.classList.remove("hidden");
+  chatSection.classList.add("has-search");
+  animate(
+    chatSearchBar,
+    [
+      { opacity: 0, transform: "translateY(-16px) scale(.9)", filter: "blur(8px)" },
+      { opacity: 1, transform: "none", filter: "blur(0px)" },
+    ],
+    { spring: "bouncy" }
+  );
+  chatSearchInput.value = "";
+  chatSearchCount.textContent = "";
+  setTimeout(() => chatSearchInput.focus(), 60);
+}
+
+function closeChatSearch(silent = false) {
+  if (chatSearchBar.classList.contains("hidden")) return;
+  chatSearchBar.classList.add("hidden");
+  chatSection.classList.remove("has-search");
+  const had = !!chatSearchQuery;
+  chatSearchQuery = "";
+  chatSearchHits = [];
+  chatSearchIndex = -1;
+  if (had && !silent) rerenderMessages();
+}
+
+function clearSearchMarks() {
+  messagesEl.querySelectorAll("mark.search-mark").forEach((m) => m.replaceWith(document.createTextNode(m.textContent)));
+  messagesEl.querySelectorAll(".bubble-text").forEach((t) => t.normalize());
+  messagesEl.querySelectorAll(".search-hit, .search-current").forEach((r) => r.classList.remove("search-hit", "search-current"));
+}
+
+function markTextMatches(root, q) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach((node) => {
+    const text = node.textContent;
+    const lower = text.toLowerCase();
+    let idx = lower.indexOf(q);
+    if (idx < 0) return;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    while (idx >= 0) {
+      frag.append(text.slice(last, idx));
+      const mark = document.createElement("mark");
+      mark.className = "search-mark";
+      mark.textContent = text.slice(idx, idx + q.length);
+      frag.append(mark);
+      last = idx + q.length;
+      idx = lower.indexOf(q, last);
+    }
+    frag.append(text.slice(last));
+    node.replaceWith(frag);
+  });
+}
+
+function applyChatSearch(jump) {
+  clearSearchMarks();
+  const q = chatSearchQuery.toLowerCase();
+  if (!q) {
+    chatSearchCount.textContent = "";
+    chatSearchHits = [];
+    return;
+  }
+  chatSearchHits = Array.from(messagesEl.querySelectorAll(".msg-row")).filter((row) => {
+    const text = row.querySelector(".bubble-text");
+    if (!text || !text.textContent.toLowerCase().includes(q)) return false;
+    markTextMatches(text, q);
+    row.classList.add("search-hit");
+    return true;
+  });
+  if (!chatSearchHits.length) {
+    chatSearchIndex = -1;
+    chatSearchCount.textContent = "Нет совпадений";
+    return;
+  }
+  if (jump || chatSearchIndex < 0 || chatSearchIndex >= chatSearchHits.length) chatSearchIndex = chatSearchHits.length - 1;
+  focusSearchHit(jump);
+}
+
+function focusSearchHit(scroll = true) {
+  const row = chatSearchHits[chatSearchIndex];
+  if (!row) return;
+  chatSearchHits.forEach((r) => r.classList.toggle("search-current", r === row));
+  chatSearchCount.textContent = `${chatSearchIndex + 1} из ${chatSearchHits.length}`;
+  if (scroll) {
+    row.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "center" });
+    animate(row.querySelector(".bubble"), [{ transform: "scale(1.06)" }, { transform: "none" }], { spring: "jelly" });
+  }
+}
+
+const runChatSearch = debounce(() => {
+  chatSearchQuery = chatSearchInput.value.trim();
+  applyChatSearch(true);
+}, 180);
+
+chatSearchBtn.addEventListener("click", () => {
+  if (chatSearchBar.classList.contains("hidden")) openChatSearch();
+  else closeChatSearch();
+});
+chatSearchInput.addEventListener("input", runChatSearch);
+chatSearchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    document.getElementById(e.shiftKey ? "chat-search-next" : "chat-search-prev").click();
+  } else if (e.key === "Escape") {
+    e.stopPropagation();
+    closeChatSearch();
+  }
+});
+document.getElementById("chat-search-prev").addEventListener("click", () => {
+  if (!chatSearchHits.length) return;
+  chatSearchIndex = (chatSearchIndex - 1 + chatSearchHits.length) % chatSearchHits.length;
+  focusSearchHit();
+});
+document.getElementById("chat-search-next").addEventListener("click", () => {
+  if (!chatSearchHits.length) return;
+  chatSearchIndex = (chatSearchIndex + 1) % chatSearchHits.length;
+  focusSearchHit();
+});
+document.getElementById("chat-search-close").addEventListener("click", () => closeChatSearch());
+
+// ---------- Calls ----------
+
+function callCurrentContact(kind) {
+  if (currentChatType !== "contact" || !currentOtherUid) return;
+  if (isBlocked(currentOtherUid)) {
+    toast("Сначала разблокируйте пользователя", { tone: "error" });
+    return;
+  }
+  startCall({ chatId: currentChatId, otherUid: currentOtherUid, profile: currentOtherProfile, kind });
+}
+
+callAudioBtn.addEventListener("click", () => callCurrentContact("audio"));
+callVideoBtn.addEventListener("click", () => callCurrentContact("video"));
+
+const CALL_LOG_TEXT = {
+  completed: (k, d) => `${k === "video" ? "🎥 Видеозвонок" : "📞 Звонок"} · ${fmtDuration(d)}`,
+  missed: (k) => (k === "video" ? "🎥 Пропущенный видеозвонок" : "📞 Пропущенный звонок"),
+  declined: (k) => (k === "video" ? "🎥 Отклонённый видеозвонок" : "📞 Отклонённый звонок"),
+  busy: (k) => (k === "video" ? "🎥 Пропущенный видеозвонок" : "📞 Пропущенный звонок"),
+  cancelled: (k) => (k === "video" ? "🎥 Отменённый видеозвонок" : "📞 Отменённый звонок"),
+};
+
+let callsReady = false;
+function setupCalls() {
+  if (callsReady) return;
+  callsReady = true;
+  initCalls({
+    me: currentUser.uid,
+    getProfile: async (uid) => contactsMap.get(uid)?.profile || (await loadProfile(uid)),
+    avatarHTML: (profile, uid) => visibleAvatarHTML(profile, uid),
+    isBlocked,
+    onCallLog: ({ chatId, kind, result, duration }) => {
+      const text = (CALL_LOG_TEXT[result] || CALL_LOG_TEXT.cancelled)(kind, duration);
+      return sendMessage(chatId, currentUser.uid, text, null, null, { call: { kind, result, duration } });
+    },
+    onMissedCall: (profile) => toast(`Пропущенный звонок от ${profile?.displayName || "контакта"}`, { icon: "📞", duration: 4500 }),
+    notify: (title, body) => {
+      const prefs = myProfile?.notifications || {};
+      if (prefs.muteAll || !document.hidden) return;
+      if (prefs.desktop && "Notification" in window && Notification.permission === "granted") new Notification(title, { body });
+    },
+  });
+}
+
+// ---------- Chat menu: mute / pin / block / leave ----------
+
+const chatMenuSearchBtn = document.getElementById("chat-menu-search-btn");
+const chatMenuRenameBtn = document.getElementById("chat-menu-rename-btn");
+chatMenuSearchBtn.addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  openChatSearch();
+});
+chatMenuRenameBtn.addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  editContactBtn.click();
+});
+
+chatMenuMuteBtn.addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  const muted = isChatMuted(currentChatId);
+  toggleUserList("mutedChats", currentChatId, !muted, { success: muted ? "Уведомления включены" : "Уведомления выключены" });
+});
+chatMenuPinBtn.addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  const pinned = isChatPinned(currentChatId);
+  toggleUserList("pinnedChats", currentChatId, !pinned, { success: pinned ? "Чат откреплён" : "Чат закреплён" });
+});
+chatMenuBlockBtn.addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  setBlocked(currentOtherUid, !isBlocked(currentOtherUid));
+});
+chatMenuLeaveBtn.addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  leaveCurrentGroup();
+});
+blockedBarUnblock.addEventListener("click", () => setBlocked(currentOtherUid, false));
+
+function setBlocked(uid, block) {
+  if (!uid) return;
+  if (block && !confirm("Заблокировать пользователя? Он не сможет писать вам и звонить.")) return;
+  toggleUserList("blocked", uid, block, { success: block ? "Пользователь заблокирован" : "Пользователь разблокирован" });
+}
+
+async function leaveCurrentGroup() {
+  const group = currentGroupRef;
+  if (!group) return;
+  const what = group.type === "channel" ? "канал" : "группу";
+  if (!confirm(`Покинуть ${what} «${group.name}»?`)) return;
+  try {
+    await leaveGroup(group.id, currentUser.uid);
+    hideOverlay(profileViewOverlay);
+    closeCurrentChatView();
+    toast(group.type === "channel" ? "Вы покинули канал" : "Вы покинули группу");
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось выйти", { tone: "error" });
+  }
+}
+
+// ---------- Profile card actions + group members ----------
+
+function pvAction(label, icon, onClick, danger = false) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "pv-action" + (danger ? " danger" : "");
+  b.innerHTML = `${icon}<span></span>`;
+  b.querySelector("span").textContent = label;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function renderContactProfileActions(uid) {
+  profileViewActions.innerHTML = "";
+  profileMembers.classList.add("hidden");
+  if (!uid || uid === currentUser.uid) return;
+  const chatId = currentChatType === "contact" && currentOtherUid === uid ? currentChatId : null;
+  const blocked = isBlocked(uid);
+  if (chatId && !blocked) {
+    profileViewActions.append(
+      pvAction("Звонок", MI.phone, () => {
+        hideOverlay(profileViewOverlay);
+        callCurrentContact("audio");
+      }),
+      pvAction("Видео", MI.video, () => {
+        hideOverlay(profileViewOverlay);
+        callCurrentContact("video");
+      })
+    );
+  }
+  if (chatId) {
+    const muted = isChatMuted(chatId);
+    profileViewActions.append(
+      pvAction(muted ? "Со звуком" : "Без звука", muted ? MI.bell : MI.bellOff, () => {
+        toggleUserList("mutedChats", chatId, !muted);
+        renderContactProfileActions(uid);
+      })
+    );
+  }
+  profileViewActions.append(
+    pvAction(
+      blocked ? "Разблок." : "Блок",
+      MI.block,
+      () => {
+        setBlocked(uid, !blocked);
+        setTimeout(() => renderContactProfileActions(uid), 50);
+      },
+      !blocked
+    )
+  );
+}
+
+async function renderGroupMembers(group) {
+  const me = currentUser.uid;
+  const isAdmin = (group.admins || []).includes(me);
+  const canAdd = group.type === "group" || isAdmin;
+  profileMembers.classList.remove("hidden");
+  profileMembersTitle.textContent = pluralMembers((group.members || []).length);
+  profileMembersAdd.classList.toggle("hidden", !canAdd);
+  profileMembersInput.value = "";
+  profileMembersResult.innerHTML = "";
+  profileMembersList.innerHTML = "";
+
+  profileViewActions.innerHTML = "";
+  const muted = isChatMuted(group.id);
+  profileViewActions.append(
+    pvAction(muted ? "Со звуком" : "Без звука", muted ? MI.bell : MI.bellOff, () => {
+      toggleUserList("mutedChats", group.id, !muted);
+      renderGroupMembers(currentGroupRef || group);
+    }),
+    pvAction("Выйти", MI.leave, leaveCurrentGroup, true)
+  );
+
+  const members = group.members || [];
+  const profiles = await Promise.all(members.map((uid) => (uid === me ? myProfile : contactsMap.get(uid)?.profile || loadProfile(uid))));
+  profileMembersList.innerHTML = "";
+  members
+    .map((uid, i) => ({ uid, profile: profiles[i] }))
+    .filter((m) => m.profile)
+    .sort((a, b) => ((group.admins || []).includes(b.uid) ? 1 : 0) - ((group.admins || []).includes(a.uid) ? 1 : 0))
+    .forEach(({ uid, profile }) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "pick-item";
+      b.innerHTML = `${visibleAvatarHTML(profile, uid)}<div class="pick-item-meta"><div class="pick-item-name"></div><div class="pick-item-sub"></div></div>`;
+      b.querySelector(".pick-item-name").textContent = uid === me ? `${profile.displayName} (вы)` : profile.displayName;
+      b.querySelector(".pick-item-sub").textContent = isRecentlyOnline(profile.lastSeenAt) ? "в сети" : "@" + profile.username;
+      if ((group.admins || []).includes(uid)) {
+        const badge = document.createElement("span");
+        badge.className = "pick-item-badge";
+        badge.textContent = uid === group.ownerId ? "владелец" : "админ";
+        b.appendChild(badge);
+      }
+      if (uid !== me) b.addEventListener("click", () => openContactProfile(uid, profile));
+      profileMembersList.appendChild(b);
+    });
+  stagger(profileMembersList.children, { y: 10, step: 25, delay: 60 });
+}
+
+const runMemberAddSearch = debounce(async (raw) => {
+  const q = raw.trim();
+  const group = currentGroupRef;
+  if (!q || !group) {
+    profileMembersResult.innerHTML = "";
+    return;
+  }
+  const result = await searchUser(q, currentUser.uid);
+  profileMembersResult.innerHTML = "";
+  if (!result || result.self) {
+    profileMembersResult.innerHTML = `<div class="search-empty">${result?.self ? "Это вы 🙂" : "Пользователь не найден"}</div>`;
+    return;
+  }
+  if ((group.members || []).includes(result.uid)) {
+    profileMembersResult.innerHTML = '<div class="search-empty">Уже в группе</div>';
+    return;
+  }
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "pick-item";
+  b.innerHTML = `${visibleAvatarHTML(result.profile, result.uid)}<div class="pick-item-meta"><div class="pick-item-name"></div><div class="pick-item-sub"></div></div><span class="pick-item-badge">Добавить</span>`;
+  b.querySelector(".pick-item-name").textContent = result.profile.displayName;
+  b.querySelector(".pick-item-sub").textContent = "@" + result.profile.username;
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      await addGroupMembers(group.id, [result.uid]);
+      b.classList.add("sent");
+      group.members = [...new Set([...(group.members || []), result.uid])];
+      toast(`${result.profile.displayName} добавлен(а)`);
+      setTimeout(() => renderGroupMembers(group), 600);
+    } catch (err) {
+      console.error(err);
+      b.disabled = false;
+      toast("Не удалось добавить", { tone: "error" });
+    }
+  });
+  profileMembersResult.appendChild(b);
+}, 350);
+profileMembersInput.addEventListener("input", () => runMemberAddSearch(profileMembersInput.value));
+
 // ---------- Motion & material wiring ----------
 
 document.getElementById("sidebar-brand-slot").innerHTML = brandMarkSVG("sidebar-brand breathe");
@@ -3007,6 +4242,18 @@ new ResizeObserver(() => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (activeCtx) {
+    closeContextMenu();
+    return;
+  }
+  if (!lightboxEl.classList.contains("hidden")) {
+    closeLightbox();
+    return;
+  }
+  if (!chatSearchBar.classList.contains("hidden")) {
+    closeChatSearch();
+    return;
+  }
   if (!storyViewerOverlay.classList.contains("hidden")) {
     closeStoryViewer();
     return;

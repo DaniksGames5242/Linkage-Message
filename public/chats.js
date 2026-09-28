@@ -16,6 +16,7 @@ import {
   deleteField,
   arrayUnion,
   arrayRemove,
+  increment,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { chatIdFor } from "./utils.js";
 
@@ -72,7 +73,8 @@ export function listenMessages(chatId, onChange, onError) {
   );
 }
 
-export async function sendMessage(chatId, senderId, text, attachment, replyTo) {
+// `extra` carries optional message metadata (forwardedFrom, call log, …).
+export async function sendMessage(chatId, senderId, text, attachment, replyTo, extra) {
   const trimmed = (text || "").trim();
   const payload = {
     text: trimmed || attachment?.defaultCaption || "",
@@ -82,7 +84,10 @@ export async function sendMessage(chatId, senderId, text, attachment, replyTo) {
   if (!payload.text) return;
   if (attachment) Object.assign(payload, attachment.fields);
   if (replyTo) payload.replyTo = replyTo;
+  if (extra) Object.assign(payload, extra);
 
+  // Chat ids are the two participant uids joined with "_" (see chatIdFor).
+  const others = chatId.split("_").filter((uid) => uid && uid !== senderId);
   await addDoc(collection(db, "chats", chatId, "messages"), payload);
   await setDoc(
     doc(db, "chats", chatId),
@@ -92,9 +97,23 @@ export async function sendMessage(chatId, senderId, text, attachment, replyTo) {
       lastMessageSenderId: senderId,
       typing: { [senderId]: deleteField() },
       hiddenFor: [],
+      unread: Object.fromEntries(others.map((uid) => [uid, increment(1)])),
     },
     { merge: true }
   );
+}
+
+// Clears my unread counter and moves my read marker (drives ✓✓ for the
+// other side).
+export async function markChatRead(chatId, uid) {
+  await updateDoc(doc(db, "chats", chatId), {
+    [`unread.${uid}`]: 0,
+    [`lastRead.${uid}`]: serverTimestamp(),
+  });
+}
+
+export async function setChatPinnedMessage(chatId, pinned) {
+  await updateDoc(doc(db, "chats", chatId), { pinned: pinned || deleteField() });
 }
 
 export async function editMessage(chatId, messageId, newText) {

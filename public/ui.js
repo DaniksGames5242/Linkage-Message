@@ -823,3 +823,36 @@ export function brandMarkSVG(cls = "") {
     <path class="bm-ring bm-link" d="M27.62 18.48 A14 14 0 0 1 35.47 23.97" stroke="url(#${id})" />
   </svg>`;
 }
+
+// ---------- Toasts ----------
+
+let toastHost = null;
+export function toast(text, { icon = "", duration = 2600, tone = "" } = {}) {
+  if (!toastHost) {
+    toastHost = document.createElement("div");
+    toastHost.className = "toast-host";
+    document.body.appendChild(toastHost);
+  }
+  const el = document.createElement("div");
+  el.className = "toast glass" + (tone ? ` toast-${tone}` : "");
+  el.innerHTML = `${icon ? `<span class="toast-icon">${icon}</span>` : ""}<span class="toast-text"></span>`;
+  el.querySelector(".toast-text").textContent = text;
+  toastHost.appendChild(el);
+  animate(
+    el,
+    [
+      { opacity: 0, transform: "translateY(-20px) scale(.8)", filter: "blur(8px)" },
+      { opacity: 1, transform: "none", filter: "blur(0px)" },
+    ],
+    { spring: "bouncy" }
+  );
+  setTimeout(() => {
+    el.animate(
+      [
+        { opacity: 1, transform: "none", filter: "blur(0px)" },
+        { opacity: 0, transform: "translateY(-12px) scale(.9)", filter: "blur(6px)" },
+      ],
+      { duration: 240, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" }
+    ).finished.then(() => el.remove(), () => el.remove());
+  }, duration);
+}

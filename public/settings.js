@@ -3,6 +3,8 @@ import {
   doc,
   updateDoc,
   runTransaction,
+  arrayUnion,
+  arrayRemove,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { normalizeUsername, isValidUsername } from "./utils.js";
 
@@ -45,4 +47,10 @@ export async function updatePrivacy(uid, privacy) {
 
 export async function updateNotifications(uid, notifications) {
   await updateDoc(doc(db, "users", uid), { notifications });
+}
+
+// Adds/removes a value in one of the per-user list fields
+// (pinnedChats, mutedChats, blocked).
+export async function toggleUserListValue(uid, field, value, add) {
+  await updateDoc(doc(db, "users", uid), { [field]: add ? arrayUnion(value) : arrayRemove(value) });
 }

@@ -30,6 +30,11 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt']);
     }
 
+    // True when `blocker` has `uid` in their personal block list.
+    function hasBlocked(blocker, uid) {
+      return uid in get(/databases/$(database)/documents/users/$(blocker)).data.get('blocked', []);
+    }
+
     function isMessageReactionEdit() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']);
     }
@@ -148,6 +153,39 @@ service cloud.firestore {
       }
     }
 
+    // ---------- calls/{callId} : 1:1 WebRTC call signalling ----------
+    match /calls/{callId} {
+      allow read: if isSignedIn()
+        && (resource.data.callerId == request.auth.uid || resource.data.calleeId == request.auth.uid);
+      allow create: if isSignedIn()
+        && request.resource.data.callerId == request.auth.uid
+        && request.resource.data.calleeId is string
+        && request.resource.data.calleeId != request.auth.uid
+        && request.resource.data.kind in ['audio', 'video']
+        && request.resource.data.status == 'ringing'
+        && !hasBlocked(request.resource.data.calleeId, request.auth.uid);
+      allow update: if isSignedIn()
+        && (resource.data.callerId == request.auth.uid || resource.data.calleeId == request.auth.uid)
+        && request.resource.data.callerId == resource.data.callerId
+        && request.resource.data.calleeId == resource.data.calleeId;
+      allow delete: if false;
+
+      match /candidates/{candidateId} {
+        allow read: if isSignedIn()
+          && request.auth.uid in [
+            get(/databases/$(database)/documents/calls/$(callId)).data.callerId,
+            get(/databases/$(database)/documents/calls/$(callId)).data.calleeId
+          ];
+        allow create: if isSignedIn()
+          && request.resource.data.from == request.auth.uid
+          && request.auth.uid in [
+            get(/databases/$(database)/documents/calls/$(callId)).data.callerId,
+            get(/databases/$(database)/documents/calls/$(callId)).data.calleeId
+          ];
+        allow update, delete: if false;
+      }
+    }
+
     // ---------- chats/{chatId} : 1:1 conversations ----------
     match /chats/{chatId} {
       allow read: if isSignedIn()
@@ -165,6 +203,8 @@ service cloud.firestore {
           && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
         allow create: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          && !hasBlocked(get(/databases/$(database)/documents/chats/$(chatId)).data.participants[0], request.auth.uid)
+          && !hasBlocked(get(/databases/$(database)/documents/chats/$(chatId)).data.participants[1], request.auth.uid)
           && request.resource.data.senderId == request.auth.uid
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
