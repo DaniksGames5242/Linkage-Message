@@ -57,6 +57,12 @@
 
       <div id="search-result" class="hidden"></div>
 
+      <div id="e2e-banner" class="glass hidden">
+        <span class="e2e-banner-icon">🔒</span>
+        <span class="e2e-banner-text">Включите сквозное шифрование — достаточно один раз ввести пароль</span>
+        <button type="button" class="small-btn" id="e2e-banner-btn">Включить</button>
+      </div>
+
       <div id="chat-list-scroll">
         <div id="chat-list-indicator"></div>
         <div id="chat-list"></div>
@@ -172,10 +178,13 @@
         </button>
         <input type="file" id="attach-input" class="hidden" multiple />
         <textarea id="msg-input" rows="1" placeholder="Написать сообщение…" autocomplete="off" data-i18n-ph="composer_placeholder"></textarea>
+        <button type="button" class="icon-btn" id="circle-btn" title="Видеосообщение (кружок)">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M15.5 12 10 15.2V8.8z" fill="currentColor"/></svg>
+        </button>
         <button type="button" class="icon-btn hidden" id="voice-btn" title="Голосовое сообщение">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
         </button>
-        <button type="submit" id="send-btn" class="hidden" title="Отправить">
+        <button type="submit" id="send-btn" class="hidden" title="Отправить (удерживайте — отправить позже)">
           <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
         </button>
       </form>
@@ -222,6 +231,10 @@
       <div class="profile-view-row hidden" id="profile-view-row-3">
         <div class="profile-view-label" id="profile-view-row-3-label"></div>
         <div id="profile-view-row-3-value"></div>
+      </div>
+      <div class="profile-view-row hidden" id="profile-view-e2e">
+        <div class="profile-view-label">Ключ шифрования</div>
+        <div id="profile-view-e2e-value"></div>
       </div>
       <div class="profile-view-actions" id="profile-view-actions"></div>
       <div class="profile-members hidden" id="profile-members">
@@ -332,6 +345,44 @@
       <video id="story-viewer-video" class="hidden" playsinline preload="auto"></video>
       <button type="button" class="story-nav story-nav-prev" id="story-prev-btn" aria-label="Назад"></button>
       <button type="button" class="story-nav story-nav-next" id="story-next-btn" aria-label="Вперёд"></button>
+    </div>
+  </div>
+
+  <!-- Unlock end-to-end encryption -->
+  <div id="e2e-overlay" class="hidden">
+    <div class="alias-panel e2e-panel">
+      <div class="e2e-hero">🔒</div>
+      <h3>Сквозное шифрование</h3>
+      <p class="setting-desc">Личные сообщения шифруются на вашем устройстве, и прочитать их можете только вы и собеседник. Введите пароль от аккаунта, чтобы открыть ключ шифрования на этом устройстве.</p>
+      <div class="field">
+        <label for="e2e-password">Пароль</label>
+        <div class="password-field">
+          <input id="e2e-password" type="password" autocomplete="current-password" />
+          <button type="button" class="password-toggle" id="e2e-password-toggle"></button>
+        </div>
+      </div>
+      <div class="auth-error" id="e2e-error"></div>
+      <div class="alias-actions">
+        <button type="button" class="small-btn secondary" id="e2e-cancel-btn">Позже</button>
+        <button type="button" class="small-btn" id="e2e-unlock-btn">Включить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Send later -->
+  <div id="schedule-overlay" class="hidden">
+    <div class="alias-panel schedule-panel">
+      <h3>📅 Отправить позже</h3>
+      <div class="schedule-quick" id="schedule-quick"></div>
+      <div class="field">
+        <label for="schedule-input">Дата и время</label>
+        <input id="schedule-input" type="datetime-local" />
+      </div>
+      <p class="setting-desc">Сообщение появится у собеседника в выбранное время.</p>
+      <div class="alias-actions">
+        <button type="button" class="small-btn secondary" id="schedule-cancel">Отмена</button>
+        <button type="button" class="small-btn" id="schedule-confirm">Запланировать</button>
+      </div>
     </div>
   </div>
 
@@ -573,6 +624,15 @@
               <div class="setting-desc">Меньше отступов между сообщениями</div>
             </div>
             <input type="checkbox" id="chats-compact" class="switch" />
+          </div>
+          <div class="field">
+            <label for="fx-quality">Качество эффектов (на этом устройстве)</label>
+            <select id="fx-quality">
+              <option value="auto">Авто</option>
+              <option value="max">Максимум</option>
+              <option value="lite">Экономный</option>
+            </select>
+            <div class="field-hint">«Авто» само переключается на экономный режим, если устройство не справляется. «Максимум» добавляет преломление стекла.</div>
           </div>
           <div class="field">
             <label for="chats-accent-color">Цвет акцента</label>

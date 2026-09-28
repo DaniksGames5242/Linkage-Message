@@ -2,7 +2,7 @@
 // Signalling goes through Firestore (calls.js); media flows peer-to-peer.
 
 import { newCallId, createCall, updateCall, listenCall, listenIncomingCalls, addCandidate, listenCandidates } from "./calls.js";
-import { animate, toast, reducedMotion } from "./ui.js";
+import { animate, toast, reducedMotion, pauseBackdrop } from "./ui.js";
 
 const RING_TIMEOUT_MS = 45 * 1000;
 const STALE_INCOMING_MS = 60 * 1000;
@@ -728,6 +728,10 @@ function showScreen(state) {
   }
   if (wasHidden) {
     el.overlay.classList.remove("hidden");
+    if (!el.overlay._bgPaused) {
+      el.overlay._bgPaused = true;
+      pauseBackdrop(true);
+    }
     animate(el.overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 350, easing: "ease-out" });
     animate(
       el.stage,
@@ -768,6 +772,10 @@ function hideOverlay() {
   // Background tabs may never finish the fade, so hide on a timer too.
   const hide = () => {
     if (call) return;
+    if (el.overlay._bgPaused) {
+      el.overlay._bgPaused = false;
+      pauseBackdrop(false);
+    }
     el.overlay.classList.add("hidden");
     el.overlay.getAnimations().forEach((a) => a.cancel());
   };

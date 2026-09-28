@@ -9,7 +9,10 @@ import {
   forgetSession,
   changePassword,
   deleteAccount,
+  verifyPassword,
 } from "./auth.js";
+import { e2eSupported, setupKeys, rewrapKeys, loadKeys, forgetKeys, hasKeys, chatKey, seal, open as openBox, fingerprint, myPublicKey } from "./e2e.js";
+import { recordCircle, buildVideoNote, circlesSupported } from "./circle.js";
 import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName } from "./contacts.js";
 import {
   ensureChat,
@@ -25,6 +28,9 @@ import {
   clearChatForMe,
   markChatRead,
   setChatPinnedMessage,
+  publishScheduled,
+  cancelScheduled,
+  editEncryptedMessage,
 } from "./chats.js";
 import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
 import { listenNotificationsFeed, addBroadcast } from "./notify.js";
@@ -42,6 +48,8 @@ import {
   setGroupPinnedMessage,
   addGroupMembers,
   leaveGroup,
+  publishScheduledGroup,
+  cancelScheduledGroup,
 } from "./groups.js";
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
@@ -98,6 +106,7 @@ import {
   reducedMotion,
   toast,
   progressToast,
+  probeFps,
 } from "./ui.js";
 
 const ADMIN_USERNAME = "danik";
@@ -343,6 +352,7 @@ let pendingGroupMembers = new Map(); // uid -> profile
 
 let currentClearedAt = 0; // ms threshold - messages at/before this are hidden from my view
 let currentChatRawMessages = [];
+let currentChatRawSource = []; // as stored (encrypted), for re-decrypting after unlock
 let editingMessageId = null;
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -443,6 +453,7 @@ function enterApp() {
   applyChatPrefs(myProfile.chatPrefs || {});
   playAppIntro();
   setupCalls();
+  initE2E().catch((err) => console.warn("E2E init failed:", err));
   listenContactsList();
   listenChatsList();
   listenGroupsList();
@@ -497,6 +508,9 @@ function playAppIntro() {
   animate(fabNewChat, [{ transform: "scale(0) rotate(-140deg)" }, { transform: "none" }], { spring: "jelly", delay: 750 });
   storiesStripEl.classList.add("strip-intro");
   setTimeout(() => storiesStripEl.classList.remove("strip-intro"), 2200);
+  // Once the intro has settled, check the device keeps up; if not (in
+  // "auto" mode) switch to economy effects.
+  setTimeout(() => probeFps(() => toast("Включён экономный режим эффектов — так будет плавнее", { icon: "⚡" })), 3500);
 }
 
 function onVisibilityChange() {
@@ -1019,6 +1033,7 @@ function listenChatsList() {
       chats = list;
       chatsLoadError = null;
       renderChats();
+      scheduleTick();
       if (currentChatType === "contact") onCurrentChatDataChanged();
       if (chatsInitialized) {
         changes.forEach((c) => {
@@ -1038,6 +1053,7 @@ function listenGroupsList() {
     (list, changes) => {
       groups = list;
       renderChats();
+      scheduleTick();
       if (currentChatType === "group" || currentChatType === "channel") onCurrentChatDataChanged();
       if (groupsInitialized) {
         changes.forEach((c) => {
@@ -1655,6 +1671,16 @@ async function renderChats() {
     return e && !e.pending && Date.now() - e.at > PROFILE_TTL_MS;
   });
   if (stale.length) Promise.all(stale.map(loadProfile)).then(() => renderChats());
+  // Decrypt end-to-end encrypted previews.
+  const previews = new Map();
+  await Promise.all(
+    combined
+      .filter((e) => e.kind === "contact" && e.data.lastEnc)
+      .map(async (e) => {
+        const p = await openPreview(e.data.id, e.data.lastEnc);
+        if (p) previews.set(e.data.id, p);
+      })
+  );
   if (token !== renderChatsToken) return; // a newer render superseded this one
 
   for (const entry of combined) {
@@ -1693,7 +1719,7 @@ async function renderChats() {
       chatId: chat.id,
       avatar: visibleAvatarHTML(profile, otherUid),
       name,
-      last: chat.lastMessage ? lastPrefix + chat.lastMessage : "Нет сообщений",
+      last: chat.lastMessage ? lastPrefix + (previews.get(chat.id) || chat.lastMessage) : "Нет сообщений",
       lastAt: chat.lastMessageAt,
       unread: unreadFor(chat),
       muted: isChatMuted(chat.id),
@@ -1821,6 +1847,7 @@ function refreshChatChrome() {
   const isContact = currentChatType === "contact";
   const isGroupish = currentChatType === "group" || currentChatType === "channel";
   const blocked = isContact && isBlocked(currentOtherUid);
+  chatSection.classList.toggle("e2e-on", isContact && isE2EChat(currentChatId));
   callAudioBtn.classList.toggle("hidden", !isContact || blocked);
   callVideoBtn.classList.toggle("hidden", !isContact || blocked);
 
@@ -1854,6 +1881,15 @@ function renderPinnedBar() {
   const pinned = currentChatData()?.pinned;
   if (pinned?.id) {
     pinnedBarText.textContent = pinned.text || "Сообщение";
+    if (pinned.enc && currentChatType === "contact") {
+      const chatId = currentChatId;
+      const key = keyForChat(chatId, currentOtherUid);
+      key &&
+        key
+          .then((k) => openBox(k, pinned.enc))
+          .then((c) => currentChatId === chatId && (pinnedBarText.textContent = c.text))
+          .catch(() => {});
+    }
     pinnedBar.dataset.id = pinned.id;
     pinnedBarUnpin.classList.toggle("hidden", !canPinInCurrentChat());
     if (pinnedBar.classList.contains("hidden") || pinnedBar.classList.contains("is-closing")) reveal(pinnedBar);
@@ -1871,7 +1907,11 @@ pinnedBar.addEventListener("click", (e) => {
 pinnedBarUnpin.addEventListener("click", () => setPinnedMessage(null));
 
 async function setPinnedMessage(msg) {
-  const payload = msg ? { id: msg.id, text: replyPreviewText(msg).slice(0, 120), senderName: replySenderLabel(msg) } : null;
+  let payload = msg ? { id: msg.id, text: replyPreviewText(msg).slice(0, 120), senderName: replySenderLabel(msg) } : null;
+  if (payload && currentChatType === "contact") {
+    const key = keyForChat(currentChatId, currentOtherUid);
+    if (key) payload = { id: payload.id, text: "🔒 Сообщение", senderName: "", enc: await seal(await key, { text: payload.text }) };
+  }
   try {
     if (currentChatType === "contact") await setChatPinnedMessage(currentChatId, payload);
     else await setGroupPinnedMessage(currentChatId, payload);
@@ -2183,10 +2223,16 @@ function openContactChat(chatId, otherUid, profile) {
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
+  rememberPubKey(otherUid, profile);
+  refreshPubKey(otherUid).then(() => currentChatId === chatId && refreshChatChrome());
   unsubMessages = listenMessages(chatId, (msgs) => {
     if (currentChatId !== chatId) return;
-    currentChatRawMessages = msgs;
-    rerenderMessages();
+    currentChatRawSource = msgs;
+    openMessages(chatId, msgs).then((list) => {
+      if (currentChatId !== chatId) return;
+      currentChatRawMessages = list;
+      rerenderMessages();
+    });
   });
   unsubChatDoc = listenChatDoc(chatId, (data) => {
     if (currentChatId !== chatId || !data) return;
@@ -2270,15 +2316,204 @@ async function renderGroupMessagesList(msgs) {
 }
 
 function rerenderMessages() {
-  const visible = currentChatRawMessages.filter(
-    (m) => !currentClearedAt || !m.createdAt?.toMillis || m.createdAt.toMillis() > currentClearedAt
-  );
+  const now = Date.now();
+  const me = currentUser.uid;
+  const ms = (m) => m.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER;
+  // Scheduled messages: hidden from others until their time, shown to the
+  // sender (dimmed, at the end) until then; afterwards they sit at their
+  // scheduled time.
+  const visible = currentChatRawMessages
+    .map((m) => {
+      const at = m.scheduledAt?.toMillis?.();
+      if (!at) return m;
+      if (at > now && m.senderId !== me) return null;
+      return { ...m, createdAt: m.scheduledAt, _scheduled: at > now };
+    })
+    .filter(Boolean)
+    .filter((m) => !currentClearedAt || !m.createdAt?.toMillis || m.createdAt.toMillis() > currentClearedAt)
+    .sort((a, b) => (a._scheduled ? 1 : 0) - (b._scheduled ? 1 : 0) || ms(a) - ms(b));
   if (currentChatType === "contact") {
-    renderPlainMessages(visible, (msg) => msg.senderId === currentUser.uid);
+    renderPlainMessages(visible, (msg) => msg.senderId === me);
   } else if (currentChatType === "group" || currentChatType === "channel") {
     renderGroupMessagesList(visible);
   }
+  scheduleTick();
 }
+
+// ---------- Scheduled ("send later") delivery ----------
+
+function fmtScheduleTime(msOrTs) {
+  const d = new Date(typeof msOrTs === "number" ? msOrTs : msOrTs?.toMillis?.() || 0);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const today = new Date();
+  const tomorrow = new Date(Date.now() + 86400000);
+  if (d.toDateString() === today.toDateString()) return `сегодня в ${time}`;
+  if (d.toDateString() === tomorrow.toDateString()) return `завтра в ${time}`;
+  return `${d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" })} в ${time}`;
+}
+
+let scheduleTimer = null;
+const publishAttempts = new Map(); // "chat/msg" -> ms of last attempt
+
+// Any participant's open client publishes due scheduled messages (preview +
+// unread + notification) and re-renders when the next one comes due.
+function scheduleTick() {
+  clearTimeout(scheduleTimer);
+  if (!currentUser) return;
+  const now = Date.now();
+  let next = Infinity;
+  const consider = (isGroup, data) => {
+    Object.entries(data.scheduled || {}).forEach(([msgId, entry]) => {
+      const at = entry?.at?.toMillis?.() || 0;
+      if (at > now) {
+        next = Math.min(next, at);
+        return;
+      }
+      const k = `${data.id}/${msgId}`;
+      if ((publishAttempts.get(k) || 0) > now - 15000) return;
+      publishAttempts.set(k, now);
+      (isGroup ? publishScheduledGroup : publishScheduled)(data.id, msgId).catch((err) => console.warn("publish scheduled failed:", err));
+    });
+  };
+  chats.forEach((c) => consider(false, c));
+  groups.forEach((g) => consider(true, g));
+  currentChatRawMessages.forEach((m) => {
+    const at = m.scheduledAt?.toMillis?.();
+    if (at && at > now) next = Math.min(next, at);
+  });
+  if (next < Infinity) {
+    scheduleTimer = setTimeout(() => {
+      if (currentChatType === "contact" || currentChatType === "group" || currentChatType === "channel") rerenderMessages();
+      else scheduleTick();
+    }, Math.min(next - now + 400, 2147483000));
+  }
+}
+
+async function cancelScheduledMessage(msg) {
+  if (currentChatType === "contact") await cancelScheduled(currentChatId, msg.id);
+  else await cancelScheduledGroup(currentChatId, msg.id);
+}
+
+function attachmentOf(msg) {
+  const fields = {};
+  ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "duration"].forEach((k) => {
+    if (msg[k] !== undefined && msg[k] !== null) fields[k] = msg[k];
+  });
+  return Object.keys(fields).length ? { fields, previewText: replyPreviewText(msg), defaultCaption: msg.text } : null;
+}
+
+async function sendScheduledNow(msg) {
+  try {
+    await cancelScheduledMessage(msg);
+    await deliver({ type: currentChatType, id: currentChatId, text: msg.text, attachment: attachmentOf(msg), replyTo: msg.replyTo || null });
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось отправить", { tone: "error" });
+  }
+}
+
+// Picker: quick presets + exact date/time.
+const scheduleOverlay = document.getElementById("schedule-overlay");
+const scheduleInput = document.getElementById("schedule-input");
+const scheduleQuick = document.getElementById("schedule-quick");
+
+function toLocalInput(ms) {
+  const d = new Date(ms - new Date().getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+
+function openSchedulePicker() {
+  if (!msgInput.value.trim()) {
+    toast("Сначала напишите сообщение", { icon: "📅" });
+    return;
+  }
+  if (!["contact", "group", "channel"].includes(currentChatType)) {
+    toast("В этом чате нельзя запланировать сообщение", { tone: "error" });
+    return;
+  }
+  const now = new Date();
+  const at = (h, m, dayOffset = 0) => {
+    const d = new Date();
+    d.setDate(d.getDate() + dayOffset);
+    d.setHours(h, m, 0, 0);
+    return d.getTime();
+  };
+  const presets = [
+    ["Через 30 минут", Date.now() + 30 * 60000],
+    ["Через 2 часа", Date.now() + 2 * 3600000],
+    now.getHours() < 19 ? ["Сегодня в 20:00", at(20, 0)] : ["Завтра в 20:00", at(20, 0, 1)],
+    ["Завтра в 9:00", at(9, 0, 1)],
+  ];
+  scheduleQuick.innerHTML = "";
+  presets.forEach(([label, time]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "schedule-chip";
+    b.textContent = label;
+    b.addEventListener("click", () => confirmSchedule(time));
+    scheduleQuick.appendChild(b);
+  });
+  scheduleInput.min = toLocalInput(Date.now() + 60000);
+  scheduleInput.value = toLocalInput(Date.now() + 3600000);
+  showOverlay(scheduleOverlay);
+  stagger(scheduleQuick.children, { y: 10, step: 40, delay: 80 });
+}
+
+function confirmSchedule(time) {
+  if (!time || time < Date.now() + 30000) {
+    toast("Выберите время в будущем", { tone: "error" });
+    return;
+  }
+  hideOverlay(scheduleOverlay);
+  doSendMessage(null, { scheduleAt: time });
+}
+
+document.getElementById("schedule-confirm").addEventListener("click", () => confirmSchedule(new Date(scheduleInput.value).getTime()));
+document.getElementById("schedule-cancel").addEventListener("click", () => hideOverlay(scheduleOverlay));
+scheduleOverlay.addEventListener("click", (e) => {
+  if (e.target === scheduleOverlay) hideOverlay(scheduleOverlay);
+});
+// Long-press (touch) or right-click on the send button.
+onContextGesture(sendBtn, () => openSchedulePicker());
+
+// ---------- Round video messages ----------
+
+const circleBtn = document.getElementById("circle-btn");
+circleBtn.classList.toggle("unsupported", !circlesSupported);
+circleBtn.addEventListener("click", async () => {
+  if (!currentChatId || composer.classList.contains("hidden")) return;
+  if (!uploadsConfigured) {
+    toast("Отправка видео ещё не настроена (Cloudinary, см. README)", { tone: "error", duration: 5000 });
+    return;
+  }
+  const chatType = currentChatType;
+  const chatId = currentChatId;
+  const result = await recordCircle();
+  if (!result) return;
+  const ext = result.mime.includes("mp4") ? "mp4" : "webm";
+  const file = new File([result.blob], `circle.${ext}`, { type: result.mime.split(";")[0] });
+  const progress = uploadToast("Отправка видеосообщения");
+  try {
+    const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal);
+    progress.done();
+    // Cloudinary serves a square H.264 MP4 of it, which every browser plays.
+    const playable = url.replace("/upload/", "/upload/c_fill,g_center,w_480,h_480,q_auto/").replace(/\.(webm|mov|mkv)$/i, ".mp4");
+    await deliver({
+      type: chatType,
+      id: chatId,
+      attachment: {
+        fields: { videoNoteUrl: playable, duration: result.duration },
+        previewText: "⭕ Видеосообщение",
+        defaultCaption: "⭕",
+      },
+    });
+  } catch (err) {
+    progress.fail();
+    if (err?.name === "AbortError") return;
+    console.error(err);
+    toast(err.message || "Не удалось отправить видеосообщение", { tone: "error" });
+  }
+});
 
 function updateChatSub(profile, chatData) {
   const otherTyping = chatData?.typing?.[currentOtherUid];
@@ -2329,7 +2564,15 @@ function messageOps() {
   }
   if (currentChatType === "contact") {
     return {
-      edit: (id, text) => editMessage(currentChatId, id, text),
+      edit: async (id, text) => {
+        const msg = currentChatRawMessages.find((m) => m.id === id);
+        if (msg?._e2e) {
+          const key = keyForChat(currentChatId, currentOtherUid);
+          if (!key) throw new Error("Шифрование недоступно на этом устройстве");
+          return editEncryptedMessage(currentChatId, id, await seal(await key, { ...msg._content, text: text.trim() }));
+        }
+        return editMessage(currentChatId, id, text);
+      },
       del: (id) => deleteMessage(currentChatId, id),
       react: (id, emoji, add) => toggleReaction(currentChatId, id, emoji, currentUser.uid, add),
     };
@@ -2337,7 +2580,7 @@ function messageOps() {
   return { edit: null, del: null, react: null };
 }
 
-const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤"];
+const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤", "⭕"];
 
 // ---------- Reply-to-message ----------
 
@@ -2350,6 +2593,7 @@ function replySenderLabel(msg) {
 }
 
 function replyPreviewText(msg) {
+  if (msg.videoNoteUrl) return "⭕ Видеосообщение";
   if (msg.imageUrl) return "📷 Фото";
   if (msg.voiceUrl) return "🎤 Голосовое сообщение";
   if (msg.fileUrl) {
@@ -2397,6 +2641,11 @@ function renderBubbleContent(bubble, msg) {
   bubble.innerHTML = "";
   if (msg.call) {
     renderCallBubble(bubble, msg);
+    return;
+  }
+  if (msg.videoNoteUrl) {
+    bubble.classList.add("circle-bubble");
+    bubble.appendChild(buildVideoNote(msg.videoNoteUrl, msg.duration, fmtDuration));
     return;
   }
   const hasMedia = !!(msg.imageUrl || msg.voiceUrl || msg.fileUrl);
@@ -2641,7 +2890,8 @@ function renderMessage(msg, isMine, senderName) {
   renderBubbleContent(row.querySelector(".bubble"), msg);
 
   const timeEl = row.querySelector(".msg-time");
-  timeEl.textContent = fmtTime(msg.createdAt);
+  timeEl.textContent = msg._scheduled ? `📅 ${fmtScheduleTime(msg.createdAt)}` : fmtTime(msg.createdAt);
+  if (msg._scheduled) row.classList.add("scheduled");
   if (msg.edited) {
     const tag = document.createElement("span");
     tag.className = "msg-edited-tag";
@@ -2654,7 +2904,7 @@ function renderMessage(msg, isMine, senderName) {
     pin.textContent = "📌";
     timeEl.prepend(pin);
   }
-  if (isMine && ["contact", "group", "channel"].includes(currentChatType)) {
+  if (isMine && !msg._scheduled && ["contact", "group", "channel"].includes(currentChatType)) {
     const tick = document.createElement("span");
     tick.className = "msg-tick";
     timeEl.appendChild(tick);
@@ -2676,7 +2926,7 @@ function renderMessage(msg, isMine, senderName) {
   if (touchOnly) {
     // Tap a bubble to get its actions (links, media and buttons keep working).
     bubbleArea.addEventListener("click", (e) => {
-      if (e.target.closest("button, a, img, audio, video, textarea, .msg-reply-quote, .anim-emoji")) return;
+      if (e.target.closest("button, a, img, audio, video, textarea, .msg-reply-quote, .anim-emoji, .vnote")) return;
       const r = row.querySelector(".bubble").getBoundingClientRect();
       openMessageMenu(menuCtx, isMine ? r.right - 220 : r.left, r.bottom + 6);
     });
@@ -2686,6 +2936,22 @@ function renderMessage(msg, isMine, senderName) {
 }
 
 function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, canReply }, x, y) {
+  if (msg._scheduled) {
+    openContextMenu({
+      x,
+      y,
+      items: [
+        { label: "Отправить сейчас", icon: MI.forward, onClick: () => sendScheduledNow(msg) },
+        {
+          label: "Отменить отправку",
+          icon: MI.trash,
+          danger: true,
+          onClick: () => cancelScheduledMessage(msg).catch(() => toast("Не удалось отменить", { tone: "error" })),
+        },
+      ],
+    });
+    return;
+  }
   const hasText = !!msg.text && !msg.call && !DEFAULT_CAPTIONS.includes(msg.text);
   const pinnedId = currentChatData()?.pinned?.id;
   const reactions = canReact
@@ -2768,7 +3034,7 @@ function forwardTargets() {
         name: contact ? contactDisplayName(contact.alias, profile) : profile.displayName,
         sub: "@" + profile.username,
         avatar: visibleAvatarHTML(profile, otherUid),
-        send: (text, attachment, extra) => sendMessage(c.id, me, text, attachment, null, extra),
+        send: (text, attachment, extra) => deliver({ type: "contact", id: c.id, text, attachment, extra }),
       });
     });
   groups
@@ -2779,7 +3045,7 @@ function forwardTargets() {
         name: g.name,
         sub: g.type === "channel" ? "Канал" : pluralMembers((g.members || []).length),
         avatar: groupAvatarHTML(g),
-        send: (text, attachment, extra) => sendGroupMessage(g.id, me, text, attachment, null, extra, g.members || []),
+        send: (text, attachment, extra) => deliver({ type: g.type, id: g.id, text, attachment, extra }),
       });
     });
   return list;
@@ -2802,7 +3068,7 @@ function renderForwardList() {
         if (!msg) return;
         b.disabled = true;
         const fields = {};
-        ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize"].forEach((k) => {
+        ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "duration"].forEach((k) => {
           if (msg[k] !== undefined && msg[k] !== null) fields[k] = msg[k];
         });
         const attachment = Object.keys(fields).length ? { fields, previewText: replyPreviewText(msg), defaultCaption: msg.text } : null;
@@ -3001,6 +3267,7 @@ msgInput.addEventListener("keydown", (e) => {
 function updateComposerButtons() {
   const hasText = msgInput.value.trim().length > 0;
   voiceBtn.classList.toggle("hidden", hasText);
+  document.getElementById("circle-btn")?.classList.toggle("hidden", hasText || currentChatType === "notifications");
   sendBtn.classList.toggle("hidden", !hasText);
 }
 
@@ -3027,7 +3294,7 @@ msgInput.addEventListener("input", () => {
 let lastTypingPing = 0;
 const saveDraftSoon = debounce(() => writeDraft(currentChatId, msgInput.value), 400);
 
-async function doSendMessage(attachment) {
+async function doSendMessage(attachment, { scheduleAt = null } = {}) {
   const text = msgInput.value.trim();
   if (!text && !attachment) return;
   if (!currentChatId) return;
@@ -3056,18 +3323,13 @@ async function doSendMessage(attachment) {
   closeEmojiPicker();
   cancelReply();
   try {
-    if (currentChatType === "saved") {
-      await addSavedMessage(currentUser.uid, text || attachment?.defaultCaption || "", replyPayload, attachment?.fields);
-    } else if (currentChatType === "notifications") {
-      await addBroadcast(currentUser.uid, text);
-    } else if (currentChatType === "group" || currentChatType === "channel") {
-      await sendGroupMessage(currentChatId, currentUser.uid, text, attachment, replyPayload, null, currentGroupRef?.members || []);
-    } else {
-      await sendMessage(currentChatId, currentUser.uid, text, attachment, replyPayload);
-    }
+    await deliver({ type: currentChatType, id: currentChatId, text, attachment, replyTo: replyPayload, scheduleAt });
+    if (scheduleAt) toast(`Сообщение будет отправлено ${fmtScheduleTime(scheduleAt)}`, { icon: "📅" });
   } catch (err) {
     console.error(err);
-    if (err?.code === "permission-denied" && currentChatType === "contact") {
+    if (err?.silent) {
+      toast(err.message, { tone: "error" });
+    } else if (err?.code === "permission-denied" && currentChatType === "contact") {
       toast("Сообщение не доставлено: пользователь ограничил вам отправку сообщений", { tone: "error", duration: 4500 });
     } else {
       toast("Не удалось отправить сообщение: " + (err.message || ""), { tone: "error", duration: 4500 });
@@ -3468,7 +3730,8 @@ async function maybeNotify(chatData) {
     const senderUid = chatData.lastMessageSenderId;
     const senderProfile = contactsMap.get(senderUid)?.profile || (await getProfile(senderUid));
     const title = senderProfile?.displayName || "Новое сообщение";
-    const body = notifPrefs.preview !== false ? chatData.lastMessage : "Новое сообщение";
+    const opened = chatData.lastEnc ? await openPreview(chatData.id, chatData.lastEnc) : null;
+    const body = notifPrefs.preview !== false ? opened || chatData.lastMessage : "Новое сообщение";
     new Notification(title, { body });
   }
 }
@@ -3904,6 +4167,7 @@ pwSaveBtn.addEventListener("click", async () => {
   pwSaveBtn.disabled = true;
   try {
     await changePassword(currentUser, pwCurrent.value, pwNew.value);
+    await rewrapKeys(currentUser.uid, pwCurrent.value, pwNew.value).catch((err) => console.warn("E2E rewrap failed:", err));
     pwCurrent.value = pwNew.value = pwConfirm.value = "";
     pwError.textContent = "";
     pwError.classList.add("ok-text");
@@ -3963,6 +4227,7 @@ function loadSessions() {
 }
 
 sessionsLogoutBtn.addEventListener("click", async () => {
+  await forgetKeys(currentUser.uid);
   cleanupSubscriptions();
   await logout();
 });
@@ -3987,6 +4252,7 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
   deleteAccountConfirmBtn.disabled = true;
   try {
     cleanupSubscriptions();
+    await forgetKeys(currentUser.uid);
     await deleteAccount(currentUser, deleteAccountPassword.value, myProfile.username);
     window.location.href = "/login";
   } catch (err) {
@@ -3995,6 +4261,216 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
     deleteAccountConfirmBtn.disabled = false;
   }
 });
+
+// ---------- End-to-end encryption (1:1 chats) ----------
+
+const pubKeys = new Map(); // uid -> JWK (fresh from profiles)
+
+function rememberPubKey(uid, profile) {
+  if (uid && profile?.e2ePub?.x) pubKeys.set(uid, profile.e2ePub);
+}
+
+async function refreshPubKey(uid) {
+  try {
+    const p = await getProfile(uid);
+    rememberPubKey(uid, p);
+    return p?.e2ePub || null;
+  } catch (_) {
+    return pubKeys.get(uid) || null;
+  }
+}
+
+function theirPubKey(uid) {
+  return pubKeys.get(uid) || contactsMap.get(uid)?.profile?.e2ePub || profileCache.get(uid)?.profile?.e2ePub || null;
+}
+
+// Resolves the AES key for a 1:1 chat, or null when either side has no keys
+// (then messages go out unencrypted, as before).
+function keyForChat(chatId, otherUid) {
+  const pub = theirPubKey(otherUid);
+  return pub && hasKeys() ? chatKey(chatId, pub) : null;
+}
+
+const otherUidOf = (chatId) => chatId.split("_").find((u) => u && u !== currentUser.uid);
+const isE2EChat = (chatId) => !!keyForChat(chatId, otherUidOf(chatId));
+
+// Decrypts a snapshot of 1:1 messages (results cached per ciphertext).
+const openedCache = new Map(); // ct -> content | "fail"
+async function openMessages(chatId, msgs) {
+  const otherUid = otherUidOf(chatId);
+  let key = keyForChat(chatId, otherUid);
+  if (!key && hasKeys() && msgs.some((m) => m.enc)) {
+    await refreshPubKey(otherUid);
+    key = keyForChat(chatId, otherUid);
+  }
+  return Promise.all(
+    msgs.map(async (m) => {
+      if (!m.enc) return m;
+      if (!hasKeys()) return { ...m, text: "🔒 Зашифрованное сообщение. Введите пароль, чтобы прочитать", _locked: true };
+      let content = openedCache.get(m.enc.ct);
+      if (content === undefined && key) {
+        try {
+          content = await openBox(await key, m.enc);
+        } catch (_) {
+          content = "fail";
+        }
+        openedCache.set(m.enc.ct, content);
+      }
+      if (!content || content === "fail") return { ...m, text: "🔒 Не удалось расшифровать сообщение", _locked: true };
+      return { ...m, ...content, _content: content, _e2e: true };
+    })
+  );
+}
+
+const previewCache = new Map(); // ct -> text
+async function openPreview(chatId, box) {
+  if (!box?.ct) return null;
+  if (previewCache.has(box.ct)) return previewCache.get(box.ct);
+  const key = keyForChat(chatId, otherUidOf(chatId));
+  if (!key) return null;
+  try {
+    const { p } = await openBox(await key, box);
+    previewCache.set(box.ct, p);
+    return p;
+  } catch (_) {
+    return null;
+  }
+}
+
+// ---------- Unlocking keys with the account password ----------
+
+const e2eOverlay = document.getElementById("e2e-overlay");
+const e2ePassword = document.getElementById("e2e-password");
+const e2eError = document.getElementById("e2e-error");
+const e2eUnlockBtn = document.getElementById("e2e-unlock-btn");
+const e2eBanner = document.getElementById("e2e-banner");
+attachPasswordToggle(e2ePassword, document.getElementById("e2e-password-toggle"));
+
+let unlockWaiters = [];
+function askToUnlock() {
+  e2ePassword.value = "";
+  e2eError.textContent = "";
+  showOverlay(e2eOverlay);
+  setTimeout(() => e2ePassword.focus(), 200);
+  return new Promise((resolve) => unlockWaiters.push(resolve));
+}
+
+function finishUnlock(ok) {
+  unlockWaiters.splice(0).forEach((r) => r(ok));
+}
+
+e2eUnlockBtn.addEventListener("click", async () => {
+  const pw = e2ePassword.value;
+  if (!pw) {
+    e2eError.textContent = "Введите пароль";
+    return;
+  }
+  e2eUnlockBtn.disabled = true;
+  e2eError.textContent = "";
+  try {
+    await verifyPassword(currentUser, pw);
+    const keys = await setupKeys(currentUser.uid, pw, { knownPublic: myProfile.e2ePub });
+    if (keys) myProfile.e2ePub = keys.pub;
+    await successPulse(e2eUnlockBtn);
+    hideOverlay(e2eOverlay);
+    updateE2EBanner();
+    toast("Сквозное шифрование включено", { icon: "🔒" });
+    finishUnlock(true);
+    onKeysChanged();
+  } catch (err) {
+    console.error(err);
+    e2eError.textContent = err.message || "Не удалось включить шифрование";
+  } finally {
+    e2eUnlockBtn.disabled = false;
+  }
+});
+e2ePassword.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") e2eUnlockBtn.click();
+});
+document.getElementById("e2e-cancel-btn").addEventListener("click", () => {
+  hideOverlay(e2eOverlay);
+  finishUnlock(false);
+});
+document.getElementById("e2e-banner-btn").addEventListener("click", () => askToUnlock());
+e2eOverlay.addEventListener("click", (e) => {
+  if (e.target === e2eOverlay) {
+    hideOverlay(e2eOverlay);
+    finishUnlock(false);
+  }
+});
+
+function updateE2EBanner() {
+  const show = e2eSupported && !hasKeys();
+  if (show && e2eBanner.classList.contains("hidden")) reveal(e2eBanner);
+  else if (!show && !e2eBanner.classList.contains("hidden")) conceal(e2eBanner);
+}
+
+function onKeysChanged() {
+  openedCache.clear();
+  previewCache.clear();
+  renderChats();
+  refreshChatChrome();
+  if (currentChatType === "contact" && currentChatId) {
+    const chatId = currentChatId;
+    openMessages(chatId, currentChatRawSource).then((list) => {
+      if (currentChatId !== chatId) return;
+      currentChatRawMessages = list;
+      rerenderMessages();
+    });
+  }
+}
+
+async function initE2E() {
+  if (!e2eSupported) return;
+  await loadKeys(currentUser.uid);
+  const pub = myPublicKey();
+  if (pub && myProfile.e2ePub?.x !== pub.x) {
+    // Keys exist on this device but the profile lost them — republish.
+    updateProfileFields(currentUser.uid, { e2ePub: pub }).catch(() => {});
+    myProfile.e2ePub = pub;
+  }
+  updateE2EBanner();
+  if (hasKeys()) onKeysChanged();
+}
+
+// ---------- One way to put a message into any chat ----------
+// Handles encryption for 1:1 chats and scheduling everywhere.
+async function deliver({ type, id, text = "", attachment = null, replyTo = null, extra = null, scheduleAt = null }) {
+  const me = currentUser.uid;
+  if (type === "saved") {
+    return addSavedMessage(me, text || attachment?.defaultCaption || "", replyTo, { ...(attachment?.fields || {}), ...(extra || {}) });
+  }
+  if (type === "notifications") return addBroadcast(me, text);
+  if (type === "group" || type === "channel") {
+    const members = (groups.find((g) => g.id === id) || currentGroupRef)?.members || [];
+    return sendGroupMessage(id, me, text, attachment, replyTo, extra, members, { scheduleAt });
+  }
+  // 1:1 chat
+  const otherUid = otherUidOf(id);
+  let key = keyForChat(id, otherUid);
+  if (!key && hasKeys()) {
+    await refreshPubKey(otherUid);
+    key = keyForChat(id, otherUid);
+  }
+  if (!key && !hasKeys() && theirPubKey(otherUid) && e2eSupported) {
+    // They use encryption but this device isn't unlocked yet.
+    const ok = await askToUnlock();
+    if (!ok) throw Object.assign(new Error("Сообщение не отправлено: шифрование не включено"), { silent: true });
+    key = keyForChat(id, otherUid);
+  }
+  if (key) {
+    const k = await key;
+    const content = { text: text || attachment?.defaultCaption || "", ...(attachment?.fields || {}), ...(extra || {}) };
+    if (replyTo) content.replyTo = replyTo;
+    const preview = attachment?.previewText || text || content.text;
+    return sendMessage(id, me, "🔒", null, null, { enc: await seal(k, content) }, {
+      scheduleAt,
+      preview: "🔒 Сообщение",
+      previewEnc: await seal(k, { p: preview }),
+    });
+  }
+  return sendMessage(id, me, text, attachment, replyTo, extra, { scheduleAt });
+}
 
 // ---------- Search inside the open chat ----------
 
@@ -4159,7 +4635,7 @@ function setupCalls() {
     isBlocked,
     onCallLog: ({ chatId, kind, result, duration }) => {
       const text = (CALL_LOG_TEXT[result] || CALL_LOG_TEXT.cancelled)(kind, duration);
-      return sendMessage(chatId, currentUser.uid, text, null, null, { call: { kind, result, duration } });
+      return deliver({ type: "contact", id: chatId, text, extra: { call: { kind, result, duration } } });
     },
     onMissedCall: (profile) => toast(`Пропущенный звонок от ${profile?.displayName || "контакта"}`, { icon: "📞", duration: 4500 }),
     notify: (title, body) => {
@@ -4237,7 +4713,27 @@ function pvAction(label, icon, onClick, danger = false) {
   return b;
 }
 
+// Shows the shared key "picture": identical on both sides unless keys were swapped.
+async function renderE2ERow(uid) {
+  const row = document.getElementById("profile-view-e2e");
+  const value = document.getElementById("profile-view-e2e-value");
+  row.classList.add("hidden");
+  if (!uid || uid === currentUser.uid) return;
+  const theirs = theirPubKey(uid) || (await refreshPubKey(uid));
+  const mine = myPublicKey();
+  row.classList.remove("hidden");
+  if (theirs && mine) {
+    value.textContent = await fingerprint(mine, theirs);
+    value.className = "e2e-fingerprint";
+    value.title = "Сравните с экраном собеседника: если совпадает — переписку никто не подменил";
+  } else {
+    value.className = "";
+    value.textContent = mine ? "Собеседник ещё не включил шифрование" : "Не включено на этом устройстве";
+  }
+}
+
 function renderContactProfileActions(uid) {
+  renderE2ERow(uid);
   profileViewActions.innerHTML = "";
   profileMembers.classList.add("hidden");
   if (!uid || uid === currentUser.uid) return;
@@ -4278,6 +4774,7 @@ function renderContactProfileActions(uid) {
 }
 
 async function renderGroupMembers(group) {
+  document.getElementById("profile-view-e2e").classList.add("hidden");
   const me = currentUser.uid;
   const isAdmin = (group.admins || []).includes(me);
   const canAdd = group.type === "group" || isAdmin;
@@ -4387,7 +4884,17 @@ magnetize(fabNewChat, 0.3);
 magnetize(sendBtn, 0.22);
 magnetize(voiceBtn, 0.18);
 
-[privacyLastseen, privacyAvatar, privacyBio, privacyBirthday, chatsFontSize, settingsLanguage].forEach(segmentize);
+const fxQuality = document.getElementById("fx-quality");
+fxQuality.value = window.LinkageFX?.pref?.() || "auto";
+fxQuality.addEventListener("change", () => {
+  window.LinkageFX?.set(fxQuality.value);
+  toast(
+    { auto: "Эффекты: авто", max: "Эффекты: максимум", lite: "Эффекты: экономный режим" }[fxQuality.value] || "Готово",
+    { icon: "✨" }
+  );
+});
+
+[privacyLastseen, privacyAvatar, privacyBio, privacyBirthday, chatsFontSize, settingsLanguage, fxQuality].forEach(segmentize);
 
 watchMessages(document.querySelectorAll(".auth-error, .attach-error"));
 
@@ -4420,6 +4927,7 @@ document.addEventListener("keydown", (e) => {
   const top = topOverlay();
   if (top) {
     hideOverlay(top);
+    if (top === e2eOverlay) finishUnlock(false);
     return;
   }
   if (!chatMenuDropdown.classList.contains("hidden")) hidePopover(chatMenuDropdown);

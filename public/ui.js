@@ -60,8 +60,18 @@ export const SPRINGS = {
   if (reducedMotion) document.documentElement.classList.add("reduced-motion");
 })();
 
+export const fxLevel = () => window.LinkageFX?.level?.() || "balanced";
+
 export function animate(el, keyframes, opts = {}) {
   if (!el || !el.animate) return null;
+  // Economy mode: animating blur is the expensive part, drop it.
+  if (fxLevel() === "lite" && Array.isArray(keyframes)) {
+    keyframes = keyframes.map((k) => {
+      if (!("filter" in k)) return k;
+      const { filter, ...rest } = k;
+      return rest;
+    });
+  }
   const { spring: springName, ...rest } = opts;
   const s = springName ? SPRINGS[springName] : null;
   // "backwards" holds the first frame during any delay; the last frame is
@@ -116,21 +126,54 @@ function pointerOrigin(fallbackEl) {
 // Specular highlight that follows the cursor across glass surfaces.
 const canHover = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 if (canHover) {
+  // One style write per frame at most.
   let spotEl = null;
+  let pending = null;
+  let raf = 0;
+  const flush = () => {
+    raf = 0;
+    const e = pending;
+    if (!e || fxLevel() === "lite") return;
+    const el = e.target.closest?.(".spot, .glass, button.primary, .room-item, .settings-menu-item");
+    if (spotEl && spotEl !== el) spotEl.style.removeProperty("--spot-o");
+    spotEl = el;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+    el.style.setProperty("--my", `${e.clientY - r.top}px`);
+    el.style.setProperty("--spot-o", "1");
+  };
   document.addEventListener(
     "pointermove",
     (e) => {
-      const el = e.target.closest?.(".spot, .glass, button.primary, .room-item, .settings-menu-item, .icon-btn");
-      if (spotEl && spotEl !== el) spotEl.style.removeProperty("--spot-o");
-      spotEl = el;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      el.style.setProperty("--mx", `${e.clientX - r.left}px`);
-      el.style.setProperty("--my", `${e.clientY - r.top}px`);
-      el.style.setProperty("--spot-o", "1");
+      pending = e;
+      if (!raf) raf = requestAnimationFrame(flush);
     },
     { passive: true }
   );
+}
+
+// Pauses the living backdrop while something opaque covers it.
+export function pauseBackdrop(on) {
+  document.dispatchEvent(new Event(on ? "lm-bg-pause" : "lm-bg-resume"));
+}
+
+// Measures real frame times once the app is idle; if they are poor in
+// "auto" mode, switch to economy effects for this session.
+export function probeFps(onDegrade) {
+  if (fxLevel() === "lite") return;
+  const times = [];
+  let last = performance.now();
+  const end = last + 2000;
+  const tick = (now) => {
+    times.push(now - last);
+    last = now;
+    if (now < end) return requestAnimationFrame(tick);
+    times.sort((a, b) => a - b);
+    const median = times[times.length >> 1] || 16;
+    if (median > 26 && window.LinkageFX?.degrade?.()) onDegrade?.();
+  };
+  requestAnimationFrame(tick);
 }
 
 // Buttons that lean toward the cursor and spring back when it leaves.
@@ -178,6 +221,10 @@ export function showOverlay(overlay, { origin } = {}) {
   overlay._closeAnims = null;
   const wasHidden = overlay.classList.contains("hidden") || overlay.classList.contains("is-closing");
   overlay.classList.remove("hidden", "is-closing");
+  if (!overlay._bgPaused) {
+    overlay._bgPaused = true;
+    pauseBackdrop(true);
+  }
   if (!openOverlays.includes(overlay)) openOverlays.push(overlay);
   if (!wasHidden) return;
 
@@ -202,6 +249,10 @@ export function showOverlay(overlay, { origin } = {}) {
 export function hideOverlay(overlay) {
   if (!overlay || overlay.classList.contains("hidden") || overlay.classList.contains("is-closing")) return;
   overlay.classList.add("is-closing");
+  if (overlay._bgPaused) {
+    overlay._bgPaused = false;
+    pauseBackdrop(false);
+  }
   const idx = openOverlays.indexOf(overlay);
   if (idx >= 0) openOverlays.splice(idx, 1);
   const panel = overlay.firstElementChild;
@@ -468,7 +519,16 @@ export function playFlip(container, rects, { selector = "[data-key]", enter = tr
 // chromatic dispersion). Other engines keep the plain frosted material.
 const isChromium = !!navigator.userAgentData?.brands?.some((b) => /Chromium|Google Chrome|Microsoft Edge/.test(b.brand));
 export const lensSupported = isChromium && !reducedMotion && typeof ResizeObserver !== "undefined";
-if (lensSupported) document.documentElement.classList.add("has-lens");
+const lenses = []; // { el, apply } registered by liquidLens()
+function syncLenses() {
+  const on = lensSupported && fxLevel() === "max";
+  document.documentElement.classList.toggle("has-lens", on);
+  lenses.forEach((l) => (on ? l.apply() : l.clear()));
+}
+new MutationObserver(() => {
+  const on = lensSupported && fxLevel() === "max";
+  if (on !== document.documentElement.classList.contains("has-lens")) syncLenses();
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
 let lensDefs = null;
 let lensCounter = 0;
@@ -548,7 +608,9 @@ export function liquidLens(el, { radius, bezel = 16, strength = 38, blur = 3, sa
   defs.appendChild(filter);
 
   let lastKey = "";
+  const active = () => fxLevel() === "max";
   const build = () => {
+    if (!active()) return;
     const w = Math.round(el.offsetWidth / 4) * 4;
     const h = Math.round(el.offsetHeight / 4) * 4;
     if (w < 8 || h < 8) return;
@@ -575,7 +637,17 @@ export function liquidLens(el, { radius, bezel = 16, strength = 38, blur = 3, sa
     el.style.backdropFilter = el.style.webkitBackdropFilter = `url(#${id})`;
   };
   new ResizeObserver(() => requestAnimationFrame(build)).observe(el);
-  build();
+  lenses.push({
+    el,
+    apply: () => {
+      lastKey = "";
+      build();
+    },
+    clear: () => {
+      el.style.backdropFilter = el.style.webkitBackdropFilter = "";
+    },
+  });
+  syncLenses();
 }
 
 // ---------- Segmented controls (replace <select> visually) ----------

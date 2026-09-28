@@ -22,12 +22,14 @@ service cloud.firestore {
     function attachmentsOk() {
       return (!('imageUrl' in request.resource.data) || (request.resource.data.imageUrl is string && request.resource.data.imageUrl.size() <= 500))
         && (!('fileUrl' in request.resource.data) || (request.resource.data.fileUrl is string && request.resource.data.fileUrl.size() <= 500))
-        && (!('voiceUrl' in request.resource.data) || (request.resource.data.voiceUrl is string && request.resource.data.voiceUrl.size() <= 500));
+        && (!('voiceUrl' in request.resource.data) || (request.resource.data.voiceUrl is string && request.resource.data.voiceUrl.size() <= 500))
+        && (!('videoNoteUrl' in request.resource.data) || (request.resource.data.videoNoteUrl is string && request.resource.data.videoNoteUrl.size() <= 500))
+        && (!('enc' in request.resource.data) || (request.resource.data.enc.ct is string && request.resource.data.enc.ct.size() <= 60000));
     }
 
     function isMessageTextEdit() {
       return request.auth.uid == resource.data.senderId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt', 'enc']);
     }
 
     // True when `blocker` has `uid` in their personal block list.
@@ -71,6 +73,11 @@ service cloud.firestore {
         allow read: if isMe(uid);
         allow create: if isMe(uid) || isAdmin();
         allow update, delete: if false;
+      }
+
+      // ---------- users/{uid}/private/e2e : password-wrapped E2E private key (owner only) ----------
+      match /private/{docId} {
+        allow read, write: if isMe(uid);
       }
 
       // ---------- users/{uid}/sessions/{id} : login history (informational only) ----------

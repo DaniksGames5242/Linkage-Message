@@ -17,6 +17,8 @@ import {
   arrayUnion,
   arrayRemove,
   increment,
+  runTransaction,
+  Timestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { chatIdFor } from "./utils.js";
 
@@ -72,7 +74,12 @@ export function listenMessages(chatId, onChange, onError) {
 }
 
 // `extra` carries optional message metadata (forwardedFrom, call log, …).
-export async function sendMessage(chatId, senderId, text, attachment, replyTo, extra) {
+// `extra` carries optional message metadata (forwardedFrom, call log, …).
+// opts.preview / opts.previewEnc override the chat-list preview (end-to-end
+// encrypted chats never store readable text there); opts.scheduleAt (ms)
+// schedules the message: it is written now but stays hidden until then and
+// the chat preview/unread counters are updated by publishScheduled().
+export async function sendMessage(chatId, senderId, text, attachment, replyTo, extra, opts = {}) {
   const trimmed = (text || "").trim();
   const payload = {
     text: trimmed || attachment?.defaultCaption || "",
@@ -84,13 +91,25 @@ export async function sendMessage(chatId, senderId, text, attachment, replyTo, e
   if (replyTo) payload.replyTo = replyTo;
   if (extra) Object.assign(payload, extra);
 
-  // Chat ids are the two participant uids joined with "_" (see chatIdFor).
+  const preview = opts.preview ?? (attachment?.previewText || trimmed);
+  const ref = doc(collection(db, "chats", chatId, "messages"));
+  if (opts.scheduleAt) {
+    const at = Timestamp.fromMillis(opts.scheduleAt);
+    payload.scheduledAt = at;
+    await setDoc(ref, payload);
+    const entry = { at, senderId, preview };
+    if (opts.previewEnc) entry.previewEnc = opts.previewEnc;
+    await setDoc(doc(db, "chats", chatId), { scheduled: { [ref.id]: entry } }, { merge: true });
+    return ref.id;
+  }
+
   const others = chatId.split("_").filter((uid) => uid && uid !== senderId);
-  await addDoc(collection(db, "chats", chatId, "messages"), payload);
+  await setDoc(ref, payload);
   await setDoc(
     doc(db, "chats", chatId),
     {
-      lastMessage: attachment?.previewText || trimmed,
+      lastMessage: preview,
+      lastEnc: opts.previewEnc || deleteField(),
       lastMessageAt: serverTimestamp(),
       lastMessageSenderId: senderId,
       typing: { [senderId]: deleteField() },
@@ -99,6 +118,49 @@ export async function sendMessage(chatId, senderId, text, attachment, replyTo, e
     },
     { merge: true }
   );
+  return ref.id;
+}
+
+// Makes a due scheduled message "arrive": bumps the preview + unread counters
+// and clears the schedule entry. Any participant's client may run this; the
+// transaction makes sure it happens once.
+export async function publishScheduled(chatId, msgId) {
+  const ref = doc(db, "chats", chatId);
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.data();
+    const entry = data?.scheduled?.[msgId];
+    if (!entry) return false;
+    const atMs = entry.at?.toMillis?.() || 0;
+    if (atMs > Date.now() + 1000) return false;
+    const patch = { [`scheduled.${msgId}`]: deleteField(), hiddenFor: [] };
+    ((data.participants || []).filter((uid) => uid !== entry.senderId)).forEach((uid) => {
+      patch[`unread.${uid}`] = increment(1);
+    });
+    const currentLast = data.lastMessageAt?.toMillis?.() || 0;
+    if (atMs >= currentLast) {
+      patch.lastMessage = entry.preview || "";
+      patch.lastEnc = entry.previewEnc || deleteField();
+      patch.lastMessageAt = entry.at;
+      patch.lastMessageSenderId = entry.senderId;
+    }
+    tx.update(ref, patch);
+    return true;
+  });
+}
+
+export async function cancelScheduled(chatId, msgId) {
+  await deleteDoc(doc(db, "chats", chatId, "messages", msgId));
+  await updateDoc(doc(db, "chats", chatId), { [`scheduled.${msgId}`]: deleteField() });
+}
+
+// Edit for end-to-end encrypted messages: the ciphertext is replaced as a whole.
+export async function editEncryptedMessage(chatId, messageId, enc) {
+  await updateDoc(doc(db, "chats", chatId, "messages", messageId), {
+    enc,
+    edited: true,
+    editedAt: serverTimestamp(),
+  });
 }
 
 // Clears my unread counter and moves my read marker (drives ✓✓ for the

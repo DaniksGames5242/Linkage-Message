@@ -147,13 +147,12 @@ textarea {
 
 /* Film grain on top of everything, very faint — gives the glass a tactile finish. */
 body::after {
-  content: "";
+  content: none;
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 200;
   opacity: 0.045;
-  mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 
@@ -175,8 +174,8 @@ body::after {
 .search-result-card {
   position: relative;
   background: var(--glass-tint), var(--glass);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  backdrop-filter: blur(16px) saturate(160%);
   border: 1px solid var(--stroke);
   box-shadow: var(--glass-shadow);
 }
@@ -253,8 +252,8 @@ body::after {
 .auth-card,
 .dropdown-menu {
   background: var(--glass-tint), var(--glass-strong);
-  -webkit-backdrop-filter: blur(40px) saturate(190%);
-  backdrop-filter: blur(40px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  backdrop-filter: blur(24px) saturate(170%);
 }
 
 /* Chromium: ui.js swaps in an SVG refraction filter; keep a tint behind it. */
@@ -315,11 +314,9 @@ html.has-lens [data-lens] {
 @keyframes bmBreathe {
   0%,
   100% {
-    filter: drop-shadow(0 6px 18px var(--accent-glow));
     transform: rotate(0deg) scale(1);
   }
   50% {
-    filter: drop-shadow(0 10px 30px var(--accent-glow));
     transform: rotate(-4deg) scale(1.04);
   }
 }
@@ -1025,7 +1022,9 @@ button.is-success::after {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01)), rgba(18, 13, 11, 0.55);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01)), rgba(18, 13, 11, 0.62);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 #sidebar-header {
@@ -1052,10 +1051,10 @@ button.is-success::after {
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  background: conic-gradient(from var(--ring-angle), var(--accent-hi), transparent 30%, var(--accent-2) 60%, transparent 80%, var(--accent-hi));
+  background: conic-gradient(var(--accent-hi), transparent 30%, var(--accent-2) 60%, transparent 80%, var(--accent-hi));
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-  animation: ringSpin 5s linear infinite;
+  animation: spin 5s linear infinite;
   opacity: 0.85;
 }
 
@@ -1107,17 +1106,13 @@ button.is-success::after {
   height: 7px;
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 0 0 rgba(94, 230, 160, 0.6);
-  animation: onlinePulse 2.4s ease-out infinite;
+  box-shadow: 0 0 6px rgba(94, 230, 160, 0.7);
+  animation: onlinePulse 2.4s ease-in-out infinite;
 }
 
 @keyframes onlinePulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(94, 230, 160, 0.55);
-  }
-  70%,
-  100% {
-    box-shadow: 0 0 0 7px rgba(94, 230, 160, 0);
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -1299,8 +1294,6 @@ button.is-success::after {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 10px 96px;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 60px), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 60px), transparent 100%);
 }
 
 #chat-list {
@@ -1447,7 +1440,6 @@ button.is-success::after {
   z-index: 5;
   box-shadow: 0 16px 36px -10px var(--accent-glow), inset 0 2px 1px rgba(255, 255, 255, 0.55), inset 0 -6px 14px rgba(120, 40, 0, 0.25);
   transition: transform var(--dur-jelly) var(--ease-jelly), box-shadow 0.4s, translate 0.5s var(--ease-bouncy), border-radius 0.6s var(--ease-bouncy);
-  animation: fabIdle 7s ease-in-out infinite;
 }
 
 #fab-new-chat svg {
@@ -1533,24 +1525,36 @@ button.is-success::after {
   }
 }
 
+/* The gradient ring spins via transform on a pseudo-element, which the
+   compositor animates without repainting. */
 .story-ring {
+  position: relative;
+  isolation: isolate;
   width: 58px;
   height: 58px;
   border-radius: 50%;
   padding: 2.5px;
-  background: conic-gradient(from var(--ring-angle), #ffe27a, var(--accent), var(--accent-2), #ff3d6e, #ffe27a);
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: ringSpin 6s linear infinite;
   box-shadow: 0 8px 20px -10px var(--accent-glow);
 }
 
-.story-bubble:hover .story-ring {
+.story-ring::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 50%;
+  background: conic-gradient(#ffe27a, var(--accent), var(--accent-2), #ff3d6e, #ffe27a);
+  animation: spin 6s linear infinite;
+}
+
+.story-bubble:hover .story-ring::before {
   animation-duration: 1.4s;
 }
 
-.story-ring.seen {
+.story-ring.seen::before {
   background: rgba(255, 255, 255, 0.16);
   animation: none;
 }
@@ -1571,10 +1575,9 @@ button.is-success::after {
   white-space: nowrap;
 }
 
-.story-add-badge {
-  position: relative;
-  background: rgba(255, 255, 255, 0.12);
-  animation: none;
+.story-add-badge::before {
+  background: rgba(255, 255, 255, 0.12) !important;
+  animation: none !important;
 }
 
 .story-add-badge::after {
@@ -1820,10 +1823,8 @@ button.is-success::after {
   margin: 14px 0;
   padding: 7px 14px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(30, 23, 19, 0.85);
   border: 1px solid var(--stroke);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
   animation: riseIn 0.6s var(--ease-bouncy) backwards;
 }
 
@@ -1867,7 +1868,7 @@ button.is-success::after {
     radial-gradient(circle at 40% 40%, var(--accent-hi), var(--accent) 45%, var(--accent-2) 80%);
   box-shadow: inset -14px -18px 36px rgba(90, 25, 0, 0.55), inset 10px 12px 26px rgba(255, 255, 255, 0.35),
     0 40px 90px -20px var(--accent-glow), 0 0 0 1px rgba(255, 255, 255, 0.08);
-  animation: blobMorph 11s ease-in-out infinite;
+  animation: spin 24s linear infinite;
 }
 
 .orb .brand-mark {
@@ -2462,9 +2463,7 @@ button.is-success::after {
   position: absolute;
   top: -16px;
   z-index: 3;
-  background: var(--glass-tint), var(--glass-strong);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  backdrop-filter: blur(20px) saturate(180%);
+  background: var(--glass-tint), rgba(26, 20, 17, 0.95);
   border: 1px solid var(--stroke-strong);
   border-radius: 999px;
   padding: 3px;
@@ -2572,7 +2571,9 @@ button.is-success::after {
 #alias-overlay,
 #profile-view-overlay,
 #new-chat-overlay,
-#forward-overlay {
+#forward-overlay,
+#e2e-overlay,
+#schedule-overlay {
   position: fixed;
   inset: 0;
   background: radial-gradient(1200px 800px at 50% 40%, rgba(12, 8, 6, 0.35), rgba(6, 4, 3, 0.7));
@@ -3694,7 +3695,9 @@ input.switch:checked:active::before {
   #alias-overlay,
   #profile-view-overlay,
   #new-chat-overlay,
-  #forward-overlay {
+  #forward-overlay,
+  #e2e-overlay,
+  #schedule-overlay {
     padding: 12px;
     align-items: flex-end;
   }
@@ -3937,10 +3940,8 @@ mark.search-mark {
   font-size: 12px;
   font-weight: 700;
   color: var(--text-dim);
-  background: rgba(24, 18, 15, 0.72);
+  background: rgba(24, 18, 15, 0.9);
   border: 1px solid var(--stroke);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
-  backdrop-filter: blur(14px) saturate(160%);
   pointer-events: none;
 }
 
@@ -5272,4 +5273,372 @@ mark.search-mark {
 
 .emoji-option .anim-emoji {
   cursor: pointer;
+}
+
+/* =====================================================================
+   Effects quality: .fx-lite (phones / weak GPUs / slow frames / chosen),
+   .fx-balanced (default), .fx-max (adds refracting lenses).
+   ===================================================================== */
+
+.fx-lite {
+  --glass: rgba(30, 23, 19, 0.92);
+  --glass-strong: rgba(22, 17, 14, 0.97);
+}
+
+.fx-lite *,
+.fx-lite *::before,
+.fx-lite *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.fx-lite #settings-overlay,
+.fx-lite #alias-overlay,
+.fx-lite #profile-view-overlay,
+.fx-lite #new-chat-overlay,
+.fx-lite #forward-overlay {
+  background: rgba(6, 4, 3, 0.78);
+}
+
+.fx-lite #chat-header,
+.fx-lite #composer,
+.fx-lite #reply-preview,
+.fx-lite #emoji-picker,
+.fx-lite #pinned-bar,
+.fx-lite #chat-search-bar {
+  background: var(--glass-tint), rgba(26, 20, 17, 0.94);
+}
+
+.fx-lite .story-ring::before,
+.fx-lite .avatar-menu-trigger::before,
+.fx-lite .brand-mark.breathe,
+.fx-lite .orb,
+.fx-lite .orb-body,
+.fx-lite .orb-shadow,
+.fx-lite .avatar-upload .avatar-xl,
+.fx-lite .wordmark,
+.fx-lite .profile-halo,
+.fx-lite .call-bg,
+.fx-lite .me-status::before,
+.fx-lite .field input:focus,
+.fx-lite #search-box input:focus {
+  animation: none !important;
+}
+
+.fx-lite .room-item::after,
+.fx-lite .settings-menu-item::after,
+.fx-lite .glass::after {
+  display: none;
+}
+
+.fx-lite .call-bg {
+  filter: blur(30px) saturate(1.4) brightness(0.5);
+}
+
+.fx-lite .date-sep {
+  position: static;
+}
+
+/* ---------- End-to-end encryption ---------- */
+
+#e2e-banner {
+  margin: 0 16px 10px;
+  padding: 10px 10px 10px 14px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+#e2e-banner > * {
+  position: relative;
+  z-index: 2;
+}
+
+.e2e-banner-text {
+  flex: 1;
+  line-height: 1.35;
+}
+
+.e2e-banner-icon {
+  font-size: 18px;
+}
+
+.e2e-panel {
+  text-align: center;
+}
+
+.e2e-panel .field,
+.e2e-panel .auth-error {
+  text-align: left;
+}
+
+.e2e-hero {
+  font-size: 44px;
+  margin-bottom: 6px;
+  animation: storyPop 0.8s var(--ease-bouncy) backwards;
+}
+
+.e2e-panel .setting-desc {
+  margin: 0 0 16px;
+}
+
+#chat.e2e-on #chat-title::after {
+  content: " 🔒";
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.e2e-fingerprint {
+  font-size: 20px;
+  letter-spacing: 3px;
+  cursor: help;
+}
+
+/* ---------- Send later ---------- */
+
+.schedule-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.schedule-chip {
+  flex: 1 1 calc(50% - 8px);
+  padding: 11px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--stroke-strong);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, transform var(--dur-jelly) var(--ease-jelly), border-color 0.2s;
+}
+
+.schedule-chip:hover {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.schedule-chip:active {
+  transform: scale(0.95);
+}
+
+.msg-row.scheduled .msg-group {
+  opacity: 0.62;
+}
+
+.msg-row.scheduled .bubble {
+  border: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent) !important;
+}
+
+.msg-row.scheduled .msg-time {
+  color: var(--accent-text);
+  opacity: 1;
+}
+
+/* ---------- Round video messages ---------- */
+
+#circle-btn.unsupported {
+  display: none !important;
+}
+
+.bubble.circle-bubble,
+.msg-row.me .bubble.circle-bubble {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.bubble.circle-bubble::before {
+  display: none;
+}
+
+.vnote {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  cursor: pointer;
+  transform-origin: center;
+  transition: transform 0.6s var(--ease-bouncy);
+  filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.45));
+}
+
+.msg-row.me .vnote {
+  transform-origin: right center;
+}
+
+.msg-row:not(.me) .vnote {
+  transform-origin: left center;
+}
+
+.vnote video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  background: #120d0b;
+  display: block;
+}
+
+.vnote.with-sound {
+  transform: scale(1.3);
+  z-index: 4;
+}
+
+.vnote-ring {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  transform: rotate(-90deg);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.vnote.with-sound .vnote-ring {
+  opacity: 1;
+}
+
+.vnote-ring circle,
+.circle-rec-ring circle {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.25s linear;
+}
+
+.vnote-meta {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  translate: -50% 0;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+
+.vnote.with-sound .vnote-mute {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .vnote {
+    width: 190px;
+    height: 190px;
+  }
+}
+
+/* Recorder */
+
+.circle-rec {
+  position: fixed;
+  inset: 0;
+  z-index: 190;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(40px + env(safe-area-inset-top)) 20px calc(34px + env(safe-area-inset-bottom));
+  background: radial-gradient(60% 50% at 50% 40%, color-mix(in srgb, var(--accent) 16%, rgba(8, 6, 5, 0.92)), rgba(6, 4, 3, 0.97));
+}
+
+.circle-rec-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+
+.circle-rec-frame {
+  position: relative;
+  width: min(78vw, 340px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.circle-rec-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  transform: scaleX(-1);
+  background: #000;
+  box-shadow: 0 30px 80px -20px var(--accent-glow);
+}
+
+.circle-rec.back-camera .circle-rec-frame video {
+  transform: none;
+}
+
+.circle-rec-ring {
+  position: absolute;
+  inset: -8px;
+  width: calc(100% + 16px);
+  height: calc(100% + 16px);
+  transform: rotate(-90deg);
+}
+
+.circle-rec-ring circle {
+  stroke-width: 2;
+}
+
+.circle-rec-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.circle-rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  opacity: 0.3;
+}
+
+.circle-rec.recording .circle-rec-dot {
+  opacity: 1;
+  animation: onlinePulse 1s ease-in-out infinite;
+}
+
+.circle-rec-hint {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.circle-rec-controls {
+  display: flex;
+  align-items: center;
+  gap: 34px;
+}
+
+.circle-rec-send {
+  width: 72px !important;
+  height: 72px !important;
+  background: var(--accent-grad) !important;
+  color: var(--on-accent) !important;
+  box-shadow: 0 16px 40px -10px var(--accent-glow);
 }

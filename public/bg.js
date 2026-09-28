@@ -3,6 +3,58 @@
 // re-tints itself smoothly whenever the accent colour changes. Everything
 // glassy in the UI refracts this layer.
 
+// ---------- Effects quality (shared with ui.js via window.LinkageFX) ----------
+// "auto" picks "lite" on phones / weak hardware and "balanced" elsewhere
+// (and ui.js drops to "lite" if frames turn out slow); "max" adds the
+// refracting glass lenses; "lite" freezes the backdrop and drops blur.
+(function () {
+  const root = document.documentElement;
+  const read = () => {
+    try {
+      return localStorage.getItem("lm-fx") || "auto";
+    } catch (_) {
+      return "auto";
+    }
+  };
+  const weak =
+    window.matchMedia("(hover: none)").matches ||
+    (navigator.hardwareConcurrency || 8) <= 4 ||
+    (navigator.deviceMemory || 8) <= 4 ||
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let degraded = false;
+  const level = () => {
+    const pref = read();
+    if (pref === "max" || pref === "lite") return pref;
+    return weak || degraded ? "lite" : "balanced";
+  };
+  const apply = () => {
+    const l = level();
+    root.classList.toggle("fx-lite", l === "lite");
+    root.classList.toggle("fx-max", l === "max");
+    root.classList.toggle("fx-balanced", l === "balanced");
+  };
+  window.LinkageFX = {
+    pref: read,
+    level,
+    set(pref) {
+      try {
+        localStorage.setItem("lm-fx", pref);
+      } catch (_) {
+        /* ignore */
+      }
+      degraded = false;
+      apply();
+    },
+    degrade() {
+      if (read() !== "auto" || degraded) return false;
+      degraded = true;
+      apply();
+      return true;
+    },
+  };
+  apply();
+})();
+
 (function () {
   const canvas = document.getElementById("bg-canvas");
   if (!canvas) return;
@@ -36,7 +88,7 @@
     float fbm(vec2 p) {
       float v = 0.0, a = 0.5;
       mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
-      for (int i = 0; i < 5; i++) { v += a * noise(p); p = m * p; a *= 0.5; }
+      for (int i = 0; i < 4; i++) { v += a * noise(p); p = m * p; a *= 0.5; }
       return v;
     }
 
@@ -106,10 +158,12 @@
   ["uRes", "uTime", "uMouse", "uPress", "uA", "uB"].forEach((n) => (U[n] = gl.getUniformLocation(prog, n)));
 
   const mobile = window.matchMedia("(max-width: 720px)").matches;
-  const SCALE = mobile ? 0.28 : 0.4;
+  // The field is soft, so a small buffer upscaled by the browser looks the same.
+  const scaleFor = (level) => (level === "max" ? 0.32 : level === "lite" ? 0.18 : mobile ? 0.2 : 0.24);
   function resize() {
-    const w = Math.max(64, Math.round(window.innerWidth * SCALE));
-    const h = Math.max(64, Math.round(window.innerHeight * SCALE));
+    const scale = scaleFor(window.LinkageFX.level());
+    const w = Math.max(48, Math.round(window.innerWidth * scale));
+    const h = Math.max(48, Math.round(window.innerHeight * scale));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -160,8 +214,12 @@
 
   const start = performance.now() - Math.random() * 60000;
   let last = 0;
-  let running = true;
-  const FRAME_MS = mobile ? 1000 / 24 : 1000 / 40;
+  let rafId = 0;
+  let pauses = 0; // modal overlays / calls cover the backdrop
+  // The field drifts slowly, so 15 fps looks continuous and halves the work
+  // of every blurred surface above it.
+  const frameMs = () => (window.LinkageFX.level() === "max" ? 1000 / 30 : 1000 / 15);
+  const animated = () => !reduced && window.LinkageFX.level() !== "lite";
 
   function draw(now) {
     const k = 0.06;
@@ -181,28 +239,46 @@
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
+  // Static render: jump straight to the target colours.
+  function drawStill() {
+    colA = targetA.slice();
+    colB = targetB.slice();
+    draw(start + 20000);
+  }
+
   function loop(now) {
-    if (!running) return;
-    requestAnimationFrame(loop);
-    if (now - last < FRAME_MS) return;
+    rafId = 0;
+    if (!shouldRun()) return;
+    rafId = requestAnimationFrame(loop);
+    if (now - last < frameMs()) return;
     last = now;
     draw(now);
   }
 
-  if (reduced) {
-    draw(performance.now());
-    // Still follow accent changes, just without motion.
-    new MutationObserver(() => setTimeout(() => {
-      colA = targetA.slice();
-      colB = targetB.slice();
-      draw(performance.now());
-    }, 30)).observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
-  } else {
-    requestAnimationFrame(loop);
-    document.addEventListener("visibilitychange", () => {
-      running = !document.hidden;
-      if (running) requestAnimationFrame(loop);
-    });
+  const shouldRun = () => animated() && !document.hidden && pauses === 0;
+  function refresh() {
+    resize();
+    if (shouldRun()) {
+      if (!rafId) rafId = requestAnimationFrame(loop);
+    } else if (!animated()) {
+      drawStill();
+    }
   }
+
+  document.addEventListener("visibilitychange", refresh);
+  document.addEventListener("lm-bg-pause", () => {
+    pauses++;
+  });
+  document.addEventListener("lm-bg-resume", () => {
+    pauses = Math.max(0, pauses - 1);
+    refresh();
+  });
+  // Accent / quality changes.
+  new MutationObserver(() => setTimeout(refresh, 40)).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["style", "class"],
+  });
+  refresh();
+  if (!animated()) drawStill();
   requestAnimationFrame(() => canvas.classList.add("bg-ready"));
 })();

@@ -16,6 +16,8 @@ import {
   arrayUnion,
   arrayRemove,
   increment,
+  runTransaction,
+  Timestamp,
   deleteField,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -75,7 +77,12 @@ export function listenGroupMessages(groupId, onChange, onError) {
   );
 }
 
-export async function sendGroupMessage(groupId, senderId, text, attachment, replyTo, extra, memberUids = []) {
+// `extra` carries optional message metadata (forwardedFrom, call log, …).
+// opts.preview / opts.previewEnc override the chat-list preview (end-to-end
+// encrypted chats never store readable text there); opts.scheduleAt (ms)
+// schedules the message: it is written now but stays hidden until then and
+// the chat preview/unread counters are updated by publishScheduled().
+export async function sendGroupMessage(groupId, senderId, text, attachment, replyTo, extra, memberUids = [], opts = {}) {
   const trimmed = (text || "").trim();
   const payload = {
     text: trimmed || attachment?.defaultCaption || "",
@@ -87,12 +94,25 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
   if (replyTo) payload.replyTo = replyTo;
   if (extra) Object.assign(payload, extra);
 
+  const preview = opts.preview ?? (attachment?.previewText || trimmed);
+  const ref = doc(collection(db, "groups", groupId, "messages"));
+  if (opts.scheduleAt) {
+    const at = Timestamp.fromMillis(opts.scheduleAt);
+    payload.scheduledAt = at;
+    await setDoc(ref, payload);
+    const entry = { at, senderId, preview };
+    if (opts.previewEnc) entry.previewEnc = opts.previewEnc;
+    await setDoc(doc(db, "groups", groupId), { scheduled: { [ref.id]: entry } }, { merge: true });
+    return ref.id;
+  }
+
   const others = memberUids.filter((uid) => uid && uid !== senderId);
-  await addDoc(collection(db, "groups", groupId, "messages"), payload);
+  await setDoc(ref, payload);
   await setDoc(
     doc(db, "groups", groupId),
     {
-      lastMessage: attachment?.previewText || trimmed,
+      lastMessage: preview,
+      lastEnc: opts.previewEnc || deleteField(),
       lastMessageAt: serverTimestamp(),
       lastMessageSenderId: senderId,
       hiddenFor: [],
@@ -100,6 +120,49 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
     },
     { merge: true }
   );
+  return ref.id;
+}
+
+// Makes a due scheduled message "arrive": bumps the preview + unread counters
+// and clears the schedule entry. Any participant's client may run this; the
+// transaction makes sure it happens once.
+export async function publishScheduledGroup(groupId, msgId) {
+  const ref = doc(db, "groups", groupId);
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.data();
+    const entry = data?.scheduled?.[msgId];
+    if (!entry) return false;
+    const atMs = entry.at?.toMillis?.() || 0;
+    if (atMs > Date.now() + 1000) return false;
+    const patch = { [`scheduled.${msgId}`]: deleteField(), hiddenFor: [] };
+    ((data.members || []).filter((uid) => uid !== entry.senderId)).forEach((uid) => {
+      patch[`unread.${uid}`] = increment(1);
+    });
+    const currentLast = data.lastMessageAt?.toMillis?.() || 0;
+    if (atMs >= currentLast) {
+      patch.lastMessage = entry.preview || "";
+      patch.lastEnc = entry.previewEnc || deleteField();
+      patch.lastMessageAt = entry.at;
+      patch.lastMessageSenderId = entry.senderId;
+    }
+    tx.update(ref, patch);
+    return true;
+  });
+}
+
+export async function cancelScheduledGroup(groupId, msgId) {
+  await deleteDoc(doc(db, "groups", groupId, "messages", msgId));
+  await updateDoc(doc(db, "groups", groupId), { [`scheduled.${msgId}`]: deleteField() });
+}
+
+// Edit for end-to-end encrypted messages: the ciphertext is replaced as a whole.
+export async function editEncryptedGroupMessage(groupId, messageId, enc) {
+  await updateDoc(doc(db, "groups", groupId, "messages", messageId), {
+    enc,
+    edited: true,
+    editedAt: serverTimestamp(),
+  });
 }
 
 export async function markGroupRead(groupId, uid) {
