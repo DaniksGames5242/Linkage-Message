@@ -3,6 +3,7 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Без предпросмотра": "Remove preview",
   "Вас упомянули": "You were mentioned",
   "Сообщения скопированы": "Messages copied",
   "Не все сообщения удалось удалить": "Some messages couldn't be deleted",

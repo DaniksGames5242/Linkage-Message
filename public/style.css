@@ -9137,3 +9137,63 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 .mention-item:hover { background: rgba(255, 255, 255, 0.08); }
 .mention-name { font-weight: 700; }
 .mention-user { opacity: 0.6; font-size: 13px; }
+
+/* ---------- Link previews ---------- */
+.link-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  margin-top: 6px;
+  padding: 7px 10px 8px 12px;
+  border-radius: 12px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, rgba(255, 255, 255, 0.03));
+  color: inherit;
+  text-decoration: none;
+  white-space: normal;
+  max-width: 360px;
+  overflow: hidden;
+  transition: background 0.2s, transform var(--dur-jelly) var(--ease-jelly);
+}
+.link-card:hover { background: color-mix(in srgb, var(--accent) 16%, rgba(255, 255, 255, 0.04)); }
+.link-card:active { transform: scale(0.98); }
+.msg-row.me .link-card { border-left-color: currentColor; background: rgba(0, 0, 0, 0.12); }
+.link-card-body { min-width: 0; }
+.link-card-site { font-size: 12.5px; font-weight: 800; color: var(--accent-text, var(--accent)); }
+.msg-row.me .link-card-site { color: inherit; opacity: 0.85; }
+.link-card-title { font-weight: 750; font-size: 13.5px; line-height: 1.3; }
+.link-card-desc {
+  font-size: 13px;
+  line-height: 1.35;
+  opacity: 0.8;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.link-card-site:empty, .link-card-title:empty, .link-card-desc:empty { display: none; }
+.link-card-img {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.35s;
+}
+.link-card.img-ready .link-card-img { opacity: 1; }
+.link-card.wide { grid-template-columns: 1fr; }
+.link-card.wide .link-card-img { width: 100%; height: auto; max-height: 220px; margin-top: 4px; }
+
+.link-bar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 14px;
+  border-radius: 20px;
+  border-left: 3px solid var(--accent);
+}
+.link-bar-icon { font-size: 16px; }
+.link-bar-meta { flex: 1; min-width: 0; }
+.link-bar-title { font-weight: 750; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--accent-text, var(--accent)); }
+.link-bar-sub { font-size: 12.5px; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

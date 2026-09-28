@@ -3282,7 +3282,7 @@ async function cancelScheduledMessage(msg) {
 
 // Everything that describes a message's media; forwarding and "send now"
 // copy exactly these, so shapes, waveforms and spoilers survive.
-const MEDIA_FIELDS = ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "videoShape", "duration", "wave", "mediaSpoiler", "captionAbove", "mediaKey"];
+const MEDIA_FIELDS = ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "videoShape", "duration", "wave", "mediaSpoiler", "captionAbove", "mediaKey", "linkPreview"];
 
 function attachmentOf(msg) {
   // Decrypted messages show blob: URLs; forward the original (encrypted) ones.
@@ -3656,6 +3656,116 @@ function renderBubbleContent(bubble, msg) {
       bubble.prepend(p);
     } else bubble.appendChild(p);
   }
+  if (msg.linkPreview?.url && !hasAttachment) bubble.appendChild(renderLinkPreview(msg.linkPreview));
+}
+
+// ---------- Link previews ----------
+// Fetched by /api/preview while typing; the sender attaches the result to
+// the message (inside the encrypted content in 1:1 chats), so receivers
+// never contact the preview service.
+
+const linkPreviewCache = new Map(); // url -> Promise<data|null>
+function fetchLinkPreview(url) {
+  if (!linkPreviewCache.has(url)) {
+    linkPreviewCache.set(
+      url,
+      (async () => {
+        try {
+          const token = await currentUser.getIdToken();
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 6000);
+          const r = await fetch("/api/preview?url=" + encodeURIComponent(url), { headers: { Authorization: "Bearer " + token }, signal: ctrl.signal });
+          clearTimeout(timer);
+          if (r.status !== 200) return null;
+          const d = await r.json();
+          return d && (d.title || d.description || d.image) ? d : null;
+        } catch (_) {
+          return null;
+        }
+      })()
+    );
+  }
+  return linkPreviewCache.get(url);
+}
+
+function firstUrl(text) {
+  const m = (text || "").match(URL_RE);
+  if (!m) return null;
+  return m[0].startsWith("http") ? m[0] : "https://" + m[0];
+}
+
+function renderLinkPreview(lp) {
+  const a = document.createElement("a");
+  a.className = "link-card";
+  a.href = lp.url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.innerHTML = `<div class="link-card-body"><div class="link-card-site"></div><div class="link-card-title"></div><div class="link-card-desc"></div></div>`;
+  a.querySelector(".link-card-site").textContent = lp.site || "";
+  a.querySelector(".link-card-title").textContent = lp.title || "";
+  a.querySelector(".link-card-desc").textContent = lp.description || "";
+  if (lp.image) {
+    const img = document.createElement("img");
+    img.className = "link-card-img";
+    img.alt = "";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.onerror = () => img.remove();
+    img.onload = () => {
+      // Wide pictures go full-width under the text, small ones become a thumbnail.
+      if (img.naturalWidth >= 300 && img.naturalWidth / img.naturalHeight > 1.2) a.classList.add("wide");
+      a.classList.add("img-ready");
+    };
+    img.src = lp.image;
+    a.appendChild(img);
+  }
+  a.addEventListener("click", (e) => e.stopPropagation());
+  return a;
+}
+
+const linkBar = document.createElement("div");
+linkBar.className = "link-bar glass hidden";
+linkBar.innerHTML = `<span class="link-bar-icon">🔗</span><div class="link-bar-meta"><div class="link-bar-title"></div><div class="link-bar-sub"></div></div><button type="button" class="icon-btn link-bar-close" title="Без предпросмотра">✕</button>`;
+const composerLink = { url: null, data: null, dismissed: new Set() };
+
+function showLinkBar(data) {
+  linkBar.querySelector(".link-bar-title").textContent = data.title || data.site || data.url;
+  linkBar.querySelector(".link-bar-sub").textContent = data.description || data.site || "";
+  if (!linkBar.isConnected) composer.before(linkBar);
+  reveal(linkBar);
+}
+
+const updateLinkPreview = debounce(async () => {
+  const url = currentChatType === "notifications" ? null : firstUrl(msgInput.value);
+  if (!url || composerLink.dismissed.has(url)) {
+    composerLink.url = composerLink.data = null;
+    conceal(linkBar);
+    return;
+  }
+  if (url === composerLink.url && composerLink.data) return;
+  composerLink.url = url;
+  composerLink.data = null;
+  const data = await fetchLinkPreview(url);
+  if (composerLink.url !== url) return;
+  composerLink.data = data;
+  if (data) showLinkBar(data);
+  else conceal(linkBar);
+}, 500);
+
+msgInput.addEventListener("input", updateLinkPreview);
+linkBar.querySelector(".link-bar-close").addEventListener("click", () => {
+  if (composerLink.url) composerLink.dismissed.add(composerLink.url);
+  composerLink.url = composerLink.data = null;
+  conceal(linkBar);
+});
+
+// Takes the ready preview for the text being sent (and resets the bar).
+function takeLinkPreview(text) {
+  const url = firstUrl(text);
+  const data = url && composerLink.url === url && !composerLink.dismissed.has(url) ? composerLink.data : null;
+  composerLink.url = composerLink.data = null;
+  conceal(linkBar);
+  return data ? { url: data.url || url, title: data.title || "", description: data.description || "", image: data.image || "", site: data.site || "" } : null;
 }
 
 // ---------- In-app file viewer (PDF, text) ----------
@@ -5213,6 +5323,8 @@ async function doSendMessage(attachment, { scheduleAt = null, effect = null, sil
     // 🎲 🎯 🏀 🎰 on their own become a mini game with a result rolled here.
     if (!attachment && gameForText(text) && currentChatType !== "notifications") extra.game = rollGame(text);
     if (effect) extra.effect = effect;
+    const lp = !attachment && !extra.game ? takeLinkPreview(text) : null;
+    if (lp) extra.linkPreview = lp;
     await deliver({
       type: currentChatType,
       id: currentChatId,
@@ -7184,7 +7296,7 @@ let currentLanguage = "ru";
 // swapped through the EN dictionary. User content (messages, names) is skipped.
 
 const I18N_SKIP =
-  ".bubble, .mention-name, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
+  ".bubble, .mention-name, .link-bar-meta, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
 const I18N_ATTRS = ["placeholder", "title", "aria-label"];
 const CYRILLIC = /[А-Яа-яЁё]/;
 let i18nObserver = null;

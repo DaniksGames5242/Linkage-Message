@@ -10,35 +10,9 @@
 //   Cloudflare Realtime TURN  TURN_CLOUDFLARE_KEY_ID + TURN_CLOUDFLARE_API_TOKEN
 //   Metered.ca                METERED_DOMAIN (e.g. myapp.metered.live) + METERED_API_KEY
 //   Your own coturn server    TURN_URLS (comma separated) + TURN_USERNAME + TURN_CREDENTIAL
-// Optional: FIREBASE_API_KEY (otherwise read from public/firebase-config.js).
+// Optional: FIREBASE_API_KEY (otherwise read from public/firebase-config.js), see _auth.js.
 
-const fs = require("fs");
-const path = require("path");
-
-function firebaseApiKey() {
-  if (process.env.FIREBASE_API_KEY) return process.env.FIREBASE_API_KEY;
-  try {
-    const src = fs.readFileSync(path.join(process.cwd(), "public", "firebase-config.js"), "utf8");
-    return (src.match(/apiKey:\s*["']([^"']+)["']/) || [])[1] || null;
-  } catch {
-    return null;
-  }
-}
-
-// Valid Firebase ID token of this project → uid.
-async function verifyUser(req) {
-  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  const key = firebaseApiKey();
-  if (!token || !key) return null;
-  const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(key)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ idToken: token }),
-  });
-  if (!r.ok) return null;
-  const data = await r.json();
-  return data.users?.[0]?.localId || null;
-}
+const { verifyUser } = require("./_auth.js");
 
 const asArray = (x) => (Array.isArray(x) ? x : x ? [x] : []);
 
