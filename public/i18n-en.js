@@ -3,6 +3,7 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Вас упомянули": "You were mentioned",
   "Сообщения скопированы": "Messages copied",
   "Не все сообщения удалось удалить": "Some messages couldn't be deleted",
   "Не удалось соединиться": "Couldn't connect",
@@ -632,7 +633,7 @@ const MONTHS = { января: "January", февраля: "February", марта
 
 // Strings with numbers or names inside.
 export const EN_PATTERNS = [
-  [/^(\d+) сообщени(е|я|й)$/, (m, n) => `${n} message${n.endsWith("1") && !n.endsWith("11") ? "" : "s"}`],
+  [/^(\d+) сообщени(е|я|й)$/, (m, n) => `${n} message${n === "1" ? "" : "s"}`],
   [/^Удалить у меня \((\d+)\)$/, "Delete for me ($1)"],
   [/^Удалить у всех \((\d+)\)$/, "Delete for everyone ($1)"],
   [/^(\d{1,2}) (января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?: (\d{4}))?(?: г\.)?$/, (m, d, mon, y) => `${MONTHS[mon]} ${d}${y ? `, ${y}` : ""}`],

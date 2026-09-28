@@ -119,6 +119,10 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
       lastSilent: !!opts.silent,
       hiddenFor: [],
       unread: Object.fromEntries(others.map((uid) => [uid, increment(1)])),
+      // Unread @mentions per member (the "@" badge in the chat list).
+      ...(extra?.mentions?.length
+        ? { mentions: Object.fromEntries(extra.mentions.filter((u) => others.includes(u)).map((u) => [u, increment(1)])) }
+        : {}),
     },
     { merge: true }
   );
@@ -177,6 +181,7 @@ export async function editEncryptedGroupMessage(groupId, messageId, enc) {
 export async function markGroupRead(groupId, uid, receipt = true) {
   await updateDoc(doc(db, "groups", groupId), {
     [`unread.${uid}`]: 0,
+    [`mentions.${uid}`]: 0,
     ...(receipt ? { [`lastRead.${uid}`]: serverTimestamp() } : {}),
   });
 }

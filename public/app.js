@@ -1730,7 +1730,7 @@ const ICON_PIN =
   '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M16 3a1 1 0 0 1 .7 1.7L15.4 6l2.6 5.2 1.3-1.3a1 1 0 1 1 1.4 1.4L17.4 14.6l3.3 3.3a1 1 0 0 1-1.4 1.4L16 16l-3.3 3.3a1 1 0 0 1-1.4-1.4l3.3-3.3-.7-.7-5.2-2.6-1.3 1.3A1 1 0 1 1 6 11.2L10.9 6.3A1 1 0 0 1 16 3z" transform="rotate(0)"/></svg>';
 
 // Builds one chat-list row: avatar, name + flags, last line, time + unread.
-function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false, status = null, birthday = false }) {
+function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false, status = null, birthday = false, mentioned = false }) {
   const item = document.createElement("div");
   item.className =
     "room-item" +
@@ -1748,8 +1748,8 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
     <div class="room-side">
       <div class="room-time"></div>
       <div class="room-badges">${pinned && !unread ? `<span class="room-flag">${ICON_PIN}</span>` : ""}${
-    unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""
-  }</div>
+    mentioned ? `<span class="mention-badge" title="Вас упомянули">@</span>` : ""
+  }${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}</div>
     </div>
   `;
   item.querySelector(".room-name").textContent = name;
@@ -2324,6 +2324,7 @@ async function renderChats() {
         last: group.lastMessage ? lastPrefix + stripRich(group.lastMessage) : group.type === "channel" ? "Канал" : "Группа",
         lastAt: group.lastMessageAt,
         unread: unreadFor(group),
+        mentioned: (group.mentions?.[me] || 0) > 0 && group.id !== currentChatId,
         muted: isChatMuted(group.id),
         pinned: isChatPinned(group.id),
         onClick: () => openGroupChat(group),
@@ -4873,21 +4874,154 @@ function centerOfPoint(el) {
 // ---------- Links ----------
 
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]|www\.[^\s<>"']+[^\s<>"'.,;:!?)\]])/gi;
+// Links, @usernames and #hashtags, in one pass so they never overlap.
+const TOKEN_RE = new RegExp(URL_RE.source + "|(?<![\\w@])@([a-z0-9_]{3,20})\\b|(?<![\\w#&])#([\\p{L}\\p{N}_]{2,40})", "giu");
 function appendLinkified(parent, text) {
   let last = 0;
-  text.replace(URL_RE, (match, _g, offset) => {
+  text.replace(TOKEN_RE, (match, url, user, tag, offset) => {
     if (offset > last) parent.append(text.slice(last, offset));
-    const a = document.createElement("a");
-    a.href = match.startsWith("http") ? match : "https://" + match;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.textContent = match;
-    parent.append(a);
+    if (url) {
+      const a = document.createElement("a");
+      a.href = match.startsWith("http") ? match : "https://" + match;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = match;
+      parent.append(a);
+    } else if (user) {
+      const m = document.createElement("span");
+      m.className = "mention" + (user.toLowerCase() === myProfile?.username ? " me" : "");
+      m.textContent = match;
+      m.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openMention(user.toLowerCase());
+      });
+      parent.append(m);
+    } else {
+      const h = document.createElement("span");
+      h.className = "hashtag";
+      h.textContent = match;
+      h.addEventListener("click", (e) => {
+        e.stopPropagation();
+        searchInChat(match);
+      });
+      parent.append(h);
+    }
     last = offset + match.length;
     return match;
   });
   if (last < text.length) parent.append(text.slice(last));
 }
+
+async function openMention(username) {
+  if (username === myProfile?.username) return;
+  try {
+    const found = await searchUser(username, currentUser.uid);
+    if (found && !found.self) openContactProfile(found.uid, found.profile);
+    else toast("Пользователь не найден", { tone: "error" });
+  } catch (_) {
+    toast("Пользователь не найден", { tone: "error" });
+  }
+}
+
+function searchInChat(q) {
+  openChatSearch();
+  chatSearchInput.value = q;
+  chatSearchInput.dispatchEvent(new Event("input"));
+}
+
+// ---------- @mentions ----------
+
+async function memberProfiles(uids) {
+  const list = await Promise.all(
+    uids.map(async (uid) => [uid, uid === currentUser.uid ? myProfile : profileForUid(uid) || (await loadProfile(uid).catch(() => null))])
+  );
+  return list.filter(([, p]) => p?.username);
+}
+
+async function mentionedUids(text, members) {
+  const names = new Set([...(text || "").matchAll(/(?<![\w@])@([a-z0-9_]{3,20})\b/gi)].map((m) => m[1].toLowerCase()));
+  if (!names.size) return [];
+  const profiles = await memberProfiles(members);
+  return profiles.filter(([uid, p]) => uid !== currentUser.uid && names.has(p.username.toLowerCase())).map(([uid]) => uid);
+}
+
+const mentionBox = document.createElement("div");
+mentionBox.className = "mention-suggest glass hidden";
+let mentionState = null; // { start, items, index }
+
+function closeMentions() {
+  if (!mentionState) return;
+  mentionState = null;
+  conceal(mentionBox);
+}
+
+async function updateMentions() {
+  const isGroup = currentChatType === "group" || currentChatType === "channel";
+  const caret = msgInput.selectionStart ?? msgInput.value.length;
+  const before = msgInput.value.slice(0, caret);
+  const m = isGroup ? before.match(/(?:^|\s)@([a-z0-9_]{0,20})$/i) : null;
+  if (!m) return closeMentions();
+  const q = m[1].toLowerCase();
+  const profiles = await memberProfiles(currentGroupRef?.members || []);
+  const items = profiles
+    .filter(([uid, p]) => uid !== currentUser.uid && (p.username.toLowerCase().startsWith(q) || (p.displayName || "").toLowerCase().startsWith(q)))
+    .slice(0, 6);
+  if (!items.length) return closeMentions();
+  const wasOpen = !!mentionState;
+  mentionState = { start: caret - m[1].length - 1, end: caret, items, index: 0 };
+  if (!mentionBox.isConnected) composer.before(mentionBox);
+  mentionBox.innerHTML = "";
+  items.forEach(([uid, p], i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mention-item" + (i === 0 ? " active" : "");
+    b.innerHTML = `${visibleAvatarHTML(p, uid)}<span class="mention-name"></span><span class="mention-user">@${escapeHTML(p.username)}</span>`;
+    b.querySelector(".mention-name").textContent = p.displayName || p.username;
+    b.addEventListener("pointerdown", (e) => e.preventDefault()); // keep the keyboard open
+    b.addEventListener("click", () => pickMention(i));
+    mentionBox.appendChild(b);
+  });
+  if (!wasOpen) {
+    reveal(mentionBox);
+    stagger(mentionBox.children, { y: 8, blur: 0, step: 24, spring: "smooth" });
+  }
+}
+
+function pickMention(i) {
+  if (!mentionState) return;
+  const [, p] = mentionState.items[i];
+  const v = msgInput.value;
+  const insert = "@" + p.username + " ";
+  msgInput.value = v.slice(0, mentionState.start) + insert + v.slice(mentionState.end);
+  const pos = mentionState.start + insert.length;
+  msgInput.setSelectionRange(pos, pos);
+  closeMentions();
+  msgInput.focus();
+  msgInput.dispatchEvent(new Event("input"));
+}
+
+msgInput.addEventListener("input", () => updateMentions());
+msgInput.addEventListener("blur", () => setTimeout(closeMentions, 150));
+msgInput.addEventListener(
+  "keydown",
+  (e) => {
+    if (!mentionState) return;
+    const n = mentionState.items.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      mentionState.index = (mentionState.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      [...mentionBox.children].forEach((b, i) => b.classList.toggle("active", i === mentionState.index));
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      pickMention(mentionState.index);
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      closeMentions();
+    }
+  },
+  true
+);
 
 // ---------- Date separators ----------
 
@@ -6920,10 +7054,12 @@ async function maybeNotify(chatData) {
 async function maybeNotifyGroup(groupId, groupData) {
   if (!groupData.lastMessageSenderId || groupData.lastMessageSenderId === currentUser.uid) return;
   if (!isNewLastMessage(groupId, groupData)) return;
-  if (isChatMuted(groupId)) return;
+  // Like Telegram, an @mention gets through a muted chat.
+  const mentioned = (groupData.mentions?.[currentUser.uid] || 0) > 0;
+  if (isChatMuted(groupId) && !mentioned) return;
   if (currentChatId === groupId && !document.hidden) return;
   const prefs = myProfile?.notifications || {};
-  if (prefs.muteAll || prefs.groups === false) return;
+  if (prefs.muteAll || (prefs.groups === false && !mentioned)) return;
 
   const sender = profileForUid(groupData.lastMessageSenderId) || (await loadProfile(groupData.lastMessageSenderId));
   const text = prefs.preview !== false ? stripRich(groupData.lastMessage || "") : "Новое сообщение";
@@ -7048,7 +7184,7 @@ let currentLanguage = "ru";
 // swapped through the EN dictionary. User content (messages, names) is skipped.
 
 const I18N_SKIP =
-  ".bubble, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
+  ".bubble, .mention-name, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
 const I18N_ATTRS = ["placeholder", "title", "aria-label"];
 const CYRILLIC = /[А-Яа-яЁё]/;
 let i18nObserver = null;
@@ -7972,6 +8108,8 @@ async function deliver({ type, id, text = "", attachment = null, replyTo = null,
   if (type === "notifications") return addBroadcast(me, text);
   if (type === "group" || type === "channel") {
     const members = (groups.find((g) => g.id === id) || currentGroupRef)?.members || [];
+    const mentions = await mentionedUids(text, members);
+    if (mentions.length) extra = { ...(extra || {}), mentions };
     return sendGroupMessage(id, me, text, attachment, replyTo, extra, members, { scheduleAt, silent, plain });
   }
   // 1:1 chat — encrypted whenever the other person's app has a device key.
