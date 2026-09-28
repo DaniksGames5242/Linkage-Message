@@ -245,3 +245,10 @@ export async function clearChatForMe(chatId, uid) {
 export async function setChecklistItem(chatId, messageId, idx, uid) {
   await updateDoc(doc(db, "chats", chatId, "messages", messageId), { [`checks.${idx}`]: uid || deleteField() });
 }
+
+// Adds wrapped message keys for more of the account's devices (history sync).
+export async function addMessageKeys(chatId, messageId, entries) {
+  const patch = {};
+  for (const [id, v] of Object.entries(entries)) patch[`enc.keys.${id}`] = v;
+  if (Object.keys(patch).length) await updateDoc(doc(db, "chats", chatId, "messages", messageId), patch);
+}

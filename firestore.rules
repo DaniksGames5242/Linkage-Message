@@ -55,6 +55,15 @@ service cloud.firestore {
     }
 
     // Poll votes: a member may only change their own entry in `votes`.
+    // Another device of the same account adds its wrapped key to an E2E
+    // message (history on every device); ciphertext itself can't change.
+    function isKeyShare() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enc'])
+        && request.resource.data.enc.diff(resource.data.enc).affectedKeys().hasOnly(['keys'])
+        && request.resource.data.enc.keys.diff(resource.data.enc.keys).changedKeys().size() == 0
+        && request.resource.data.enc.keys.diff(resource.data.enc.keys).removedKeys().size() == 0;
+    }
+
     function isChecklistEdit() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checks'])
         && request.resource.data.get('checks', {}).diff(resource.data.get('checks', {})).affectedKeys().size() == 1;
@@ -306,7 +315,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
-          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe() || isChecklistEdit());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe() || isChecklistEdit() || isKeyShare());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }

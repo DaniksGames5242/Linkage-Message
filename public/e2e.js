@@ -8,8 +8,10 @@
 // Each message is sealed once with a fresh random AES-GCM-256 key, and that
 // key is wrapped separately for every device of both people:
 //   wrap key = HKDF-SHA256(ECDH(sender device, recipient device), salt = chat id)
-// A device can read a message if the message carries a wrapped key for it,
-// so a brand-new device cannot read history from before it existed.
+// A device can read a message if the message carries a wrapped key for it.
+// When you add a device, your other devices wrap old messages' keys for it
+// (shareKeys), so history shows up everywhere. Photos, videos, voice and
+// files are encrypted with their own key before upload (encryptBlob).
 
 const subtle = globalThis.crypto?.subtle;
 export const e2eSupported = !!subtle && typeof indexedDB !== "undefined";
@@ -119,15 +121,56 @@ export async function sealFor(chatId, recipients, content) {
 
 export class NotForThisDevice extends Error {}
 
-// senderPub: the public key of the device named in box.from.
-export async function openFrom(chatId, box, senderPub) {
+async function unwrapRaw(chatId, box, senderPub, byPub) {
   const entry = box?.keys?.[device?.id];
   if (!entry) throw new NotForThisDevice("no key for this device");
-  const wk = await wrapKeyFor(chatId, senderPub);
-  const raw = await subtle.decrypt({ name: "AES-GCM", iv: unb64(entry.iv) }, wk, unb64(entry.ct));
+  // Keys shared later by another device (see shareKeys) name that device in `by`.
+  const wk = await wrapKeyFor(chatId, entry.by ? byPub : senderPub);
+  if (entry.by && !byPub) throw new Error("unknown sharing device");
+  return subtle.decrypt({ name: "AES-GCM", iv: unb64(entry.iv) }, wk, unb64(entry.ct));
+}
+
+// senderPub: the public key of the device named in box.from; byPub: the key of
+// the device that shared this device's entry, when it has a `by` field.
+export async function openFrom(chatId, box, senderPub, byPub = null) {
+  const raw = await unwrapRaw(chatId, box, senderPub, byPub);
   const msgKey = await subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
   const plain = await subtle.decrypt({ name: "AES-GCM", iv: unb64(box.iv) }, msgKey, unb64(box.ct));
   return JSON.parse(dec.decode(plain));
+}
+
+// History on every device: a device that can read a message wraps its key for
+// the account's other devices that were added later. Returns the new entries.
+export async function shareKeys(chatId, box, senderPub, byPub, recipients) {
+  const raw = await unwrapRaw(chatId, box, senderPub, byPub);
+  const out = {};
+  await Promise.all(
+    recipients.map(async (r) => {
+      if (!r?.id || !r?.pub?.x || box.keys?.[r.id] || r.id === device.id) return;
+      const wk = await wrapKeyFor(chatId, r.pub);
+      const wiv = crypto.getRandomValues(new Uint8Array(12));
+      out[r.id] = { iv: b64(wiv), ct: b64(await subtle.encrypt({ name: "AES-GCM", iv: wiv }, wk, raw)), by: device.id };
+    })
+  );
+  return out;
+}
+
+// ---------- Encrypted media ----------
+// Files are encrypted with their own random AES-GCM key before upload; the
+// key travels inside the (already end-to-end encrypted) message.
+
+export async function encryptBlob(blob) {
+  const raw = crypto.getRandomValues(new Uint8Array(32));
+  const key = await subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await subtle.encrypt({ name: "AES-GCM", iv }, key, await blob.arrayBuffer());
+  return { blob: new Blob([ct], { type: "application/octet-stream" }), mediaKey: { k: b64(raw), iv: b64(iv), t: blob.type || "" } };
+}
+
+export async function decryptToBlob(buf, mediaKey) {
+  const key = await subtle.importKey("raw", unb64(mediaKey.k), "AES-GCM", false, ["decrypt"]);
+  const plain = await subtle.decrypt({ name: "AES-GCM", iv: unb64(mediaKey.iv) }, key, buf);
+  return new Blob([plain], { type: mediaKey.t || "application/octet-stream" });
 }
 
 // ---------- Safety code ----------

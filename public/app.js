@@ -10,7 +10,7 @@ import {
   changePassword,
   deleteAccount,
 } from "./auth.js";
-import { e2eSupported, initDevice, forgetDevice, hasDevice, deviceId, devicePublicKey, sealFor, openFrom, NotForThisDevice, fingerprint } from "./e2e.js";
+import { e2eSupported, initDevice, forgetDevice, hasDevice, deviceId, devicePublicKey, sealFor, openFrom, NotForThisDevice, fingerprint, shareKeys, encryptBlob, decryptToBlob } from "./e2e.js";
 import { publishDevice } from "./e2e-store.js";
 import { recordCircle, buildVideoNote, circlesSupported, MAX_ZOOM, ensureTriangleClip } from "./circle.js";
 import { searchUser, searchUsers, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName, listenProfile } from "./contacts.js";
@@ -33,6 +33,7 @@ import {
   editEncryptedMessage,
   votePoll,
   setChecklistItem,
+  addMessageKeys,
   hideMessageForMe,
 } from "./chats.js";
 import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
@@ -3120,7 +3121,10 @@ function openGroupChat(group) {
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
-  unsubMessages = listenGroupMessages(group.id, (msgs) => {
+  unsubMessages = listenGroupMessages(group.id, async (msgs) => {
+    if (currentChatId !== group.id) return;
+    // Media forwarded from encrypted chats keeps its file key.
+    if (msgs.some((m) => m.mediaKey)) msgs = await Promise.all(msgs.map((m) => (m.mediaKey ? openPlainMedia(m) : m)));
     if (currentChatId !== group.id) return;
     currentChatRawMessages = msgs;
     rerenderMessages();
@@ -3242,9 +3246,11 @@ async function cancelScheduledMessage(msg) {
 
 // Everything that describes a message's media; forwarding and "send now"
 // copy exactly these, so shapes, waveforms and spoilers survive.
-const MEDIA_FIELDS = ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "videoShape", "duration", "wave", "mediaSpoiler", "captionAbove"];
+const MEDIA_FIELDS = ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "videoShape", "duration", "wave", "mediaSpoiler", "captionAbove", "mediaKey"];
 
 function attachmentOf(msg) {
+  // Decrypted messages show blob: URLs; forward the original (encrypted) ones.
+  if (msg._content) msg = { ...msg, ...msg._content };
   const fields = {};
   MEDIA_FIELDS.forEach((k) => {
     if (msg[k] !== undefined && msg[k] !== null) fields[k] = msg[k];
@@ -5245,7 +5251,7 @@ function pendingUpload({ target, kind, file, name, shape, duration, wave, queued
   };
 }
 
-async function buildFileAttachment(original, { asFile = false, progress = null } = {}) {
+async function buildFileAttachment(original, { asFile = false, progress = null, target = null } = {}) {
   const kind = asFile
     ? "file"
     : original.type.startsWith("image/")
@@ -5259,19 +5265,21 @@ async function buildFileAttachment(original, { asFile = false, progress = null }
   const own = !progress;
   if (own) progress = uploadToast(`Отправка ${FILE_LABELS[kind]}: ${original.name || "файл"}`);
   let url;
+  const sealed = await sealUpload(file, target);
   try {
-    const resourceType = kind === "image" ? "image" : kind === "file" ? "raw" : "video"; // Cloudinary files audio under "video"
-    ({ url } = await uploadToCloudinary(file, resourceType, progress.update, progress.signal));
+    const resourceType = sealed.mediaKey ? "raw" : kind === "image" ? "image" : kind === "file" ? "raw" : "video"; // Cloudinary files audio under "video"
+    ({ url } = await uploadToCloudinary(sealed.file, resourceType, progress.update, progress.signal));
     if (own) progress.done();
   } catch (err) {
     progress.fail();
     throw err;
   }
+  const mk = sealed.mediaKey ? { mediaKey: sealed.mediaKey } : {};
   if (kind === "image") {
     const label = file.type === "image/gif" ? "📷 GIF" : "📷 Фото";
-    return { fields: { imageUrl: url }, previewText: label, defaultCaption: "📷" };
+    return { fields: { imageUrl: url, ...mk }, previewText: label, defaultCaption: "📷" };
   }
-  const fields = { fileUrl: url, fileName: original.name, fileType: original.type || "application/octet-stream", fileSize: file.size };
+  const fields = { fileUrl: url, fileName: original.name, fileType: original.type || "application/octet-stream", fileSize: file.size, ...mk };
   if (kind === "video") return { fields, previewText: "🎬 Видео", defaultCaption: "🎬" };
   return { fields, previewText: `📎 ${original.name}`, defaultCaption: `📎 ${original.name}` };
 }
@@ -5434,7 +5442,7 @@ async function sendMediaBatch(files, target, caption, { above = false, spoiler =
     if (job.progress.signal.aborted) continue;
     try {
       job.progress.start();
-      const attachment = await buildFileAttachment(job.file, { asFile: job.asPlainFile, progress: job.progress });
+      const attachment = await buildFileAttachment(job.file, { asFile: job.asPlainFile, progress: job.progress, target });
       const visual = isVisualFile(job.file) && !job.asPlainFile;
       if (visual && spoiler) attachment.fields.mediaSpoiler = true;
       if (visual && above && job.text) attachment.fields.captionAbove = true;
@@ -6179,13 +6187,15 @@ async function sendVoice(blob, duration, wave, target) {
   const file = new File([blob], `voice.${ext}`, { type });
   const progress = pendingUpload({ target, kind: "voice", file, duration, wave, retry: () => sendVoice(blob, duration, wave, target) });
   try {
-    const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal); // Cloudinary files audio under "video"
+    const sealed = await sealUpload(file, target);
+    const { url } = await uploadToCloudinary(sealed.file, sealed.mediaKey ? "raw" : "video", progress.update, progress.signal); // Cloudinary files audio under "video"
     progress.sending();
     // Served as MP3 so Safari can play recordings made in Chrome (webm/opus).
-    const playable = url.replace(/\.(webm|ogg|weba|m4a)$/i, ".mp3");
+    // Encrypted recordings can't be transcoded by the server and play as recorded.
+    const playable = sealed.mediaKey ? url : url.replace(/\.(webm|ogg|weba|m4a)$/i, ".mp3");
     await deliver({
       ...target,
-      attachment: { fields: { voiceUrl: playable, duration, wave }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
+      attachment: { fields: { voiceUrl: playable, duration, wave, ...(sealed.mediaKey ? { mediaKey: sealed.mediaKey } : {}) }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
     });
     progress.done();
   } catch (err) {
@@ -6203,14 +6213,23 @@ async function sendCircle(result, target, shape = "circle") {
   const file = new File([result.blob], `circle.${ext}`, { type: result.mime.split(";")[0] });
   const progress = pendingUpload({ target, kind: "circle", file, shape, retry: () => sendCircle(result, target, shape) });
   try {
-    const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal);
+    const sealed = await sealUpload(file, target);
+    const { url } = await uploadToCloudinary(sealed.file, sealed.mediaKey ? "raw" : "video", progress.update, progress.signal);
     progress.sending();
-    // Cloudinary serves a square H.264 MP4 of it, which every browser plays.
-    const playable = url.replace("/upload/", "/upload/c_fill,g_center,w_480,h_480,q_auto/").replace(/\.(webm|mov|mkv)$/i, ".mp4");
+    // Cloudinary serves a square H.264 MP4 of it, which every browser plays
+    // (encrypted recordings are stored as-is and cropped by CSS).
+    const playable = sealed.mediaKey
+      ? url
+      : url.replace("/upload/", "/upload/c_fill,g_center,w_480,h_480,q_auto/").replace(/\.(webm|mov|mkv)$/i, ".mp4");
     await deliver({
       ...target,
       attachment: {
-        fields: { videoNoteUrl: playable, duration: result.duration, ...(shape === "triangle" ? { videoShape: "triangle" } : {}) },
+        fields: {
+          videoNoteUrl: playable,
+          duration: result.duration,
+          ...(shape === "triangle" ? { videoShape: "triangle" } : {}),
+          ...(sealed.mediaKey ? { mediaKey: sealed.mediaKey } : {}),
+        },
         previewText: shape === "triangle" ? "🔺 Видеотреугольник" : "⭕ Видеосообщение",
         defaultCaption: shape === "triangle" ? "🔺" : "⭕",
       },
@@ -7531,11 +7550,108 @@ async function senderDevicePub(uid, devId) {
   return dev?.pub || null;
 }
 
+async function sharerPub(chatId, box) {
+  const by = box?.keys?.[deviceId()]?.by;
+  if (!by) return null;
+  for (const uid of [currentUser.uid, otherUidOf(chatId)]) {
+    const pub = await senderDevicePub(uid, by);
+    if (pub) return pub;
+  }
+  return null;
+}
+
 async function openBoxFrom(chatId, box, senderUid) {
   if (box?.v !== 2) throw new Error("unsupported");
   const pub = await senderDevicePub(senderUid, box.from);
   if (!pub) throw new Error("unknown sender device");
-  return openFrom(chatId, box, pub);
+  return openFrom(chatId, box, pub, await sharerPub(chatId, box));
+}
+
+// ---------- History on all of my devices ----------
+// Messages sealed before one of my devices existed get its key added by a
+// device that can already read them (only for my own devices).
+const sharedDone = new Set();
+let shareQueue = Promise.resolve();
+function queueKeyShare(chatId, m) {
+  const mine = devicesOf(currentUser.uid).filter((d) => d.id !== deviceId() && d.pub?.x);
+  const missing = mine.filter((d) => !m.enc.keys?.[d.id]);
+  if (!missing.length || sharedDone.has(m.id)) return;
+  sharedDone.add(m.id);
+  shareQueue = shareQueue
+    .then(async () => {
+      const senderPub = await senderDevicePub(m.senderId, m.enc.from);
+      if (!senderPub) return;
+      const entries = await shareKeys(chatId, m.enc, senderPub, await sharerPub(chatId, m.enc), missing);
+      await addMessageKeys(chatId, m.id, entries);
+    })
+    .catch((err) => console.warn("key share skipped:", err?.message || err));
+}
+
+// ---------- Encrypted media ----------
+
+function willEncrypt(target) {
+  return target?.type === "contact" && hasDevice() && devicesOf(otherUidOf(target.id)).length > 0;
+}
+
+// Encrypts a file for upload when the chat is end-to-end encrypted.
+async function sealUpload(file, target) {
+  if (!willEncrypt(target)) return { file, mediaKey: null };
+  const { blob, mediaKey } = await encryptBlob(file);
+  return { file: new File([blob], "e2e.bin", { type: "application/octet-stream" }), mediaKey };
+}
+
+const mediaCache = new Map(); // url -> Promise<blobURL>
+function openMedia(url, mediaKey) {
+  if (!mediaCache.has(url)) {
+    mediaCache.set(
+      url,
+      fetch(url)
+        .then((r) => {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.arrayBuffer();
+        })
+        .then((buf) => decryptToBlob(buf, mediaKey))
+        .then((blob) => URL.createObjectURL(blob))
+        .catch((err) => {
+          mediaCache.delete(url);
+          throw err;
+        })
+    );
+  }
+  return mediaCache.get(url);
+}
+
+// Unencrypted message carrying an encrypted file (forwarded out of an E2E chat).
+async function openPlainMedia(m) {
+  const shown = await withOpenMedia(m);
+  return shown === m ? m : { ...shown, _content: m };
+}
+
+const MEDIA_URL_FIELDS = ["imageUrl", "fileUrl", "voiceUrl", "videoNoteUrl"];
+let mediaRerenderTimer = 0;
+// Swaps encrypted URLs for decrypted blob: URLs; small media is awaited so the
+// message renders once, big files decrypt in the background.
+async function withOpenMedia(content) {
+  if (!content?.mediaKey) return content;
+  const field = MEDIA_URL_FIELDS.find((f) => content[f]);
+  if (!field) return content;
+  const url = content[field];
+  const p = openMedia(url, content.mediaKey);
+  const small = field !== "fileUrl" || (content.fileSize || 0) < 8 * 1024 * 1024;
+  if (small) {
+    try {
+      return { ...content, [field]: await p };
+    } catch (err) {
+      console.warn("media decrypt failed", err);
+      return content;
+    }
+  }
+  p.then(() => {
+    clearTimeout(mediaRerenderTimer);
+    mediaRerenderTimer = setTimeout(() => currentChatType === "contact" && rerenderMessages(), 60);
+  }).catch(() => {});
+  const ready = await Promise.race([p, Promise.resolve(null)]).catch(() => null);
+  return ready ? { ...content, [field]: ready } : content;
 }
 
 // Decrypts a snapshot of 1:1 messages (results cached per ciphertext).
@@ -7543,7 +7659,7 @@ const openedCache = new Map(); // ct -> content | "fail" | "notmine"
 async function openMessages(chatId, msgs) {
   return Promise.all(
     msgs.map(async (m) => {
-      if (!m.enc) return m;
+      if (!m.enc) return m.mediaKey ? openPlainMedia(m) : m;
       let content = openedCache.get(m.enc.ct);
       if (content === undefined && hasDevice()) {
         try {
@@ -7555,7 +7671,9 @@ async function openMessages(chatId, msgs) {
       }
       if (content === "notmine") return { ...m, text: "🔒 Отправлено до подключения этого устройства — прочитать можно на другом вашем устройстве", _locked: true };
       if (!content || content === "fail") return { ...m, text: "🔒 Не удалось расшифровать сообщение", _locked: true };
-      return { ...m, ...content, _content: content, _e2e: true };
+      queueKeyShare(chatId, m);
+      const shown = await withOpenMedia(content);
+      return { ...m, ...shown, _content: content, _e2e: true };
     })
   );
 }
