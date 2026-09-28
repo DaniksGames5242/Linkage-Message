@@ -994,8 +994,27 @@ const runNewChatContactSearch = debounce(async (raw) => {
     newChatContactResult.innerHTML = "";
     return;
   }
-  const result = await searchUser(q, currentUser.uid);
+  const needle = q.toLowerCase().replace(/^@/, "");
+  const found = await searchUsers(q, currentUser.uid).catch(() => []);
+  const exact = found.find((r) => r.profile.username === needle);
+  const result = exact || (found.length === 1 ? found[0] : null);
   if (!result || result.self) {
+    const others = found.filter((r) => !r.self);
+    if (others.length) {
+      newChatContactResult.innerHTML = "";
+      others.forEach(({ uid, profile }) =>
+        newChatContactResult.appendChild(
+          personRow(uid, profile, {
+            actionLabel: "Выбрать",
+            onAction: () => {
+              newChatUsernameInput.value = profile.username;
+              runNewChatContactSearch(profile.username);
+            },
+          })
+        )
+      );
+      return;
+    }
     newChatContactResult.innerHTML = `<div class="search-empty">${
       result?.self ? "Это вы 🙂" : "Пользователь не найден"
     }</div>`;
@@ -1140,6 +1159,7 @@ function openNewChatGroupStep(type) {
   newChatGroupError.textContent = "";
   renderGroupAvatarPreview();
   renderGroupMemberChips();
+  runGroupMemberSearch("");
   showNewChatStep(newChatGroupStep, 1);
 }
 
@@ -1167,45 +1187,49 @@ newChatGroupAvatarInput.addEventListener("change", async () => {
   }
 });
 
-const runGroupMemberSearch = debounce(async (raw) => {
-  const q = raw.trim();
-  if (!q) {
-    newChatGroupMemberResult.innerHTML = "";
+// Members are picked from people you already chat with (a checklist), not by username.
+function renderPeopleChecklist(container, q, { isChecked, isLocked = () => false, onToggle }) {
+  const people = localPeopleMatches(q || "");
+  container.innerHTML = "";
+  if (!people.length) {
+    container.innerHTML = '<div class="search-empty">Нет подходящих чатов</div>';
     return;
   }
-  const result = await searchUser(q, currentUser.uid);
-  if (!result || result.self || pendingGroupMembers.has(result.uid)) {
-    newChatGroupMemberResult.innerHTML = result?.self
-      ? '<div class="search-empty">Это вы 🙂</div>'
-      : pendingGroupMembers.has(result?.uid)
-      ? '<div class="search-empty">Уже добавлен(а)</div>'
-      : '<div class="search-empty">Пользователь не найден</div>';
-    return;
-  }
-  const { uid, profile } = result;
-  const card = document.createElement("div");
-  card.className = "search-result-card";
-  card.innerHTML = `
-    ${visibleAvatarHTML(profile, uid)}
-    <div class="search-result-meta">
-      <div class="search-result-name"></div>
-      <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
-    </div>
-    <div class="search-result-actions">
-      <button class="small-btn" id="gmr-add">Добавить</button>
-    </div>
-  `;
-  card.querySelector(".search-result-name").textContent = profile.displayName;
-  newChatGroupMemberResult.innerHTML = "";
-  newChatGroupMemberResult.appendChild(card);
-
-  card.querySelector("#gmr-add").addEventListener("click", () => {
-    pendingGroupMembers.set(uid, profile);
-    renderGroupMemberChips();
-    newChatGroupMemberInput.value = "";
-    newChatGroupMemberResult.innerHTML = "";
+  people.forEach(({ uid, profile }) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pick-item check-item";
+    const locked = isLocked(uid);
+    b.innerHTML = `${visibleAvatarHTML(profile, uid)}<div class="pick-item-meta"><div class="pick-item-name"></div><div class="pick-item-sub"></div></div><span class="check-box"></span>`;
+    const contact = contactsMap.get(uid);
+    b.querySelector(".pick-item-name").textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
+    b.querySelector(".pick-item-sub").textContent = locked ? "уже в группе" : "@" + (profile.username || "");
+    b.classList.toggle("checked", locked || isChecked(uid));
+    b.disabled = locked;
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        const now = await onToggle(uid, profile);
+        b.classList.toggle("checked", !!now);
+      } finally {
+        b.disabled = isLocked(uid);
+      }
+    });
+    container.appendChild(b);
   });
-}, 350);
+}
+
+function runGroupMemberSearch(raw) {
+  renderPeopleChecklist(newChatGroupMemberResult, raw.trim(), {
+    isChecked: (uid) => pendingGroupMembers.has(uid),
+    onToggle: (uid, profile) => {
+      if (pendingGroupMembers.has(uid)) pendingGroupMembers.delete(uid);
+      else pendingGroupMembers.set(uid, profile);
+      renderGroupMemberChips();
+      return pendingGroupMembers.has(uid);
+    },
+  });
+}
 
 newChatGroupMemberInput.addEventListener("input", () => runGroupMemberSearch(newChatGroupMemberInput.value));
 
@@ -1654,6 +1678,7 @@ const MI = {
   location: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-6.1 7-12a7 7 0 0 0-14 0c0 5.9 7 12 7 12z"/><circle cx="12" cy="10" r="2.6"/></svg>',
   file: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
   sparkle: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
   image: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>',
   archive: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="5" rx="1.5"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5"/><line x1="10" y1="12.5" x2="14" y2="12.5"/></svg>',
   unarchive: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="5" rx="1.5"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5"/><polyline points="9.5 15 12 12.5 14.5 15"/><line x1="12" y1="12.5" x2="12" y2="18"/></svg>',
@@ -5001,12 +5026,157 @@ function openAttachMenu() {
     x: r.left,
     y: r.top - 8,
     items: [
+      { label: "Камера", icon: MI.camera, onClick: openCameraRecorder },
       { label: "Фото, видео или файл", icon: MI.image, onClick: () => attachInput.click() },
       social && { label: "Опрос", icon: MI.poll, onClick: openPollCreator },
       canPlay && { label: "Геопозиция", icon: MI.location, onClick: sendLocation },
     ],
   });
   document.querySelector(".ctx-menu")?.classList.add("attach-menu");
+}
+
+// ---------- In-site camera: tap = photo, hold = video ----------
+
+function openCameraRecorder() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    toast("Камера недоступна в этом браузере", { tone: "error" });
+    return;
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "camera-overlay";
+  wrap.innerHTML = `
+    <video class="camera-view" autoplay playsinline muted></video>
+    <div class="camera-timer hidden">0:00</div>
+    <div class="camera-hint">Нажмите — фото, удерживайте — видео</div>
+    <div class="camera-bar">
+      <button type="button" class="camera-btn" data-act="close" aria-label="Закрыть">✕</button>
+      <button type="button" class="camera-shutter" aria-label="Снять"><span></span></button>
+      <button type="button" class="camera-btn" data-act="flip" aria-label="Сменить камеру">⟲</button>
+    </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add("open"));
+  const video = wrap.querySelector("video");
+  const shutter = wrap.querySelector(".camera-shutter");
+  const timerEl = wrap.querySelector(".camera-timer");
+  let stream = null;
+  let facing = "user";
+  let recorder = null;
+  let chunks = [];
+  let holdTimer = 0;
+  let tick = 0;
+  let startedAt = 0;
+  let closed = false;
+
+  async function start() {
+    stream?.getTracks().forEach((t) => t.stop());
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: true,
+      });
+    } catch {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
+      } catch (err) {
+        console.error(err);
+        toast("Нет доступа к камере", { tone: "error" });
+        close();
+        return;
+      }
+    }
+    if (closed) return stream.getTracks().forEach((t) => t.stop());
+    video.srcObject = stream;
+    video.classList.toggle("mirror", facing === "user");
+  }
+
+  function close() {
+    closed = true;
+    clearTimeout(holdTimer);
+    clearInterval(tick);
+    if (recorder?.state === "recording") recorder.onstop = null, recorder.stop();
+    stream?.getTracks().forEach((t) => t.stop());
+    wrap.classList.remove("open");
+    setTimeout(() => wrap.remove(), 250);
+  }
+
+  function takePhoto() {
+    const w = video.videoWidth, h = video.videoHeight;
+    if (!w) return;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d");
+    if (facing === "user") ctx.translate(w, 0), ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, w, h);
+    wrap.classList.add("flash");
+    c.toBlob((blob) => {
+      if (!blob) return;
+      close();
+      sendFiles([new File([blob], `photo_${Date.now()}.jpg`, { type: "image/jpeg" })]);
+    }, "image/jpeg", 0.9);
+  }
+
+  function startVideo() {
+    const mime = ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"].find((m) =>
+      MediaRecorder.isTypeSupported?.(m)
+    ) || "";
+    try {
+      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    } catch (err) {
+      console.error(err);
+      toast("Запись видео не поддерживается", { tone: "error" });
+      return;
+    }
+    chunks = [];
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder.onstop = () => {
+      const type = recorder.mimeType || mime || "video/webm";
+      const ext = type.includes("mp4") ? "mp4" : "webm";
+      const blob = new Blob(chunks, { type });
+      close();
+      if (blob.size) sendFiles([new File([blob], `video_${Date.now()}.${ext}`, { type })]);
+    };
+    recorder.start(250);
+    startedAt = Date.now();
+    wrap.classList.add("recording");
+    timerEl.classList.remove("hidden");
+    tick = setInterval(() => {
+      const sec = Math.floor((Date.now() - startedAt) / 1000);
+      timerEl.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+      if (sec >= 300) stopVideo();
+    }, 250);
+  }
+
+  function stopVideo() {
+    clearInterval(tick);
+    if (recorder?.state === "recording") recorder.stop();
+  }
+
+  shutter.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (!stream) return;
+    holdTimer = setTimeout(() => {
+      holdTimer = 0;
+      startVideo();
+    }, 280);
+  });
+  const release = () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = 0;
+      takePhoto();
+    } else if (recorder?.state === "recording") stopVideo();
+  };
+  shutter.addEventListener("pointerup", release);
+  shutter.addEventListener("pointercancel", release);
+  shutter.addEventListener("contextmenu", (e) => e.preventDefault());
+  wrap.querySelector('[data-act="close"]').addEventListener("click", close);
+  wrap.querySelector('[data-act="flip"]').addEventListener("click", () => {
+    if (recorder?.state === "recording") return;
+    facing = facing === "user" ? "environment" : "user";
+    start();
+  });
+  start();
 }
 
 async function sendGame(emoji) {
@@ -7863,6 +8033,7 @@ async function renderGroupMembers(group) {
   profileMembersInput.value = "";
   profileMembersResult.innerHTML = "";
   profileMembersList.innerHTML = "";
+  if (canAdd) setTimeout(() => runMemberAddSearch(""), 0);
 
   profileViewActions.innerHTML = "";
   const muted = isChatMuted(group.id);
@@ -7900,45 +8071,27 @@ async function renderGroupMembers(group) {
   stagger(profileMembersList.children, { y: 10, step: 25, delay: 60 });
 }
 
-const runMemberAddSearch = debounce(async (raw) => {
-  const q = raw.trim();
+function runMemberAddSearch(raw) {
   const group = currentGroupRef;
-  if (!q || !group) {
-    profileMembersResult.innerHTML = "";
-    return;
-  }
-  const result = await searchUser(q, currentUser.uid);
-  profileMembersResult.innerHTML = "";
-  if (!result || result.self) {
-    profileMembersResult.innerHTML = `<div class="search-empty">${result?.self ? "Это вы 🙂" : "Пользователь не найден"}</div>`;
-    return;
-  }
-  if ((group.members || []).includes(result.uid)) {
-    profileMembersResult.innerHTML = '<div class="search-empty">Уже в группе</div>';
-    return;
-  }
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = "pick-item";
-  b.innerHTML = `${visibleAvatarHTML(result.profile, result.uid)}<div class="pick-item-meta"><div class="pick-item-name"></div><div class="pick-item-sub"></div></div><span class="pick-item-badge">Добавить</span>`;
-  b.querySelector(".pick-item-name").textContent = result.profile.displayName;
-  b.querySelector(".pick-item-sub").textContent = "@" + result.profile.username;
-  b.addEventListener("click", async () => {
-    b.disabled = true;
-    try {
-      await addGroupMembers(group.id, [result.uid]);
-      b.classList.add("sent");
-      group.members = [...new Set([...(group.members || []), result.uid])];
-      toast(`${result.profile.displayName} добавлен(а)`);
-      setTimeout(() => renderGroupMembers(group), 600);
-    } catch (err) {
-      console.error(err);
-      b.disabled = false;
-      toast("Не удалось добавить", { tone: "error" });
-    }
+  if (!group) return (profileMembersResult.innerHTML = "");
+  renderPeopleChecklist(profileMembersResult, raw.trim(), {
+    isChecked: () => false,
+    isLocked: (uid) => (group.members || []).includes(uid),
+    onToggle: async (uid, profile) => {
+      try {
+        await addGroupMembers(group.id, [uid]);
+        group.members = [...new Set([...(group.members || []), uid])];
+        toast(`${profile.displayName} добавлен(а)`);
+        setTimeout(() => renderGroupMembers(group), 600);
+        return true;
+      } catch (err) {
+        console.error(err);
+        toast("Не удалось добавить", { tone: "error" });
+        return false;
+      }
+    },
   });
-  profileMembersResult.appendChild(b);
-}, 350);
+}
 profileMembersInput.addEventListener("input", () => runMemberAddSearch(profileMembersInput.value));
 
 // ---------- Motion & material wiring ----------
