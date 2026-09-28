@@ -9,9 +9,9 @@ import {
   forgetSession,
   changePassword,
   deleteAccount,
-  verifyPassword,
 } from "./auth.js";
-import { e2eSupported, setupKeys, rewrapKeys, loadKeys, forgetKeys, hasKeys, chatKey, seal, open as openBox, fingerprint, myPublicKey } from "./e2e.js";
+import { e2eSupported, initDevice, forgetDevice, hasDevice, deviceId, devicePublicKey, sealFor, openFrom, NotForThisDevice, fingerprint } from "./e2e.js";
+import { publishDevice } from "./e2e-store.js";
 import { recordCircle, buildVideoNote, circlesSupported } from "./circle.js";
 import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName } from "./contacts.js";
 import {
@@ -69,6 +69,7 @@ import {
   escapeHTML,
   resizeImageToDataUrl,
   imageFileToDataUrl,
+  describeDevice,
   fmtFileSize,
   attachPasswordToggle,
   EMOJI_PICKER_SET,
@@ -1677,7 +1678,7 @@ async function renderChats() {
     combined
       .filter((e) => e.kind === "contact" && e.data.lastEnc)
       .map(async (e) => {
-        const p = await openPreview(e.data.id, e.data.lastEnc);
+        const p = await openPreview(e.data.id, e.data.lastEnc, e.data.lastMessageSenderId);
         if (p) previews.set(e.data.id, p);
       })
   );
@@ -1881,14 +1882,11 @@ function renderPinnedBar() {
   const pinned = currentChatData()?.pinned;
   if (pinned?.id) {
     pinnedBarText.textContent = pinned.text || "Сообщение";
-    if (pinned.enc && currentChatType === "contact") {
+    if (pinned.enc && currentChatType === "contact" && hasDevice()) {
       const chatId = currentChatId;
-      const key = keyForChat(chatId, currentOtherUid);
-      key &&
-        key
-          .then((k) => openBox(k, pinned.enc))
-          .then((c) => currentChatId === chatId && (pinnedBarText.textContent = c.text))
-          .catch(() => {});
+      openBoxFrom(chatId, pinned.enc, pinned.by)
+        .then((c) => currentChatId === chatId && (pinnedBarText.textContent = c.text))
+        .catch(() => {});
     }
     pinnedBar.dataset.id = pinned.id;
     pinnedBarUnpin.classList.toggle("hidden", !canPinInCurrentChat());
@@ -1908,9 +1906,8 @@ pinnedBarUnpin.addEventListener("click", () => setPinnedMessage(null));
 
 async function setPinnedMessage(msg) {
   let payload = msg ? { id: msg.id, text: replyPreviewText(msg).slice(0, 120), senderName: replySenderLabel(msg) } : null;
-  if (payload && currentChatType === "contact") {
-    const key = keyForChat(currentChatId, currentOtherUid);
-    if (key) payload = { id: payload.id, text: "🔒 Сообщение", senderName: "", enc: await seal(await key, { text: payload.text }) };
+  if (payload && currentChatType === "contact" && isE2EChat(currentChatId)) {
+    payload = { id: payload.id, text: "🔒 Сообщение", senderName: "", by: currentUser.uid, enc: await sealForChat(currentChatId, { text: payload.text }) };
   }
   try {
     if (currentChatType === "contact") await setChatPinnedMessage(currentChatId, payload);
@@ -2223,8 +2220,8 @@ function openContactChat(chatId, otherUid, profile) {
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
-  rememberPubKey(otherUid, profile);
-  refreshPubKey(otherUid).then(() => currentChatId === chatId && refreshChatChrome());
+  rememberDevices(otherUid, profile);
+  refreshDevices(otherUid).then(() => currentChatId === chatId && refreshChatChrome());
   unsubMessages = listenMessages(chatId, (msgs) => {
     if (currentChatId !== chatId) return;
     currentChatRawSource = msgs;
@@ -2567,9 +2564,7 @@ function messageOps() {
       edit: async (id, text) => {
         const msg = currentChatRawMessages.find((m) => m.id === id);
         if (msg?._e2e) {
-          const key = keyForChat(currentChatId, currentOtherUid);
-          if (!key) throw new Error("Шифрование недоступно на этом устройстве");
-          return editEncryptedMessage(currentChatId, id, await seal(await key, { ...msg._content, text: text.trim() }));
+          return editEncryptedMessage(currentChatId, id, await sealForChat(currentChatId, { ...msg._content, text: text.trim() }));
         }
         return editMessage(currentChatId, id, text);
       },
@@ -3730,7 +3725,7 @@ async function maybeNotify(chatData) {
     const senderUid = chatData.lastMessageSenderId;
     const senderProfile = contactsMap.get(senderUid)?.profile || (await getProfile(senderUid));
     const title = senderProfile?.displayName || "Новое сообщение";
-    const opened = chatData.lastEnc ? await openPreview(chatData.id, chatData.lastEnc) : null;
+    const opened = chatData.lastEnc ? await openPreview(chatData.id, chatData.lastEnc, chatData.lastMessageSenderId) : null;
     const body = notifPrefs.preview !== false ? opened || chatData.lastMessage : "Новое сообщение";
     new Notification(title, { body });
   }
@@ -4167,7 +4162,6 @@ pwSaveBtn.addEventListener("click", async () => {
   pwSaveBtn.disabled = true;
   try {
     await changePassword(currentUser, pwCurrent.value, pwNew.value);
-    await rewrapKeys(currentUser.uid, pwCurrent.value, pwNew.value).catch((err) => console.warn("E2E rewrap failed:", err));
     pwCurrent.value = pwNew.value = pwConfirm.value = "";
     pwError.textContent = "";
     pwError.classList.add("ok-text");
@@ -4227,7 +4221,6 @@ function loadSessions() {
 }
 
 sessionsLogoutBtn.addEventListener("click", async () => {
-  await forgetKeys(currentUser.uid);
   cleanupSubscriptions();
   await logout();
 });
@@ -4252,7 +4245,7 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
   deleteAccountConfirmBtn.disabled = true;
   try {
     cleanupSubscriptions();
-    await forgetKeys(currentUser.uid);
+    await forgetDevice(currentUser.uid);
     await deleteAccount(currentUser, deleteAccountPassword.value, myProfile.username);
     window.location.href = "/login";
   } catch (err) {
@@ -4263,59 +4256,83 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
 });
 
 // ---------- End-to-end encryption (1:1 chats) ----------
+// Automatic: every device gets its own key on first launch (see e2e.js).
 
-const pubKeys = new Map(); // uid -> JWK (fresh from profiles)
+const deviceLists = new Map(); // uid -> { devices: {id: {pub}}, at }
 
-function rememberPubKey(uid, profile) {
-  if (uid && profile?.e2ePub?.x) pubKeys.set(uid, profile.e2ePub);
+function rememberDevices(uid, profile) {
+  if (uid && profile?.e2eDevices) deviceLists.set(uid, { devices: profile.e2eDevices, at: Date.now() });
 }
 
-async function refreshPubKey(uid) {
+async function refreshDevices(uid) {
   try {
-    const p = await getProfile(uid);
-    rememberPubKey(uid, p);
-    return p?.e2ePub || null;
+    const p = uid === currentUser.uid ? await fetchMyProfile(uid) : await getProfile(uid);
+    if (p?.e2eDevices) deviceLists.set(uid, { devices: p.e2eDevices, at: Date.now() });
   } catch (_) {
-    return pubKeys.get(uid) || null;
+    /* offline — keep what we have */
   }
+  return devicesOf(uid);
 }
 
-function theirPubKey(uid) {
-  return pubKeys.get(uid) || contactsMap.get(uid)?.profile?.e2ePub || profileCache.get(uid)?.profile?.e2ePub || null;
-}
-
-// Resolves the AES key for a 1:1 chat, or null when either side has no keys
-// (then messages go out unencrypted, as before).
-function keyForChat(chatId, otherUid) {
-  const pub = theirPubKey(otherUid);
-  return pub && hasKeys() ? chatKey(chatId, pub) : null;
+function devicesOf(uid) {
+  const known =
+    deviceLists.get(uid)?.devices ||
+    (uid === currentUser?.uid ? myProfile?.e2eDevices : null) ||
+    contactsMap.get(uid)?.profile?.e2eDevices ||
+    profileCache.get(uid)?.profile?.e2eDevices ||
+    {};
+  return Object.entries(known)
+    .filter(([, d]) => d?.pub?.x)
+    .map(([id, d]) => ({ id, pub: d.pub }));
 }
 
 const otherUidOf = (chatId) => chatId.split("_").find((u) => u && u !== currentUser.uid);
-const isE2EChat = (chatId) => !!keyForChat(chatId, otherUidOf(chatId));
+const isE2EChat = (chatId) => hasDevice() && devicesOf(otherUidOf(chatId)).length > 0;
+
+// Recipients = every device of the other person and all of mine.
+async function recipientsFor(chatId) {
+  const otherUid = otherUidOf(chatId);
+  const stale = (uid) => Date.now() - (deviceLists.get(uid)?.at || 0) > 30000;
+  await Promise.all([otherUid, currentUser.uid].filter(stale).map(refreshDevices));
+  const mine = devicesOf(currentUser.uid);
+  if (!mine.some((d) => d.id === deviceId())) mine.push({ id: deviceId(), pub: devicePublicKey() });
+  return [...devicesOf(otherUid), ...mine];
+}
+
+async function sealForChat(chatId, content) {
+  return sealFor(chatId, await recipientsFor(chatId), content);
+}
+
+async function senderDevicePub(uid, devId) {
+  let dev = devicesOf(uid).find((d) => d.id === devId);
+  if (!dev) dev = (await refreshDevices(uid)).find((d) => d.id === devId);
+  if (!dev && uid === currentUser.uid && devId === deviceId()) return devicePublicKey();
+  return dev?.pub || null;
+}
+
+async function openBoxFrom(chatId, box, senderUid) {
+  if (box?.v !== 2) throw new Error("unsupported");
+  const pub = await senderDevicePub(senderUid, box.from);
+  if (!pub) throw new Error("unknown sender device");
+  return openFrom(chatId, box, pub);
+}
 
 // Decrypts a snapshot of 1:1 messages (results cached per ciphertext).
-const openedCache = new Map(); // ct -> content | "fail"
+const openedCache = new Map(); // ct -> content | "fail" | "notmine"
 async function openMessages(chatId, msgs) {
-  const otherUid = otherUidOf(chatId);
-  let key = keyForChat(chatId, otherUid);
-  if (!key && hasKeys() && msgs.some((m) => m.enc)) {
-    await refreshPubKey(otherUid);
-    key = keyForChat(chatId, otherUid);
-  }
   return Promise.all(
     msgs.map(async (m) => {
       if (!m.enc) return m;
-      if (!hasKeys()) return { ...m, text: "🔒 Зашифрованное сообщение. Введите пароль, чтобы прочитать", _locked: true };
       let content = openedCache.get(m.enc.ct);
-      if (content === undefined && key) {
+      if (content === undefined && hasDevice()) {
         try {
-          content = await openBox(await key, m.enc);
-        } catch (_) {
-          content = "fail";
+          content = await openBoxFrom(chatId, m.enc, m.senderId);
+        } catch (err) {
+          content = err instanceof NotForThisDevice ? "notmine" : "fail";
         }
         openedCache.set(m.enc.ct, content);
       }
+      if (content === "notmine") return { ...m, text: "🔒 Отправлено до подключения этого устройства — прочитать можно на другом вашем устройстве", _locked: true };
       if (!content || content === "fail") return { ...m, text: "🔒 Не удалось расшифровать сообщение", _locked: true };
       return { ...m, ...content, _content: content, _e2e: true };
     })
@@ -4323,86 +4340,16 @@ async function openMessages(chatId, msgs) {
 }
 
 const previewCache = new Map(); // ct -> text
-async function openPreview(chatId, box) {
-  if (!box?.ct) return null;
+async function openPreview(chatId, box, senderUid) {
+  if (!box?.ct || !hasDevice()) return null;
   if (previewCache.has(box.ct)) return previewCache.get(box.ct);
-  const key = keyForChat(chatId, otherUidOf(chatId));
-  if (!key) return null;
   try {
-    const { p } = await openBox(await key, box);
+    const { p } = await openBoxFrom(chatId, box, senderUid);
     previewCache.set(box.ct, p);
     return p;
   } catch (_) {
     return null;
   }
-}
-
-// ---------- Unlocking keys with the account password ----------
-
-const e2eOverlay = document.getElementById("e2e-overlay");
-const e2ePassword = document.getElementById("e2e-password");
-const e2eError = document.getElementById("e2e-error");
-const e2eUnlockBtn = document.getElementById("e2e-unlock-btn");
-const e2eBanner = document.getElementById("e2e-banner");
-attachPasswordToggle(e2ePassword, document.getElementById("e2e-password-toggle"));
-
-let unlockWaiters = [];
-function askToUnlock() {
-  e2ePassword.value = "";
-  e2eError.textContent = "";
-  showOverlay(e2eOverlay);
-  setTimeout(() => e2ePassword.focus(), 200);
-  return new Promise((resolve) => unlockWaiters.push(resolve));
-}
-
-function finishUnlock(ok) {
-  unlockWaiters.splice(0).forEach((r) => r(ok));
-}
-
-e2eUnlockBtn.addEventListener("click", async () => {
-  const pw = e2ePassword.value;
-  if (!pw) {
-    e2eError.textContent = "Введите пароль";
-    return;
-  }
-  e2eUnlockBtn.disabled = true;
-  e2eError.textContent = "";
-  try {
-    await verifyPassword(currentUser, pw);
-    const keys = await setupKeys(currentUser.uid, pw, { knownPublic: myProfile.e2ePub });
-    if (keys) myProfile.e2ePub = keys.pub;
-    await successPulse(e2eUnlockBtn);
-    hideOverlay(e2eOverlay);
-    updateE2EBanner();
-    toast("Сквозное шифрование включено", { icon: "🔒" });
-    finishUnlock(true);
-    onKeysChanged();
-  } catch (err) {
-    console.error(err);
-    e2eError.textContent = err.message || "Не удалось включить шифрование";
-  } finally {
-    e2eUnlockBtn.disabled = false;
-  }
-});
-e2ePassword.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") e2eUnlockBtn.click();
-});
-document.getElementById("e2e-cancel-btn").addEventListener("click", () => {
-  hideOverlay(e2eOverlay);
-  finishUnlock(false);
-});
-document.getElementById("e2e-banner-btn").addEventListener("click", () => askToUnlock());
-e2eOverlay.addEventListener("click", (e) => {
-  if (e.target === e2eOverlay) {
-    hideOverlay(e2eOverlay);
-    finishUnlock(false);
-  }
-});
-
-function updateE2EBanner() {
-  const show = e2eSupported && !hasKeys();
-  if (show && e2eBanner.classList.contains("hidden")) reveal(e2eBanner);
-  else if (!show && !e2eBanner.classList.contains("hidden")) conceal(e2eBanner);
 }
 
 function onKeysChanged() {
@@ -4420,17 +4367,18 @@ function onKeysChanged() {
   }
 }
 
+// First launch on a device: create its key and list it on the profile.
 async function initE2E() {
   if (!e2eSupported) return;
-  await loadKeys(currentUser.uid);
-  const pub = myPublicKey();
-  if (pub && myProfile.e2ePub?.x !== pub.x) {
-    // Keys exist on this device but the profile lost them — republish.
-    updateProfileFields(currentUser.uid, { e2ePub: pub }).catch(() => {});
-    myProfile.e2ePub = pub;
+  const dev = await initDevice(currentUser.uid);
+  if (!dev) return;
+  const listed = myProfile.e2eDevices?.[dev.id];
+  if (!listed || listed.pub?.x !== dev.pub.x) {
+    await publishDevice(currentUser.uid, dev.id, dev.pub, describeDevice());
+    myProfile.e2eDevices = { ...(myProfile.e2eDevices || {}), [dev.id]: { pub: dev.pub, name: describeDevice() } };
   }
-  updateE2EBanner();
-  if (hasKeys()) onKeysChanged();
+  deviceLists.set(currentUser.uid, { devices: myProfile.e2eDevices, at: Date.now() });
+  onKeysChanged();
 }
 
 // ---------- One way to put a message into any chat ----------
@@ -4445,28 +4393,18 @@ async function deliver({ type, id, text = "", attachment = null, replyTo = null,
     const members = (groups.find((g) => g.id === id) || currentGroupRef)?.members || [];
     return sendGroupMessage(id, me, text, attachment, replyTo, extra, members, { scheduleAt });
   }
-  // 1:1 chat
+  // 1:1 chat — encrypted whenever the other person's app has a device key.
   const otherUid = otherUidOf(id);
-  let key = keyForChat(id, otherUid);
-  if (!key && hasKeys()) {
-    await refreshPubKey(otherUid);
-    key = keyForChat(id, otherUid);
-  }
-  if (!key && !hasKeys() && theirPubKey(otherUid) && e2eSupported) {
-    // They use encryption but this device isn't unlocked yet.
-    const ok = await askToUnlock();
-    if (!ok) throw Object.assign(new Error("Сообщение не отправлено: шифрование не включено"), { silent: true });
-    key = keyForChat(id, otherUid);
-  }
-  if (key) {
-    const k = await key;
+  if (hasDevice() && !devicesOf(otherUid).length) await refreshDevices(otherUid);
+  if (hasDevice() && devicesOf(otherUid).length) {
     const content = { text: text || attachment?.defaultCaption || "", ...(attachment?.fields || {}), ...(extra || {}) };
     if (replyTo) content.replyTo = replyTo;
     const preview = attachment?.previewText || text || content.text;
-    return sendMessage(id, me, "🔒", null, null, { enc: await seal(k, content) }, {
+    const recipients = await recipientsFor(id);
+    return sendMessage(id, me, "🔒", null, null, { enc: await sealFor(id, recipients, content) }, {
       scheduleAt,
       preview: "🔒 Сообщение",
-      previewEnc: await seal(k, { p: preview }),
+      previewEnc: await sealFor(id, recipients, { p: preview }),
     });
   }
   return sendMessage(id, me, text, attachment, replyTo, extra, { scheduleAt });
@@ -4719,16 +4657,16 @@ async function renderE2ERow(uid) {
   const value = document.getElementById("profile-view-e2e-value");
   row.classList.add("hidden");
   if (!uid || uid === currentUser.uid) return;
-  const theirs = theirPubKey(uid) || (await refreshPubKey(uid));
-  const mine = myPublicKey();
+  const theirs = devicesOf(uid).length ? devicesOf(uid) : await refreshDevices(uid);
+  const mine = devicesOf(currentUser.uid);
   row.classList.remove("hidden");
-  if (theirs && mine) {
-    value.textContent = await fingerprint(mine, theirs);
+  if (theirs.length && mine.length && hasDevice()) {
+    value.textContent = await fingerprint([...theirs, ...mine].map((d) => d.pub));
     value.className = "e2e-fingerprint";
     value.title = "Сравните с экраном собеседника: если совпадает — переписку никто не подменил";
   } else {
     value.className = "";
-    value.textContent = mine ? "Собеседник ещё не включил шифрование" : "Не включено на этом устройстве";
+    value.textContent = hasDevice() ? "Включится, когда собеседник обновит приложение" : "Недоступно в этом браузере";
   }
 }
 
@@ -4927,7 +4865,6 @@ document.addEventListener("keydown", (e) => {
   const top = topOverlay();
   if (top) {
     hideOverlay(top);
-    if (top === e2eOverlay) finishUnlock(false);
     return;
   }
   if (!chatMenuDropdown.classList.contains("hidden")) hidePopover(chatMenuDropdown);

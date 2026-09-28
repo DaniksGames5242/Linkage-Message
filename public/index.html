@@ -57,11 +57,6 @@
 
       <div id="search-result" class="hidden"></div>
 
-      <div id="e2e-banner" class="glass hidden">
-        <span class="e2e-banner-icon">🔒</span>
-        <span class="e2e-banner-text">Включите сквозное шифрование — достаточно один раз ввести пароль</span>
-        <button type="button" class="small-btn" id="e2e-banner-btn">Включить</button>
-      </div>
 
       <div id="chat-list-scroll">
         <div id="chat-list-indicator"></div>
@@ -233,7 +228,7 @@
         <div id="profile-view-row-3-value"></div>
       </div>
       <div class="profile-view-row hidden" id="profile-view-e2e">
-        <div class="profile-view-label">Ключ шифрования</div>
+        <div class="profile-view-label">🔒 Код шифрования</div>
         <div id="profile-view-e2e-value"></div>
       </div>
       <div class="profile-view-actions" id="profile-view-actions"></div>
@@ -345,27 +340,6 @@
       <video id="story-viewer-video" class="hidden" playsinline preload="auto"></video>
       <button type="button" class="story-nav story-nav-prev" id="story-prev-btn" aria-label="Назад"></button>
       <button type="button" class="story-nav story-nav-next" id="story-next-btn" aria-label="Вперёд"></button>
-    </div>
-  </div>
-
-  <!-- Unlock end-to-end encryption -->
-  <div id="e2e-overlay" class="hidden">
-    <div class="alias-panel e2e-panel">
-      <div class="e2e-hero">🔒</div>
-      <h3>Сквозное шифрование</h3>
-      <p class="setting-desc">Личные сообщения шифруются на вашем устройстве, и прочитать их можете только вы и собеседник. Введите пароль от аккаунта, чтобы открыть ключ шифрования на этом устройстве.</p>
-      <div class="field">
-        <label for="e2e-password">Пароль</label>
-        <div class="password-field">
-          <input id="e2e-password" type="password" autocomplete="current-password" />
-          <button type="button" class="password-toggle" id="e2e-password-toggle"></button>
-        </div>
-      </div>
-      <div class="auth-error" id="e2e-error"></div>
-      <div class="alias-actions">
-        <button type="button" class="small-btn secondary" id="e2e-cancel-btn">Позже</button>
-        <button type="button" class="small-btn" id="e2e-unlock-btn">Включить</button>
-      </div>
     </div>
   </div>
 

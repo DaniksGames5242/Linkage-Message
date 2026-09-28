@@ -209,11 +209,6 @@ async function reauthenticate(user, currentPassword) {
   }
 }
 
-// Checks the account password (used to unlock end-to-end encryption keys).
-export async function verifyPassword(user, password) {
-  await reauthenticate(user, password);
-}
-
 export async function changePassword(user, currentPassword, newPassword) {
   if (!newPassword || newPassword.length < 6) throw new Error("Пароль минимум 6 символов");
   await reauthenticate(user, currentPassword);

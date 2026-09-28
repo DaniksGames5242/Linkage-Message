@@ -75,11 +75,6 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
-      // ---------- users/{uid}/private/e2e : password-wrapped E2E private key (owner only) ----------
-      match /private/{docId} {
-        allow read, write: if isMe(uid);
-      }
-
       // ---------- users/{uid}/sessions/{id} : login history (informational only) ----------
       match /sessions/{sessionId} {
         allow read, create: if isMe(uid);

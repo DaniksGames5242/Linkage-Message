@@ -11,7 +11,6 @@ import {
   describeDevice,
 } from "./utils.js";
 import { animate, stagger, tilt, shake, successPulse, watchMessages, reducedMotion } from "./ui.js";
-import { setupKeys } from "./e2e.js";
 
 const authCard = document.getElementById("auth-card");
 const authSub = document.getElementById("auth-sub");
@@ -165,15 +164,12 @@ authForm.addEventListener("submit", async (e) => {
         avatarImage: selectedAvatarImage,
       });
       await addPersonalNotice(user.uid, "Добро пожаловать в Linkage Message! Ваш аккаунт создан.");
-      await setupKeys(user.uid, passwordInput.value).catch((err) => console.warn("E2E setup failed:", err));
     } else {
       const user = await loginAccount({
         username: usernameInput.value,
         password: passwordInput.value,
       });
       await addPersonalNotice(user.uid, `Выполнен вход в аккаунт: ${describeDevice()}.`);
-      // Unlock (or create) the end-to-end encryption keys while we have the password.
-      await setupKeys(user.uid, passwordInput.value).catch((err) => console.warn("E2E setup failed:", err));
     }
     succeeded = true;
     await successPulse(authSubmit);

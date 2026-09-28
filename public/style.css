@@ -2572,7 +2572,6 @@ button.is-success::after {
 #profile-view-overlay,
 #new-chat-overlay,
 #forward-overlay,
-#e2e-overlay,
 #schedule-overlay {
   position: fixed;
   inset: 0;
@@ -3696,7 +3695,6 @@ input.switch:checked:active::before {
   #profile-view-overlay,
   #new-chat-overlay,
   #forward-overlay,
-  #e2e-overlay,
   #schedule-overlay {
     padding: 12px;
     align-items: flex-end;
@@ -5340,51 +5338,6 @@ mark.search-mark {
 }
 
 /* ---------- End-to-end encryption ---------- */
-
-#e2e-banner {
-  margin: 0 16px 10px;
-  padding: 10px 10px 10px 14px;
-  border-radius: 18px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-dim);
-}
-
-#e2e-banner > * {
-  position: relative;
-  z-index: 2;
-}
-
-.e2e-banner-text {
-  flex: 1;
-  line-height: 1.35;
-}
-
-.e2e-banner-icon {
-  font-size: 18px;
-}
-
-.e2e-panel {
-  text-align: center;
-}
-
-.e2e-panel .field,
-.e2e-panel .auth-error {
-  text-align: left;
-}
-
-.e2e-hero {
-  font-size: 44px;
-  margin-bottom: 6px;
-  animation: storyPop 0.8s var(--ease-bouncy) backwards;
-}
-
-.e2e-panel .setting-desc {
-  margin: 0 0 16px;
-}
 
 #chat.e2e-on #chat-title::after {
   content: " 🔒";
