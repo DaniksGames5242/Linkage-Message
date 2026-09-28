@@ -62,9 +62,35 @@ Firebase Authentication из коробки не умеет «просто ло�
 - **Обои чата** — меню чата → «Обои чата»: 9 анимированных фонов, для одного чата или для всех (хранится на устройстве).
 - **Ссылка на профиль** — «Настройки → Профиль»: ссылка вида `https://ваш-сайт/?u=username`; кто по ней перейдёт, сразу попадёт в чат с вами (после входа, если он ещё не вошёл).
 
-### Кружочки
+### Голосовые и кружочки — одна кнопка
 
-Кнопка ▶ в строке ввода записывает круглое видеосообщение до 60 секунд (камеру можно переворачивать во время записи). В чате кружочек проигрывается без звука, по нажатию — со звуком. Нужна настроенная загрузка файлов (Cloudinary).
+Кнопка справа в строке ввода: **нажатие** переключает микрофон ⇄ камеру, **удержание** — запись. Во время записи: отпустить — отправить, увести палец влево — отменить, вверх — «без рук» (запись продолжится, отправка — той же кнопкой). В кружке после «без рук» палец можно вести дальше вверх — это зум; ещё зум работает щипком, колёсиком мыши, ползунком справа и двойным тапом по кружку. Кружок — до 60 секунд, голосовое — до 5 минут.
+
+Голосовые показываются своим плеером: волна громкости (записывается при съёмке), перемотка нажатием по волне, скорость 1×/1.5×/2×, после окончания автоматически играет следующее голосовое. Нужна настроенная загрузка файлов (Cloudinary).
+
+### Отправка фото и файлов
+
+Выбранные (или перетащенные/вставленные) файлы открываются в окне предпросмотра: подпись, **«Подпись сверху»** (над фото, а не под ним), **«Скрыть под спойлер»** (фото/видео размыто, пока его не нажмут), **«Без сжатия»** (фото уходит файлом в оригинальном качестве), можно убрать лишние файлы.
+
+### Уведомления
+
+- Пока приложение открыто, новые сообщения из других чатов показываются баннером сверху (нажать — открыть чат, смахнуть вверх — закрыть) со звуком и вибрацией на телефоне.
+- Когда вкладка свёрнута — системное уведомление. На телефонах (Android Chrome) они работают только через service worker — он лежит в `public/sw.js`, нажатие на уведомление открывает нужный чат.
+- При первом запуске в списке чатов появляется плашка «Включите уведомления». В «Настройки → Уведомления» есть кнопка «Проверить уведомление».
+- На iPhone веб-уведомления работают только если добавить сайт на экран «Домой» (Поделиться → «На экран „Домой“») — для этого добавлены манифест и иконки.
+- Ограничение: без сервера нельзя получать уведомления, когда приложение полностью закрыто, — для этого нужен push-сервер (Firebase Cloud Messaging + Cloud Functions на тарифе Blaze).
+
+### Архив
+
+Долгое нажатие / правый клик по чату → «В архив» (или меню чата). Архивированные чаты уходят из списка в строку «Архив» наверху со счётчиком непрочитанных; список хранится в профиле (`archivedChats`), поэтому одинаков на всех устройствах.
+
+### Мелочи
+
+- Двойной тап ставит «быструю реакцию» — её можно выбрать в «Настройки → Чаты».
+- Стрелка ↑ в пустом поле ввода — редактировать своё последнее сообщение.
+- 🎂 рядом с именем у контактов, у которых сегодня день рождения, и конфетти при открытии их чата.
+- Счётчик символов, когда сообщение приближается к лимиту в 4000.
+- Количество непрочитанных на иконке установленного приложения.
 
 ### Производительность
 
@@ -161,7 +187,7 @@ python3 -m http.server 8000 --directory public
 
 ## Структура данных Firestore
 
-- `users/{uid}` — профиль: `username`, `displayName`, `avatarColor`, `avatarImage` (data URL или `null`), `bio`, `birthday`, `emojiStatus`, `lastSeenAt`, `createdAt`
+- `users/{uid}` — профиль: `username`, `displayName`, `avatarColor`, `avatarImage` (data URL или `null`), `bio`, `birthday`, `emojiStatus`, `pinnedChats`/`mutedChats`/`archivedChats`/`blocked` (массивы), `lastSeenAt`, `createdAt`
   - `privacy`: `lastSeenVisibility`, `avatarVisibility`, `bioVisibility`, `birthdayVisibility` (каждое `"everyone"`/`"contacts"`/`"nobody"`), `typingVisibility` (bool)
   - `notifications`: `muteAll`, `sound`, `desktop`, `preview`, `groups` (все bool)
   - `chatPrefs`: `sendOnEnter` (bool), `fontSize` (`"small"`/`"medium"`/`"large"`), `compact` (bool), `accentColor` (один из 7 пресетов)
@@ -174,7 +200,7 @@ python3 -m http.server 8000 --directory public
 - `broadcasts/{id}` — объявления от `danik`, читают все: `text`, `senderId`, `createdAt`
 - `stories/{id}` — `ownerId`, `image` (data URL), `createdAt` (клиент фильтрует по 24ч)
 - `chats/{chatId}` — `participants`, `lastMessage`, `lastMessageAt`, `lastMessageSenderId`, `typing` (карта `uid -> timestamp`), `hiddenFor` (массив uid, «удалено у себя»), `clearedFor` (карта `uid -> timestamp`, «очищено у себя»)
-  - `chats/{chatId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions` (карта `emoji -> [uid]`), `imageUrl`/`fileUrl`/`voiceUrl` (ссылки на Cloudinary, опционально), `fileName`/`fileType`/`fileSize` (для `fileUrl`), `replyTo` (снимок `{ id, senderName, text }` цитируемого сообщения, опционально), `effect`, `game` (`{ kind, value }`), `poll` (`{ q, options, multi, anon }`) + `votes` (карта `uid -> [индексы]`), `location` (`{ lat, lng }`)
+  - `chats/{chatId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions` (карта `emoji -> [uid]`), `imageUrl`/`fileUrl`/`voiceUrl` (ссылки на Cloudinary, опционально), `fileName`/`fileType`/`fileSize` (для `fileUrl`), `replyTo` (снимок `{ id, senderName, text }` цитируемого сообщения, опционально), `effect`, `game` (`{ kind, value }`), `poll` (`{ q, options, multi, anon }`) + `votes` (карта `uid -> [индексы]`), `location` (`{ lat, lng }`), `voiceUrl` + `duration` + `wave` (волна голосового), `captionAbove`, `mediaSpoiler`
 - `groups/{groupId}` — `type` (`group`/`channel`), `name`, `avatarColor`, `avatarImage`, `ownerId`, `admins`, `members`, `lastMessage`, `lastMessageAt`, `lastMessageSenderId`, `hiddenFor`, `clearedFor`
   - `groups/{groupId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions`, вложения (как в чатах)
 
@@ -193,6 +219,8 @@ python3 -m http.server 8000 --directory public
 - `public/groups.js` — группы и каналы
 - `public/stories.js` — истории (создание/удаление/лента за 24ч)
 - `public/settings.js` — обновление профиля/юзернейма/приватности/уведомлений
+- `public/sw.js`, `public/manifest.webmanifest`, `public/icons/` — service worker для уведомлений, установка как приложения
+- `public/circle.js` — запись и проигрывание кружков (зум, режим удержания)
 - `public/effects.js` — полноэкранные эффекты сообщений (canvas)
 - `public/games.js` — мини-игры 🎲 🎯 🏀 🎰
 - `public/richtext.js` — форматирование текста сообщений

@@ -12,7 +12,7 @@ import {
 } from "./auth.js";
 import { e2eSupported, initDevice, forgetDevice, hasDevice, deviceId, devicePublicKey, sealFor, openFrom, NotForThisDevice, fingerprint } from "./e2e.js";
 import { publishDevice } from "./e2e-store.js";
-import { recordCircle, buildVideoNote, circlesSupported } from "./circle.js";
+import { recordCircle, buildVideoNote, circlesSupported, MAX_ZOOM } from "./circle.js";
 import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName } from "./contacts.js";
 import {
   ensureChat,
@@ -188,7 +188,6 @@ const emojiBtn = document.getElementById("emoji-btn");
 const emojiPicker = document.getElementById("emoji-picker");
 const attachBtn = document.getElementById("attach-btn");
 const attachInput = document.getElementById("attach-input");
-const voiceBtn = document.getElementById("voice-btn");
 const attachErrorEl = document.getElementById("attach-error");
 
 const replyPreviewEl = document.getElementById("reply-preview");
@@ -361,8 +360,6 @@ let currentClearedAt = 0; // ms threshold - messages at/before this are hidden f
 let currentChatRawMessages = [];
 let currentChatRawSource = []; // as stored (encrypted), for re-decrypting after unlock
 let editingMessageId = null;
-let mediaRecorder = null;
-let recordedChunks = [];
 let stories = [];
 let activeStoryGroup = null; // { ownerUid, profile, items: [...] } currently being viewed
 let activeStoryIndex = 0;
@@ -410,12 +407,24 @@ settingsAvatarRemoveBtn.addEventListener("click", () => {
 
 // ---------- Profile links (/?u=username) ----------
 
-const linkedUsername = new URLSearchParams(location.search).get("u");
-if (linkedUsername) {
+const launchParams = new URLSearchParams(location.search);
+if (launchParams.get("u") || launchParams.get("chat")) {
   try {
-    sessionStorage.setItem("lm-open-u", linkedUsername);
+    if (launchParams.get("u")) sessionStorage.setItem("lm-open-u", launchParams.get("u"));
+    if (launchParams.get("chat")) sessionStorage.setItem("lm-open-chat", JSON.stringify({ id: launchParams.get("chat"), kind: launchParams.get("kind") }));
   } catch (_) {}
   history.replaceState(null, "", location.pathname + location.hash);
+}
+
+async function openLaunchChat() {
+  let target = null;
+  try {
+    target = JSON.parse(sessionStorage.getItem("lm-open-chat") || "null");
+    sessionStorage.removeItem("lm-open-chat");
+  } catch (_) {}
+  if (!target?.id) return;
+  for (let i = 0; i < 30 && !(chatsInitialized && groupsInitialized); i++) await new Promise((r) => setTimeout(r, 200));
+  openChatById(target.id, target.kind);
 }
 
 async function openLinkedProfile() {
@@ -505,6 +514,8 @@ function enterApp() {
   presenceInterval = setInterval(() => touchPresence(currentUser.uid), 45000);
   document.addEventListener("visibilitychange", onVisibilityChange);
   setTimeout(openLinkedProfile, 700);
+  openLaunchChat();
+  setTimeout(setupNotificationPrompt, 2500);
 }
 
 const isMobileLayout = () => window.matchMedia("(max-width: 720px)").matches;
@@ -575,6 +586,13 @@ function renderMe() {
 // ---------- Emoji status (shown next to the name) ----------
 
 const EMOJI_STATUSES = ["⭐", "🔥", "❤️", "😎", "🚀", "🎮", "🎧", "💼", "🌙", "☕", "🏖️", "🎉", "👑", "💎", "🌸", "⚡", "🍀", "🐱", "🤖", "📚", "🏋️", "✈️", "🎨", "💤"];
+
+function isBirthdayToday(profile, uid) {
+  if (!profile?.birthday || !canSeeProfileField(profile, uid, "birthdayVisibility")) return false;
+  const [, m, d] = profile.birthday.split("-").map(Number);
+  const now = new Date();
+  return now.getMonth() + 1 === m && now.getDate() === d;
+}
 
 function validStatus(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 16 ? value : null;
@@ -1116,6 +1134,8 @@ function listenChatsList() {
           if (c.type === "removed") return;
           maybeNotify({ id: c.id, ...c.data });
         });
+      } else {
+        list.forEach((c) => notifiedAt.set(c.id, c.lastMessageAt?.toMillis?.() || 0));
       }
       chatsInitialized = true;
     },
@@ -1136,6 +1156,8 @@ function listenGroupsList() {
           if (c.type === "removed") return;
           maybeNotifyGroup(c.id, c.data);
         });
+      } else {
+        list.forEach((g) => notifiedAt.set(g.id, g.lastMessageAt?.toMillis?.() || 0));
       }
       groupsInitialized = true;
     },
@@ -1353,6 +1375,7 @@ function userList(field) {
 }
 const isChatPinned = (id) => userList("pinnedChats").includes(id);
 const isChatMuted = (id) => userList("mutedChats").includes(id);
+const isChatArchived = (id) => userList("archivedChats").includes(id);
 const isBlocked = (uid) => !!uid && userList("blocked").includes(uid);
 
 async function toggleUserList(field, value, add, { success } = {}) {
@@ -1408,7 +1431,7 @@ const ICON_PIN =
   '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M16 3a1 1 0 0 1 .7 1.7L15.4 6l2.6 5.2 1.3-1.3a1 1 0 1 1 1.4 1.4L17.4 14.6l3.3 3.3a1 1 0 0 1-1.4 1.4L16 16l-3.3 3.3a1 1 0 0 1-1.4-1.4l3.3-3.3-.7-.7-5.2-2.6-1.3 1.3A1 1 0 1 1 6 11.2L10.9 6.3A1 1 0 0 1 16 3z" transform="rotate(0)"/></svg>';
 
 // Builds one chat-list row: avatar, name + flags, last line, time + unread.
-function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false, status = null }) {
+function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false, status = null, birthday = false }) {
   const item = document.createElement("div");
   item.className =
     "room-item" +
@@ -1433,6 +1456,13 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
   item.querySelector(".room-name").textContent = name;
   const badge = statusBadge(status);
   if (badge) item.querySelector(".room-name").after(badge);
+  if (birthday) {
+    const cake = document.createElement("span");
+    cake.className = "emoji-status birthday-cake";
+    cake.title = "Сегодня день рождения";
+    cake.textContent = "🎂";
+    item.querySelector(".room-name").after(cake);
+  }
   const lastEl = item.querySelector(".room-last");
   const draft = chatId && chatId !== currentChatId ? readDraft(chatId) : "";
   if (typing) {
@@ -1469,6 +1499,8 @@ const MI = {
   file: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
   sparkle: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/></svg>',
   image: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>',
+  archive: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="5" rx="1.5"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5"/><line x1="10" y1="12.5" x2="14" y2="12.5"/></svg>',
+  unarchive: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="5" rx="1.5"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5"/><polyline points="9.5 15 12 12.5 14.5 15"/><line x1="12" y1="12.5" x2="12" y2="18"/></svg>',
   leave: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
 };
 
@@ -1622,6 +1654,11 @@ function attachRoomMenu(item, entry) {
           icon: muted ? MI.bell : MI.bellOff,
           onClick: () => toggleUserList("mutedChats", entry.id, !muted),
         },
+        {
+          label: isChatArchived(entry.id) ? "Вернуть из архива" : "В архив",
+          icon: isChatArchived(entry.id) ? MI.unarchive : MI.archive,
+          onClick: () => setArchived(entry.id, !isChatArchived(entry.id), item),
+        },
         unread > 0 && {
           label: "Отметить прочитанным",
           icon: MI.check,
@@ -1662,6 +1699,35 @@ function pinnedItemHTML(id, iconSvg, title, subtitle) {
   item.querySelector(".room-name").textContent = title;
   item.querySelector(".room-last").textContent = subtitle;
   return item;
+}
+
+const ARCHIVE_ICON =
+  '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="5" rx="1.5"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5"/><line x1="10" y1="12.5" x2="14" y2="12.5"/></svg>';
+let showingArchive = false;
+
+function setArchived(chatId, archive, itemEl = null) {
+  const doIt = () =>
+    toggleUserList("archivedChats", chatId, archive, { success: archive ? "Чат перемещён в архив" : "Чат возвращён из архива" });
+  if (archive && itemEl?.isConnected && !reducedMotion) {
+    // The row folds up and drops into the archive.
+    itemEl
+      .animate(
+        [
+          { transform: "none", opacity: 1 },
+          { transform: "translateY(-10px) scale(.6) rotate(-4deg)", opacity: 0 },
+        ],
+        { duration: 320, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" }
+      )
+      .finished.then(doIt, doIt);
+  } else doIt();
+}
+
+function toggleArchiveView(show) {
+  showingArchive = show;
+  folderSwitched = true;
+  folderDirection = show ? 1 : -1;
+  folderTabs.classList.toggle("hidden", show);
+  renderChats();
 }
 
 const SAVED_ICON =
@@ -1807,11 +1873,48 @@ async function renderChats() {
     (folder === "personal" && e.kind === "contact") ||
     (folder === "groups" && e.kind === "group") ||
     (folder === "unread" && (unreadFor(e.data) > 0 || e.data.id === currentChatId));
-  const visible = combined.filter((e) => inFolder(e, chatFolder));
-  updateFolderCounts((folder) => combined.filter((e) => inFolder(e, folder) && unreadFor(e.data) > 0 && !isChatMuted(e.data.id)).length);
-  if (chatFolder !== "all") {
+  const archived = combined.filter((e) => isChatArchived(e.data.id));
+  const active = combined.filter((e) => !isChatArchived(e.data.id));
+  if (showingArchive && !archived.length) {
+    showingArchive = false;
+    folderTabs.classList.remove("hidden");
+  }
+  const visible = showingArchive ? archived : active.filter((e) => inFolder(e, chatFolder));
+  updateFolderCounts((folder) => active.filter((e) => inFolder(e, folder) && unreadFor(e.data) > 0 && !isChatMuted(e.data.id)).length);
+  if (chatFolder !== "all" || showingArchive) {
     savedItem.remove();
     notifItem.remove();
+  }
+  if (showingArchive) {
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "archive-head";
+    head.dataset.key = "__archive-head";
+    head.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg><span>Архив</span><span class="archive-count">${archived.length}</span>`;
+    head.addEventListener("click", () => toggleArchiveView(false));
+    frag.appendChild(head);
+  } else if (archived.length && chatFolder === "all") {
+    const unreadArchived = archived.filter((e) => !isChatMuted(e.data.id)).reduce((sum, e) => sum + unreadFor(e.data), 0);
+    const names = archived
+      .map((e) =>
+        e.kind === "group"
+          ? e.data.name
+          : (() => {
+              const uid = e.data.participants.find((p) => p !== me);
+              const p = contactsMap.get(uid)?.profile || profileCache.get(uid)?.profile;
+              return p?.displayName;
+            })()
+      )
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(", ");
+    const archiveItem = pinnedItemHTML("__archive", ARCHIVE_ICON, "Архив", names || `${archived.length} чат(ов)`);
+    archiveItem.querySelector(".pinned-avatar").classList.add("pa-archive");
+    if (unreadArchived) {
+      archiveItem.insertAdjacentHTML("beforeend", `<div class="room-side"><div class="room-badges"><span class="unread-badge archive-badge">${unreadArchived > 99 ? "99+" : unreadArchived}</span></div></div>`);
+    }
+    archiveItem.addEventListener("click", () => toggleArchiveView(true));
+    frag.appendChild(archiveItem);
   }
 
   const neededUids = [
@@ -1884,6 +1987,7 @@ async function renderChats() {
       pinned: isChatPinned(chat.id),
       typing: Date.now() - typingAt < 6000 && !isBlocked(otherUid),
       status: profile.emojiStatus,
+      birthday: isBirthdayToday(profile, otherUid),
       onClick: () => openContactChat(chat.id, otherUid, profile),
     });
     attachRoomMenu(item, { id: chat.id, kind: "contact", data: chat, otherUid });
@@ -1919,6 +2023,8 @@ async function renderChats() {
     .filter((e) => !isChatMuted(e.data.id))
     .reduce((sum, e) => sum + unreadFor(e.data), 0);
   document.title = totalUnread > 0 ? `(${totalUnread}) Linkage Message` : "Linkage Message";
+  // Unread count on the installed app's icon.
+  if (navigator.setAppBadge) (totalUnread ? navigator.setAppBadge(totalUnread) : navigator.clearAppBadge()).catch(() => {});
 }
 
 // Glides the selection pill to the active chat, stretching like a droplet
@@ -1962,7 +2068,7 @@ function resetChatView() {
   if (unsubChatDoc) unsubChatDoc();
   unsubMessages = unsubChatDoc = null;
   clearTimeout(typingClearTimer);
-  stopVoiceRecording(true);
+  cancelRecording();
 
   const comingFromEmpty = !emptyState.classList.contains("hidden");
   emptyState.classList.add("hidden");
@@ -2108,6 +2214,9 @@ function refreshChatChrome() {
   chatMenuMuteBtn.textContent = muted ? "Включить уведомления" : "Выключить уведомления";
   chatMenuPinBtn.classList.toggle("hidden", !(isContact || isGroupish));
   chatMenuPinBtn.textContent = pinned ? "Открепить чат" : "Закрепить чат";
+  const archiveBtn = document.getElementById("chat-menu-archive-btn");
+  archiveBtn.classList.toggle("hidden", !(isContact || isGroupish));
+  archiveBtn.textContent = isChatArchived(currentChatId) ? "Вернуть из архива" : "В архив";
   chatMenuBlockBtn.classList.toggle("hidden", !isContact);
   chatMenuBlockBtn.textContent = blocked ? "Разблокировать" : "Заблокировать";
   chatMenuLeaveBtn.classList.toggle("hidden", !isGroupish);
@@ -2469,6 +2578,22 @@ function openContactChat(chatId, otherUid, profile) {
   chatTitle.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
   const statusEl = statusBadge(profile.emojiStatus, 22);
   if (statusEl) chatTitleStatus.appendChild(statusEl);
+  if (isBirthdayToday(profile, otherUid)) {
+    const cake = statusBadge("🎂", 22);
+    cake.title = "Сегодня день рождения!";
+    chatTitleStatus.prepend(cake);
+    // Once a day per chat: a little celebration.
+    const key = `lm-bday:${chatId}:${new Date().toDateString()}`;
+    if (!readStore(key)) {
+      try {
+        localStorage.setItem(key, "1");
+      } catch (_) {}
+      setTimeout(() => {
+        playEffect("confetti");
+        toast(`У ${profile.displayName} сегодня день рождения! 🎉`, { icon: "🎂", duration: 4000 });
+      }, 700);
+    }
+  }
   chatSub.textContent = "@" + profile.username;
   editContactBtn.classList.remove("hidden");
   chatMenuBtn.classList.remove("hidden");
@@ -2753,45 +2878,6 @@ function openSendOptions(x, y) {
   document.querySelector(".ctx-menu")?.classList.add("send-options");
 }
 
-// ---------- Round video messages ----------
-
-const circleBtn = document.getElementById("circle-btn");
-circleBtn.classList.toggle("unsupported", !circlesSupported);
-circleBtn.addEventListener("click", async () => {
-  if (!currentChatId || composer.classList.contains("hidden")) return;
-  if (!uploadsConfigured) {
-    toast("Отправка видео ещё не настроена (Cloudinary, см. README)", { tone: "error", duration: 5000 });
-    return;
-  }
-  const chatType = currentChatType;
-  const chatId = currentChatId;
-  const result = await recordCircle();
-  if (!result) return;
-  const ext = result.mime.includes("mp4") ? "mp4" : "webm";
-  const file = new File([result.blob], `circle.${ext}`, { type: result.mime.split(";")[0] });
-  const progress = uploadToast("Отправка видеосообщения");
-  try {
-    const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal);
-    progress.done();
-    // Cloudinary serves a square H.264 MP4 of it, which every browser plays.
-    const playable = url.replace("/upload/", "/upload/c_fill,g_center,w_480,h_480,q_auto/").replace(/\.(webm|mov|mkv)$/i, ".mp4");
-    await deliver({
-      type: chatType,
-      id: chatId,
-      attachment: {
-        fields: { videoNoteUrl: playable, duration: result.duration },
-        previewText: "⭕ Видеосообщение",
-        defaultCaption: "⭕",
-      },
-    });
-  } catch (err) {
-    progress.fail();
-    if (err?.name === "AbortError") return;
-    console.error(err);
-    toast(err.message || "Не удалось отправить видеосообщение", { tone: "error" });
-  }
-});
-
 function updateChatSub(profile, chatData) {
   const otherTyping = chatData?.typing?.[currentOtherUid];
   if (otherTyping?.toDate && Date.now() - otherTyping.toDate().getTime() < 6000) {
@@ -2970,13 +3056,10 @@ function renderBubbleContent(bubble, msg) {
     img.alt = "";
     img.loading = "lazy";
     img.addEventListener("click", () => openLightbox(img));
-    bubble.appendChild(img);
+    bubble.appendChild(msg.mediaSpoiler ? wrapMediaSpoiler(img, msg.id) : img);
   } else if (msg.voiceUrl) {
-    const audio = document.createElement("audio");
-    audio.className = "msg-audio";
-    audio.controls = true;
-    audio.src = msg.voiceUrl;
-    bubble.appendChild(audio);
+    bubble.classList.add("voice-bubble");
+    bubble.appendChild(buildVoicePlayer(msg));
   } else if (msg.fileUrl) {
     const fileType = msg.fileType || "";
     if (fileType.startsWith("video/")) {
@@ -2984,7 +3067,7 @@ function renderBubbleContent(bubble, msg) {
       video.className = "msg-video";
       video.controls = true;
       video.src = msg.fileUrl;
-      bubble.appendChild(video);
+      bubble.appendChild(msg.mediaSpoiler ? wrapMediaSpoiler(video, msg.id) : video);
     } else if (fileType.startsWith("audio/")) {
       const audio = document.createElement("audio");
       audio.className = "msg-audio";
@@ -3017,7 +3100,10 @@ function renderBubbleContent(bubble, msg) {
     const p = document.createElement("div");
     p.className = "bubble-text";
     appendRich(p, msg.text, appendLinkified);
-    bubble.appendChild(p);
+    if (msg.captionAbove && hasAttachment) {
+      p.classList.add("caption-above");
+      bubble.prepend(p);
+    } else bubble.appendChild(p);
   }
 }
 
@@ -3228,6 +3314,34 @@ function renderLocation(loc) {
   return card;
 }
 
+// Hidden media: blurred under a shimmering veil until tapped.
+const revealedSpoilers = new Set();
+function wrapMediaSpoiler(media, msgId) {
+  const wrap = document.createElement("div");
+  wrap.className = "media-spoiler" + (revealedSpoilers.has(msgId) ? " revealed" : "");
+  wrap.appendChild(media);
+  if (media.tagName === "VIDEO") media.controls = revealedSpoilers.has(msgId);
+  const veil = document.createElement("div");
+  veil.className = "media-spoiler-veil";
+  veil.innerHTML = '<span class="media-spoiler-label">Нажмите, чтобы посмотреть</span>';
+  wrap.appendChild(veil);
+  wrap.addEventListener(
+    "click",
+    (e) => {
+      if (wrap.classList.contains("revealed")) return;
+      e.stopPropagation();
+      e.preventDefault();
+      revealedSpoilers.add(msgId);
+      wrap.classList.add("revealed");
+      if (media.tagName === "VIDEO") media.controls = true;
+      const r = wrap.getBoundingClientRect();
+      burst(e.clientX || r.left + r.width / 2, e.clientY || r.top + r.height / 2, { count: 14, spread: 70, colors: ["#ffffff", "#fff3c4", ...accentColors()] });
+    },
+    true
+  );
+  return wrap;
+}
+
 function buildReactionsBar(msg, reactFn) {
   const bar = document.createElement("div");
   bar.className = "msg-reactions";
@@ -3348,6 +3462,8 @@ function startEditingMessage(row, msg, editFn) {
 }
 
 const touchOnly = window.matchMedia("(hover: none)").matches;
+const QUICK_REACTIONS = ["❤️", "👍", "🔥", "😂", "😮", "🥰", "👏", "🤩", "💯", "🙏"];
+const quickReactionEmoji = () => (QUICK_REACTIONS.includes(myProfile?.chatPrefs?.quickReaction) ? myProfile.chatPrefs.quickReaction : "❤️");
 
 function renderMessage(msg, isMine, senderName) {
   const ops = messageOps();
@@ -3432,6 +3548,7 @@ function renderMessage(msg, isMine, senderName) {
     row.querySelector(".msg-group").appendChild(buildReactionsBar(msg, ops.react));
   }
   const menuCtx = { row, msg, isMine, ops, canEdit, canDelete, canReact, canReply };
+  row._ctx = menuCtx;
   if (canReply) {
     row.querySelector(".msg-reply-btn").addEventListener("click", () => startReply(msg));
   }
@@ -3444,11 +3561,12 @@ function renderMessage(msg, isMine, senderName) {
   // Double tap / double click = ❤️, like in Telegram and Instagram.
   const quickReact = (x, y) => {
     if (!canReact || msg._scheduled) return;
-    const mine = (msg.reactions?.["❤️"] || []).includes(currentUser.uid);
-    if (!mine) emojiEffect("❤️", x, y, 120);
-    ops.react(msg.id, "❤️", !mine);
+    const emoji = quickReactionEmoji();
+    const mine = (msg.reactions?.[emoji] || []).includes(currentUser.uid);
+    if (!mine) emojiEffect(emoji, x, y, 120);
+    ops.react(msg.id, emoji, !mine);
   };
-  const interactive = (t) => t.closest("button, a, img, audio, video, textarea, input, .msg-reply-quote, .anim-emoji, .vnote, .poll, .game-holder");
+  const interactive = (t) => t.closest("button, a, img, audio, video, textarea, input, .msg-reply-quote, .anim-emoji, .vnote, .poll, .game-holder, .voice-player, .media-spoiler");
   if (touchOnly) {
     // Tap a bubble to get its actions (links, media and buttons keep working);
     // the menu waits a moment so a second tap can turn into a reaction.
@@ -3900,6 +4018,18 @@ composer.addEventListener("submit", async (e) => {
 // Keyed by physical key so the shortcuts also work in the Russian layout.
 const FORMAT_KEYS = { KeyB: "**", KeyI: "__", "shift+KeyX": "~~", "shift+KeyP": "||", "shift+KeyM": "`" };
 msgInput.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowUp" && !msgInput.value && !e.shiftKey) {
+    const row = [...messagesEl.querySelectorAll(".msg-row.me")].reverse().find((r) => {
+      const c = r._ctx;
+      return c?.canEdit && c.msg.text && !c.msg.call && !c.msg.poll && !c.msg.game && !c.msg.location && !c.msg._scheduled && !DEFAULT_CAPTIONS.includes(c.msg.text);
+    });
+    if (row) {
+      e.preventDefault();
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      startEditingMessage(row, row._ctx.msg, row._ctx.ops.edit);
+    }
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     const marker = FORMAT_KEYS[(e.shiftKey ? "shift+" : "") + e.code];
     if (marker) {
@@ -3918,15 +4048,23 @@ msgInput.addEventListener("keydown", (e) => {
 
 function updateComposerButtons() {
   const hasText = msgInput.value.trim().length > 0;
-  voiceBtn.classList.toggle("hidden", hasText);
-  document.getElementById("circle-btn")?.classList.toggle("hidden", hasText || currentChatType === "notifications");
+  recBtn.classList.toggle("hidden", (hasText && !rec) || currentChatType === "notifications");
   sendBtn.classList.toggle("hidden", !hasText);
+}
+
+const charCount = document.getElementById("char-count");
+function updateCharCount() {
+  const len = msgInput.value.length;
+  charCount.classList.toggle("hidden", len < 3500);
+  charCount.classList.toggle("over", len > 4000);
+  charCount.textContent = `${len}/4000`;
 }
 
 msgInput.addEventListener("input", () => {
   msgInput.style.height = "auto";
   msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
   updateComposerButtons();
+  updateCharCount();
 
   saveDraftSoon();
   if (currentChatType === "contact" && myProfile?.privacy?.typingVisibility !== false) {
@@ -4070,8 +4208,10 @@ function uploadToast(label) {
 
 const FILE_LABELS = { image: "фото", video: "видео", audio: "аудио", file: "файл" };
 
-async function buildFileAttachment(original) {
-  const kind = original.type.startsWith("image/")
+async function buildFileAttachment(original, { asFile = false } = {}) {
+  const kind = asFile
+    ? "file"
+    : original.type.startsWith("image/")
     ? "image"
     : original.type.startsWith("video/")
     ? "video"
@@ -4098,8 +4238,171 @@ async function buildFileAttachment(original) {
   return { fields, previewText: `📎 ${original.name}`, defaultCaption: `📎 ${original.name}` };
 }
 
-// Sends several files one after another (picker, drag & drop, paste).
-async function sendFiles(files) {
+// Files from the picker, drag & drop or paste go through a preview sheet:
+// caption (above or below the media), spoiler, send without compression.
+const mediaOverlay = document.getElementById("media-overlay");
+const mediaPanel = mediaOverlay.querySelector(".media-panel");
+const mediaGrid = document.getElementById("media-grid");
+const mediaCaption = document.getElementById("media-caption");
+const mediaOptAbove = document.getElementById("media-opt-above");
+const mediaOptSpoiler = document.getElementById("media-opt-spoiler");
+const mediaOptFile = document.getElementById("media-opt-file");
+let mediaPending = null;
+
+const isVisualFile = (f) => f.type.startsWith("image/") || f.type.startsWith("video/");
+
+function setMediaOpt(btn, on) {
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  btn.classList.toggle("on", on);
+}
+
+function syncMediaSheet() {
+  const files = mediaPending?.files || [];
+  const visual = files.some(isVisualFile);
+  const images = files.some((f) => f.type.startsWith("image/"));
+  mediaOptAbove.classList.toggle("hidden", !visual);
+  mediaOptSpoiler.classList.toggle("hidden", !visual);
+  mediaOptFile.classList.toggle("hidden", !images);
+  const above = mediaOptAbove.classList.contains("on") && visual;
+  const rects = captureRects(mediaPanel);
+  mediaPanel.classList.toggle("caption-above", above);
+  playFlip(mediaPanel, rects);
+  mediaGrid.classList.toggle("spoilered", mediaOptSpoiler.classList.contains("on") && visual);
+  const n = files.length;
+  document.getElementById("media-title").textContent =
+    n === 1 ? (images ? "Отправить фото" : visual ? "Отправить видео" : "Отправить файл") : `Отправить: ${n} ${n < 5 ? "файла" : "файлов"}`;
+}
+
+function openMediaSheet(files) {
+  mediaPending?.urls.forEach((u) => URL.revokeObjectURL(u));
+  mediaPending = { files, urls: [], target: { type: currentChatType, id: currentChatId } };
+  mediaGrid.innerHTML = "";
+  files.forEach((file, i) => {
+    const cell = document.createElement("div");
+    cell.className = "media-cell";
+    if (isVisualFile(file)) {
+      const url = URL.createObjectURL(file);
+      mediaPending.urls.push(url);
+      const el = document.createElement(file.type.startsWith("image/") ? "img" : "video");
+      el.src = url;
+      if (el.tagName === "VIDEO") {
+        el.muted = true;
+        el.playsInline = true;
+        el.autoplay = true;
+        el.loop = true;
+      }
+      cell.appendChild(el);
+    } else {
+      cell.classList.add("media-cell-file");
+      cell.innerHTML = '<span class="msg-file-icon">📎</span><span class="media-cell-name"></span><span class="media-cell-size"></span>';
+      cell.querySelector(".media-cell-name").textContent = file.name;
+      cell.querySelector(".media-cell-size").textContent = fmtFileSize(file.size);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "media-cell-remove";
+    remove.title = "Убрать";
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => {
+      const idx = mediaPending.files.indexOf(file);
+      if (idx < 0) return;
+      mediaPending.files.splice(idx, 1);
+      if (!mediaPending.files.length) return closeMediaSheet();
+      cell.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(.6)" }], { duration: 200, easing: "ease-in" }).finished.then(() => {
+        const rects = captureRects(mediaGrid);
+        cell.remove();
+        playFlip(mediaGrid, rects);
+        syncMediaSheet();
+      });
+    });
+    cell.appendChild(remove);
+    mediaGrid.appendChild(cell);
+  });
+  mediaGrid.dataset.count = String(Math.min(files.length, 4));
+  mediaCaption.value = msgInput.value;
+  setMediaOpt(mediaOptAbove, readStore("lm-caption-above") === "1");
+  setMediaOpt(mediaOptSpoiler, false);
+  setMediaOpt(mediaOptFile, false);
+  syncMediaSheet();
+  showOverlay(mediaOverlay);
+  stagger(mediaGrid.children, { y: 16, scale: 0.85, step: 40, delay: 90, spring: "bouncy" });
+  setTimeout(() => mediaCaption.focus(), 120);
+}
+
+function closeMediaSheet() {
+  hideOverlay(mediaOverlay);
+  const pending = mediaPending;
+  mediaPending = null;
+  setTimeout(() => pending?.urls.forEach((u) => URL.revokeObjectURL(u)), 600);
+}
+
+[mediaOptAbove, mediaOptSpoiler, mediaOptFile].forEach((btn) =>
+  btn.addEventListener("click", () => {
+    setMediaOpt(btn, !btn.classList.contains("on"));
+    animate(btn, [{ transform: "scale(.9)" }, { transform: "none" }], { spring: "jelly" });
+    if (btn === mediaOptAbove) {
+      try {
+        localStorage.setItem("lm-caption-above", btn.classList.contains("on") ? "1" : "0");
+      } catch (_) {}
+    }
+    syncMediaSheet();
+  })
+);
+document.getElementById("media-cancel").addEventListener("click", closeMediaSheet);
+mediaOverlay.addEventListener("click", (e) => {
+  if (e.target === mediaOverlay) closeMediaSheet();
+});
+mediaCaption.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    document.getElementById("media-send").click();
+  }
+});
+document.getElementById("media-send").addEventListener("click", async () => {
+  if (!mediaPending) return;
+  const { files, target } = mediaPending;
+  const caption = mediaCaption.value.trim().slice(0, 4000);
+  const opts = {
+    above: mediaOptAbove.classList.contains("on"),
+    spoiler: mediaOptSpoiler.classList.contains("on"),
+    asFile: mediaOptFile.classList.contains("on"),
+  };
+  closeMediaSheet();
+  if (caption && target.id === currentChatId && msgInput.value.trim() === caption) {
+    msgInput.value = "";
+    writeDraft(currentChatId, "");
+    msgInput.dispatchEvent(new Event("input"));
+  }
+  await sendMediaBatch(files, target, caption, opts);
+});
+
+async function sendMediaBatch(files, target, caption, { above = false, spoiler = false, asFile = false } = {}) {
+  attachErrorEl.textContent = "";
+  attachBtn.disabled = true;
+  let captionUsed = false;
+  try {
+    for (const file of files) {
+      try {
+        const asPlainFile = asFile && file.type.startsWith("image/");
+        const attachment = await buildFileAttachment(file, { asFile: asPlainFile });
+        const visual = isVisualFile(file) && !asPlainFile;
+        const text = captionUsed ? "" : caption;
+        if (visual && spoiler) attachment.fields.mediaSpoiler = true;
+        if (visual && above && text) attachment.fields.captionAbove = true;
+        await deliver({ ...target, text, attachment });
+        if (text) captionUsed = true;
+      } catch (err) {
+        if (err?.name === "AbortError") continue;
+        console.error(err);
+        toast(`${file.name}: ${err.message || "не удалось отправить"}`, { tone: "error", duration: 5000 });
+      }
+    }
+  } finally {
+    attachBtn.disabled = false;
+  }
+}
+
+function sendFiles(files) {
   const list = Array.from(files || []).slice(0, 10);
   if (!list.length || !currentChatId) return;
   if (composer.classList.contains("hidden") || currentChatType === "notifications") {
@@ -4110,22 +4413,7 @@ async function sendFiles(files) {
     toast("Отправка файлов ещё не настроена (Cloudinary, см. README)", { tone: "error", duration: 5000 });
     return;
   }
-  attachErrorEl.textContent = "";
-  attachBtn.disabled = true;
-  try {
-    for (const file of list) {
-      try {
-        const attachment = await buildFileAttachment(file);
-        await doSendMessage(attachment);
-      } catch (err) {
-        if (err?.name === "AbortError") continue;
-        console.error(err);
-        toast(`${file.name}: ${err.message || "не удалось отправить"}`, { tone: "error", duration: 5000 });
-      }
-    }
-  } finally {
-    attachBtn.disabled = false;
-  }
+  openMediaSheet(list);
 }
 
 attachBtn.addEventListener("click", openAttachMenu);
@@ -4322,67 +4610,503 @@ chatSection.addEventListener("drop", (e) => {
   sendFiles(e.dataTransfer.files);
 });
 
-// ---------- Voice messages ----------
+// ---------- Voice messages & round videos: one button ----------
+// Tap switches between the microphone and the camera, hold records.
+// While holding: slide left to cancel, slide up to lock (hands-free) — for a
+// round video keep sliding up to zoom in. Release to send.
 
-let activeMicStream = null;
-let voiceDiscard = false;
+const recBtn = document.getElementById("rec-btn");
+const recPanel = document.getElementById("rec-panel");
+const recLock = document.getElementById("rec-lock");
+const recTime = document.getElementById("rec-time");
+const recHint = document.getElementById("rec-hint");
+const recWave = document.getElementById("rec-wave");
+const HOLD_MS = 230;
+const CANCEL_DX = -110;
+const LOCK_DY = -80;
+const MAX_VOICE_SECONDS = 300;
 
-async function startVoiceRecording() {
-  attachErrorEl.textContent = "";
-  try {
-    activeMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    console.error(err);
-    attachErrorEl.textContent = "Нет доступа к микрофону";
+let recMode = readStore("lm-rec-mode") === "video" && circlesSupported ? "video" : "voice";
+let rec = null; // the recording in progress
+let press = null; // the finger/mouse currently on the button
+
+function syncRecButton() {
+  recBtn.dataset.mode = recMode;
+  recBtn.title =
+    recMode === "voice"
+      ? "Голосовое: удерживайте — запись, нажмите — переключить на кружок"
+      : "Кружок: удерживайте — запись, нажмите — переключить на голосовое";
+}
+syncRecButton();
+
+function showRecTip(text) {
+  document.querySelector(".rec-tip")?.remove();
+  const tip = document.createElement("div");
+  tip.className = "rec-tip glass";
+  tip.textContent = text;
+  document.body.appendChild(tip);
+  const r = recBtn.getBoundingClientRect();
+  tip.style.left = Math.max(8, Math.min(innerWidth - tip.offsetWidth - 8, r.left + r.width / 2 - tip.offsetWidth / 2)) + "px";
+  tip.style.top = r.top - tip.offsetHeight - 12 + "px";
+  animate(tip, [{ opacity: 0, transform: "translateY(10px) scale(.8)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  setTimeout(() => {
+    tip.animate([{ opacity: 1 }, { opacity: 0, transform: "translateY(-6px)" }], { duration: 220, fill: "forwards" }).finished.then(() => tip.remove(), () => tip.remove());
+  }, 1500);
+}
+
+function toggleRecMode() {
+  if (!circlesSupported) {
+    showRecTip("Кружки не поддерживаются в этом браузере");
     return;
   }
-  recordedChunks = [];
-  voiceDiscard = false;
-  mediaRecorder = new MediaRecorder(activeMicStream);
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data.size > 0) recordedChunks.push(e.data);
-  };
-  mediaRecorder.onstop = async () => {
-    activeMicStream?.getTracks().forEach((t) => t.stop());
-    activeMicStream = null;
-    voiceBtn.classList.remove("recording");
-    if (voiceDiscard || recordedChunks.length === 0) return;
-    try {
-      const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-      const voiceFile = new File([blob], "voice.webm", { type: blob.type });
-      const progress = uploadToast("Отправка голосового сообщения");
-      let url;
-      try {
-        ({ url } = await uploadToCloudinary(voiceFile, "video", progress.update, progress.signal)); // Cloudinary files audio under "video"
-        progress.done();
-      } catch (e) {
-        progress.fail();
-        throw e;
-      }
-      await doSendMessage({ fields: { voiceUrl: url }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" });
-    } catch (err) {
-      console.error(err);
-      attachErrorEl.textContent = err.message || "Не удалось отправить голосовое сообщение";
-    }
-  };
-  mediaRecorder.start();
-  voiceBtn.classList.add("recording");
+  recMode = recMode === "voice" ? "video" : "voice";
+  try {
+    localStorage.setItem("lm-rec-mode", recMode);
+  } catch (_) {}
+  syncRecButton();
+  animate(recBtn, [{ transform: "scale(.7) rotate(-25deg)" }, { transform: "none" }], { spring: "jelly" });
+  showRecTip(recMode === "voice" ? "🎤 Голосовое — удерживайте, чтобы записать" : "⭕ Кружок — удерживайте, чтобы записать");
 }
 
-function stopVoiceRecording(discard) {
-  voiceDiscard = discard;
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    mediaRecorder.stop();
+function recTarget() {
+  return { type: currentChatType, id: currentChatId };
+}
+
+// Starts a recording in the current mode; returns false if it can't.
+function beginRecording() {
+  if (!currentChatId || composer.classList.contains("hidden")) return false;
+  if (!uploadsConfigured) {
+    toast("Отправка голосовых и кружков ещё не настроена (Cloudinary, см. README)", { tone: "error", duration: 5000 });
+    return false;
   }
+  if (navigator.vibrate) navigator.vibrate(12);
+  rec = { mode: recMode, locked: false, target: recTarget(), startedAt: 0, ended: false };
+  recBtn.classList.add("recording");
+  if (rec.mode === "video") {
+    const session = rec;
+    session.circle = recordCircle({ hold: true });
+    session.circle.done.then((result) => {
+      if (rec === session) {
+        rec = null;
+        resetRecUI();
+      }
+      if (result) sendCircle(result, session.target);
+    });
+    return true;
+  }
+  composer.classList.add("rec-active");
+  recPanel.classList.remove("locked");
+  recLock.classList.remove("locked");
+  recPanel.style.setProperty("--drag", "0px");
+  animate(recPanel, [{ opacity: 0, transform: "translateX(24px)" }, { opacity: 1, transform: "none" }], { spring: "smooth" });
+  animate(recLock, [{ opacity: 0, transform: "translateY(30px) scale(.6)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  startVoice(rec);
+  return true;
 }
 
-voiceBtn.addEventListener("click", () => {
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    stopVoiceRecording(false);
-  } else {
-    startVoiceRecording();
+function resetRecUI() {
+  recBtn.classList.remove("recording", "locked");
+  composer.classList.remove("rec-active");
+  recPanel.classList.remove("locked", "cancelling");
+  recLock.style.removeProperty("--lock");
+  updateComposerButtons();
+}
+
+function lockRecording() {
+  if (!rec || rec.locked) return;
+  rec.locked = true;
+  if (navigator.vibrate) navigator.vibrate([10, 40, 10]);
+  if (rec.mode === "video") {
+    rec.circle.lock();
+    return;
+  }
+  recBtn.classList.add("locked");
+  recPanel.classList.add("locked");
+  recLock.classList.add("locked");
+  recPanel.style.setProperty("--drag", "0px");
+  animate(recBtn, [{ transform: "scale(.6)" }, { transform: "none" }], { spring: "jelly" });
+}
+
+function endRecording(send) {
+  const session = rec;
+  if (!session) return;
+  rec = null;
+  session.ended = true;
+  resetRecUI();
+  if (session.mode === "video") session.circle.finish(send);
+  else finishVoice(session, send);
+}
+
+function cancelRecording() {
+  press = null;
+  if (rec) endRecording(false);
+}
+
+recBtn.addEventListener("pointerdown", (e) => {
+  if (e.button > 0) return;
+  e.preventDefault();
+  if (rec?.locked) {
+    endRecording(true); // the button is a send button while locked
+    return;
+  }
+  if (rec) return;
+  recBtn.setPointerCapture?.(e.pointerId);
+  press = { id: e.pointerId, x: e.clientX, y: e.clientY, started: false };
+  const current = press;
+  current.timer = setTimeout(() => {
+    if (press !== current) return;
+    current.started = true;
+    if (!beginRecording()) press = null;
+  }, HOLD_MS);
+});
+
+recBtn.addEventListener("pointermove", (e) => {
+  if (!press?.started || !rec || e.pointerId !== press.id) return;
+  const dx = e.clientX - press.x;
+  const dy = e.clientY - press.y;
+  if (!rec.locked) {
+    if (dx < CANCEL_DX) {
+      press = null;
+      endRecording(false);
+      return;
+    }
+    if (dy < LOCK_DY) lockRecording();
+    if (rec.mode === "video") rec.circle.drag(dx, dy);
+    else {
+      recPanel.style.setProperty("--drag", Math.min(0, dx) + "px");
+      recPanel.classList.toggle("cancelling", dx < CANCEL_DX * 0.6);
+      recLock.style.setProperty("--lock", Math.min(1, Math.max(0, -dy / -LOCK_DY)).toFixed(3));
+    }
+  } else if (rec.mode === "video") {
+    // Keep sliding up after locking to zoom in.
+    rec.circle.setZoom(1 + (Math.max(0, -dy + LOCK_DY) / 220) * (MAX_ZOOM - 1));
   }
 });
+
+function releaseRecButton(e) {
+  if (!press || e.pointerId !== press.id) return;
+  clearTimeout(press.timer);
+  const p = press;
+  press = null;
+  if (!p.started) {
+    if (e.type === "pointerup") toggleRecMode();
+    return;
+  }
+  if (!rec || rec.locked) return;
+  const tooShort = !rec.startedAt || performance.now() - rec.startedAt < 700;
+  if (tooShort && rec.mode === "voice") showRecTip("Удерживайте, чтобы записать, отпустите — отправить");
+  endRecording(e.type === "pointerup" && !tooShort);
+}
+recBtn.addEventListener("pointerup", releaseRecButton);
+recBtn.addEventListener("pointercancel", releaseRecButton);
+recBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+recBtn.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    toggleRecMode();
+  }
+});
+document.getElementById("rec-trash").addEventListener("click", () => endRecording(false));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && rec && rec.mode === "voice") endRecording(false);
+});
+
+// ----- voice -----
+
+function pickAudioMime() {
+  return ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus", "audio/webm"].find((m) => MediaRecorder.isTypeSupported?.(m)) || "";
+}
+
+async function startVoice(session) {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (err) {
+    console.error(err);
+    toast("Нет доступа к микрофону", { tone: "error" });
+    if (rec === session) endRecording(false);
+    return;
+  }
+  if (session.ended) {
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  // The permission prompt can swallow the release: without the finger we'd
+  // record forever, so ask to try again.
+  if (!press && !session.locked) {
+    stream.getTracks().forEach((t) => t.stop());
+    endRecording(false);
+    showRecTip("Доступ получен — удерживайте кнопку, чтобы записать");
+    return;
+  }
+  session.stream = stream;
+  const ctx = audio();
+  if (ctx) {
+    session.source = ctx.createMediaStreamSource(stream);
+    session.analyser = ctx.createAnalyser();
+    session.analyser.fftSize = 1024;
+    session.source.connect(session.analyser);
+  }
+  const mime = pickAudioMime();
+  session.chunks = [];
+  session.recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  session.recorder.ondataavailable = (e) => e.data.size && session.chunks.push(e.data);
+  session.recorder.start(250);
+  session.startedAt = performance.now();
+  session.levels = [];
+  drawVoiceLevels(session);
+}
+
+// Live waveform + timer; also samples the loudness for the message's waveform.
+function drawVoiceLevels(session) {
+  const buf = session.analyser ? new Float32Array(session.analyser.fftSize) : null;
+  const g = recWave.getContext("2d");
+  let lastSample = 0;
+  const frame = (now) => {
+    if (session.ended) return;
+    session.raf = requestAnimationFrame(frame);
+    const elapsed = (now - session.startedAt) / 1000;
+    recTime.textContent = fmtDuration(Math.floor(elapsed));
+    if (elapsed >= MAX_VOICE_SECONDS) {
+      if (rec === session) endRecording(true);
+      return;
+    }
+    if (now - lastSample < 70) return;
+    lastSample = now;
+    let level = 0;
+    if (buf) {
+      session.analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      level = Math.min(1, Math.sqrt(sum / buf.length) * 4.5);
+    }
+    session.levels.push(level);
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const w = recWave.clientWidth;
+    const h = recWave.clientHeight;
+    if (recWave.width !== Math.round(w * dpr)) {
+      recWave.width = Math.round(w * dpr);
+      recWave.height = Math.round(h * dpr);
+    }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = getComputedStyle(recWave).color;
+    const step = 4;
+    const count = Math.floor(w / step);
+    const recent = session.levels.slice(-count);
+    recent.forEach((v, i) => {
+      const bh = Math.max(2, v * h);
+      const x = w - (recent.length - i) * step;
+      g.globalAlpha = 0.35 + 0.65 * (i / recent.length);
+      g.beginPath();
+      g.roundRect ? g.roundRect(x, (h - bh) / 2, 2.4, bh, 1.2) : g.rect(x, (h - bh) / 2, 2.4, bh);
+      g.fill();
+    });
+    g.globalAlpha = 1;
+  };
+  session.raf = requestAnimationFrame(frame);
+}
+
+const WAVE_CHARS = "0123456789abcdefghijklmnopqrstuv";
+function encodeWave(levels, bars = 48) {
+  if (!levels?.length) return "";
+  const out = [];
+  for (let i = 0; i < bars; i++) {
+    const a = Math.floor((i * levels.length) / bars);
+    const b = Math.max(a + 1, Math.floor(((i + 1) * levels.length) / bars));
+    const slice = levels.slice(a, b);
+    const peak = Math.max(...slice, 0);
+    out.push(WAVE_CHARS[Math.round(Math.min(1, peak) * 31)]);
+  }
+  return out.join("");
+}
+
+function finishVoice(session, send) {
+  cancelAnimationFrame(session.raf);
+  const stopStream = () => {
+    session.stream?.getTracks().forEach((t) => t.stop());
+    try {
+      session.source?.disconnect();
+    } catch (_) {}
+  };
+  const recorder = session.recorder;
+  if (!recorder || recorder.state === "inactive") {
+    stopStream();
+    return;
+  }
+  const duration = Math.max(1, Math.round((performance.now() - session.startedAt) / 1000));
+  recorder.onstop = () => {
+    stopStream();
+    if (!send || !session.chunks.length) return;
+    const blob = new Blob(session.chunks, { type: recorder.mimeType || "audio/webm" });
+    sendVoice(blob, duration, encodeWave(session.levels), session.target);
+  };
+  recorder.stop();
+}
+
+async function sendVoice(blob, duration, wave, target) {
+  const type = blob.type.split(";")[0];
+  const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+  const file = new File([blob], `voice.${ext}`, { type });
+  const progress = uploadToast("Отправка голосового сообщения");
+  try {
+    const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal); // Cloudinary files audio under "video"
+    progress.done();
+    // Served as MP3 so Safari can play recordings made in Chrome (webm/opus).
+    const playable = url.replace(/\.(webm|ogg|weba|m4a)$/i, ".mp3");
+    await deliver({
+      ...target,
+      attachment: { fields: { voiceUrl: playable, duration, wave }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
+    });
+  } catch (err) {
+    progress.fail();
+    if (err?.name === "AbortError") return;
+    console.error(err);
+    toast(err.message || "Не удалось отправить голосовое сообщение", { tone: "error" });
+  }
+}
+
+// ----- round video -----
+
+async function sendCircle(result, target) {
+  const ext = result.mime.includes("mp4") ? "mp4" : "webm";
+  const file = new File([result.blob], `circle.${ext}`, { type: result.mime.split(";")[0] });
+  const progress = uploadToast("Отправка видеосообщения");
+  try {
+    const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal);
+    progress.done();
+    // Cloudinary serves a square H.264 MP4 of it, which every browser plays.
+    const playable = url.replace("/upload/", "/upload/c_fill,g_center,w_480,h_480,q_auto/").replace(/\.(webm|mov|mkv)$/i, ".mp4");
+    await deliver({
+      ...target,
+      attachment: {
+        fields: { videoNoteUrl: playable, duration: result.duration },
+        previewText: "⭕ Видеосообщение",
+        defaultCaption: "⭕",
+      },
+    });
+  } catch (err) {
+    progress.fail();
+    if (err?.name === "AbortError") return;
+    console.error(err);
+    toast(err.message || "Не удалось отправить видеосообщение", { tone: "error" });
+  }
+}
+
+// ----- voice message player -----
+
+let voiceRate = [1, 1.5, 2].includes(Number(readStore("lm-voice-rate"))) ? Number(readStore("lm-voice-rate")) : 1;
+let playingVoice = null;
+
+function waveLevels(msg, bars = 40) {
+  if (typeof msg.wave === "string" && msg.wave.length) {
+    const src = [...msg.wave].map((c) => Math.max(0, WAVE_CHARS.indexOf(c)) / 31);
+    return Array.from({ length: bars }, (_, i) => src[Math.floor((i * src.length) / bars)]);
+  }
+  // Older messages have no waveform: a stable pseudo-random one from the URL.
+  let h = 2166136261;
+  for (const ch of msg.voiceUrl || msg.id || "") h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return Array.from({ length: bars }, (_, i) => {
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return 0.25 + (((h >>> 0) % 1000) / 1000) * 0.6 * Math.sin((Math.PI * (i + 1)) / (bars + 1));
+  });
+}
+
+const PLAY_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>';
+const PAUSE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>';
+
+function buildVoicePlayer(msg) {
+  const el = document.createElement("div");
+  el.className = "voice-player";
+  const bars = waveLevels(msg)
+    .map((v) => `<i style="height:${Math.round(12 + v * 88)}%"></i>`)
+    .join("");
+  el.innerHTML = `
+    <button type="button" class="vp-play" title="Слушать">${PLAY_ICON}</button>
+    <div class="vp-body">
+      <div class="vp-wave"><div class="vp-bars">${bars}</div><div class="vp-bars vp-fill">${bars}</div></div>
+      <div class="vp-meta"><span class="vp-time"></span><button type="button" class="vp-speed" title="Скорость"></button></div>
+    </div>`;
+  const playBtn = el.querySelector(".vp-play");
+  const fill = el.querySelector(".vp-fill");
+  const timeEl = el.querySelector(".vp-time");
+  const speedBtn = el.querySelector(".vp-speed");
+  const known = Number(msg.duration) || 0;
+  let player = null;
+  const total = () => (player && Number.isFinite(player.duration) && player.duration > 0 ? player.duration : known);
+  const paint = () => {
+    const t = player?.currentTime || 0;
+    const d = total();
+    fill.style.clipPath = `inset(0 ${100 - (d ? Math.min(100, (t / d) * 100) : 0)}% 0 0)`;
+    timeEl.textContent = player && (t > 0 || !player.paused) ? fmtDuration(Math.floor(t)) : fmtDuration(Math.round(d));
+  };
+  const setSpeed = () => (speedBtn.textContent = `${voiceRate}×`);
+  setSpeed();
+  paint();
+
+  const ensure = () => {
+    if (player) return player;
+    player = new Audio(msg.voiceUrl);
+    player.preload = "auto";
+    player.addEventListener("timeupdate", paint);
+    player.addEventListener("loadedmetadata", paint);
+    player.addEventListener("play", () => {
+      playBtn.innerHTML = PAUSE_ICON;
+      el.classList.add("playing");
+    });
+    player.addEventListener("pause", () => {
+      playBtn.innerHTML = PLAY_ICON;
+      el.classList.remove("playing");
+    });
+    player.addEventListener("ended", () => {
+      player.currentTime = 0;
+      paint();
+      if (playingVoice === player) playingVoice = null;
+      // Carry on with the next voice message below, like Telegram.
+      const players = [...messagesEl.querySelectorAll(".voice-player")];
+      const next = players[players.indexOf(el) + 1];
+      next?.querySelector(".vp-play").click();
+    });
+    return player;
+  };
+  playBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const p = ensure();
+    if (!p.paused) {
+      p.pause();
+      return;
+    }
+    if (playingVoice && playingVoice !== p) playingVoice.pause();
+    playingVoice = p;
+    p.playbackRate = voiceRate;
+    p.play().catch(() => toast("Не удалось воспроизвести", { tone: "error" }));
+    animate(playBtn, [{ transform: "scale(.75)" }, { transform: "none" }], { spring: "jelly" });
+  });
+  el.querySelector(".vp-wave").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const p = ensure();
+    const r = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    const seek = () => {
+      p.currentTime = ratio * total();
+      paint();
+    };
+    if (p.readyState >= 1) seek();
+    else p.addEventListener("loadedmetadata", seek, { once: true });
+    if (p.paused) playBtn.click();
+  });
+  speedBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    voiceRate = voiceRate === 1 ? 1.5 : voiceRate === 1.5 ? 2 : 1;
+    try {
+      localStorage.setItem("lm-voice-rate", String(voiceRate));
+    } catch (_) {}
+    messagesEl.querySelectorAll(".vp-speed").forEach((b) => (b.textContent = `${voiceRate}×`));
+    if (playingVoice) playingVoice.playbackRate = voiceRate;
+    animate(speedBtn, [{ transform: "scale(.6)" }, { transform: "none" }], { spring: "jelly" });
+  });
+  return el;
+}
 
 // ---------- Contact alias editing ----------
 
@@ -4493,21 +5217,173 @@ function closeCurrentChatView() {
 
 // ---------- Notifications (sound / desktop) ----------
 
-function beep() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+// One shared AudioContext, unlocked by the first tap/keypress: browsers keep
+// contexts created without a user gesture silent.
+let audioCtx = null;
+function audio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+["pointerdown", "keydown"].forEach((type) => window.addEventListener(type, () => audio(), { once: true, capture: true }));
+
+// A soft two-note chime.
+function chime() {
+  const ctx = audio();
+  if (!ctx || ctx.state !== "running") return;
+  const t0 = ctx.currentTime;
+  [
+    [880, 0],
+    [1318.5, 0.11],
+  ].forEach(([freq, delay]) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = 720;
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.25);
-  } catch (_) {
-    /* audio not available */
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t0 + delay);
+    gain.gain.exponentialRampToValueAtTime(0.09, t0 + delay + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.42);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0 + delay);
+    osc.stop(t0 + delay + 0.45);
+  });
+}
+
+// Service worker: mobile Chrome only shows notifications through it, and it
+// focuses the app / opens the chat when a notification is tapped.
+let swRegistration = null;
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  navigator.serviceWorker
+    .register("/sw.js")
+    .then((reg) => (swRegistration = reg))
+    .catch((err) => console.warn("Service worker registration failed:", err));
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.type === "open-chat") openChatById(e.data.chatId, e.data.kind);
+  });
+}
+
+async function systemNotify(title, body, data = {}) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return false;
+  const options = {
+    body,
+    data,
+    tag: data.chatId || "linkage",
+    renotify: true,
+    silent: !!data.silent,
+    icon: "/icons/icon-192.png",
+    badge: "/icons/badge-96.png",
+  };
+  try {
+    const reg = swRegistration || (await navigator.serviceWorker?.getRegistration());
+    if (reg) {
+      await reg.showNotification(title, options);
+      return true;
+    }
+  } catch (err) {
+    console.warn("showNotification failed:", err);
   }
+  try {
+    const n = new Notification(title, options);
+    n.onclick = () => {
+      window.focus();
+      openChatById(data.chatId, data.kind);
+      n.close();
+    };
+    return true;
+  } catch (err) {
+    console.warn("Notification failed:", err);
+    return false;
+  }
+}
+
+function openChatById(chatId, kind) {
+  if (!chatId || !currentUser) return;
+  if (kind === "group" || kind === "channel") {
+    const group = groups.find((g) => g.id === chatId);
+    if (group) openGroupChat(group);
+    return;
+  }
+  const chat = chats.find((c) => c.id === chatId);
+  if (!chat) return;
+  const otherUid = chat.participants.find((p) => p !== currentUser.uid);
+  const profile = contactsMap.get(otherUid)?.profile || profileCache.get(otherUid)?.profile;
+  if (profile) openContactChat(chat.id, otherUid, profile);
+  else loadProfile(otherUid).then((p) => p && openContactChat(chat.id, otherUid, p));
+}
+
+// In-app banner for messages in other chats while the app is on screen.
+let activeBanner = null;
+function hideMessageBanner(banner = activeBanner, dir = -1) {
+  if (!banner || banner.dataset.leaving) return;
+  banner.dataset.leaving = "1";
+  if (activeBanner === banner) activeBanner = null;
+  clearTimeout(banner._timer);
+  banner
+    .animate([{ opacity: 1, transform: banner.style.transform || "none" }, { opacity: 0, transform: `translateY(${dir * 60}px) scale(.92)` }], {
+      duration: reducedMotion ? 60 : 260,
+      easing: "cubic-bezier(.5,0,.75,0)",
+      fill: "forwards",
+    })
+    .finished.then(() => banner.remove(), () => banner.remove());
+}
+
+function showMessageBanner({ title, body, avatar, onOpen }) {
+  if (activeBanner) {
+    activeBanner.remove();
+    activeBanner = null;
+  }
+  const banner = document.createElement("button");
+  banner.type = "button";
+  banner.className = "msg-banner glass";
+  banner.innerHTML = `${avatar || ""}<span class="msg-banner-meta"><span class="msg-banner-title"></span><span class="msg-banner-body"></span></span>`;
+  banner.querySelector(".msg-banner-title").textContent = title;
+  banner.querySelector(".msg-banner-body").textContent = body;
+  document.body.appendChild(banner);
+  activeBanner = banner;
+  animate(banner, [{ opacity: 0, transform: "translateY(-80px) scale(.85)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  const avatarEl = banner.querySelector(".avatar");
+  if (avatarEl) animate(avatarEl, [{ transform: "scale(.3) rotate(-30deg)" }, { transform: "none" }], { spring: "jelly", delay: 80 });
+  banner._timer = setTimeout(() => hideMessageBanner(banner), 4500);
+
+  // Swipe up to dismiss, tap to open.
+  let startY = null;
+  let moved = 0;
+  banner.addEventListener("pointerdown", (e) => {
+    startY = e.clientY;
+    moved = 0;
+    banner.setPointerCapture(e.pointerId);
+    clearTimeout(banner._timer);
+  });
+  banner.addEventListener("pointermove", (e) => {
+    if (startY === null) return;
+    moved = Math.min(0, e.clientY - startY);
+    banner.style.transform = `translateY(${moved}px)`;
+  });
+  banner.addEventListener("pointerup", () => {
+    startY = null;
+    if (moved < -30) return hideMessageBanner(banner);
+    banner.style.transform = "";
+    if (Math.abs(moved) < 6) {
+      hideMessageBanner(banner, 0);
+      onOpen?.();
+    } else banner._timer = setTimeout(() => hideMessageBanner(banner), 3000);
+  });
+}
+
+// Sound + banner while the app is visible, system notification otherwise.
+function announce({ title, body, silent, chatId, kind, avatar }) {
+  const prefs = myProfile?.notifications || {};
+  if (prefs.sound !== false && !silent) chime();
+  if (!document.hidden) {
+    if (touchOnly && !silent && navigator.vibrate) navigator.vibrate(30);
+    showMessageBanner({ title, body, avatar, onOpen: () => openChatById(chatId, kind) });
+    return;
+  }
+  if (prefs.desktop !== false) systemNotify(title, body, { chatId, kind, silent });
 }
 
 // Chat docs also change for typing indicators, read receipts, pins… — only
@@ -4525,46 +5401,105 @@ async function maybeNotify(chatData) {
   if (!chatData.lastMessageSenderId || chatData.lastMessageSenderId === currentUser.uid) return;
   if (!isNewLastMessage(chatData.id, chatData)) return;
   if (isChatMuted(chatData.id) || isBlocked(chatData.lastMessageSenderId)) return;
-  const isViewingThisChat =
-    currentChatId &&
-    chatData.participants &&
-    chatData.participants.includes(currentUser.uid) &&
-    !document.hidden &&
-    [...chatData.participants].sort().join("_") === currentChatId;
-  if (isViewingThisChat) return;
+  if (currentChatId === chatData.id && !document.hidden) return;
+  const prefs = myProfile?.notifications || {};
+  if (prefs.muteAll) return;
 
-  const notifPrefs = myProfile?.notifications || {};
-  if (notifPrefs.muteAll) return;
-  const silent = !!chatData.lastSilent;
-  if (notifPrefs.sound !== false && !silent) beep();
-
-  if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
-    const senderUid = chatData.lastMessageSenderId;
-    const senderProfile = contactsMap.get(senderUid)?.profile || (await getProfile(senderUid));
-    const title = senderProfile?.displayName || "Новое сообщение";
-    const opened = chatData.lastEnc ? await openPreview(chatData.id, chatData.lastEnc, chatData.lastMessageSenderId) : null;
-    const body = notifPrefs.preview !== false ? stripRich(opened || chatData.lastMessage) : "Новое сообщение";
-    new Notification(title, { body, silent });
-  }
+  const senderUid = chatData.lastMessageSenderId;
+  const profile = profileForUid(senderUid) || (await loadProfile(senderUid));
+  const contact = contactsMap.get(senderUid);
+  const title = profile ? (contact ? contactDisplayName(contact.alias, profile) : profile.displayName) : "Новое сообщение";
+  const opened = chatData.lastEnc ? await openPreview(chatData.id, chatData.lastEnc, senderUid) : null;
+  const body = prefs.preview !== false ? stripRich(opened || chatData.lastMessage || "") : "Новое сообщение";
+  announce({
+    title,
+    body,
+    silent: !!chatData.lastSilent,
+    chatId: chatData.id,
+    kind: "contact",
+    avatar: profile ? visibleAvatarHTML(profile, senderUid) : "",
+  });
 }
 
 async function maybeNotifyGroup(groupId, groupData) {
   if (!groupData.lastMessageSenderId || groupData.lastMessageSenderId === currentUser.uid) return;
   if (!isNewLastMessage(groupId, groupData)) return;
   if (isChatMuted(groupId)) return;
-  const isViewingThisGroup = currentChatId === groupId && !document.hidden;
-  if (isViewingThisGroup) return;
+  if (currentChatId === groupId && !document.hidden) return;
+  const prefs = myProfile?.notifications || {};
+  if (prefs.muteAll || prefs.groups === false) return;
 
-  const notifPrefs = myProfile?.notifications || {};
-  if (notifPrefs.muteAll || notifPrefs.groups === false) return;
-  const silent = !!groupData.lastSilent;
-  if (notifPrefs.sound !== false && !silent) beep();
-
-  if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
-    const body = notifPrefs.preview !== false ? stripRich(groupData.lastMessage) : "Новое сообщение";
-    new Notification(groupData.name || "Новое сообщение", { body, silent });
-  }
+  const sender = profileForUid(groupData.lastMessageSenderId) || (await loadProfile(groupData.lastMessageSenderId));
+  const text = prefs.preview !== false ? stripRich(groupData.lastMessage || "") : "Новое сообщение";
+  announce({
+    title: groupData.name || "Группа",
+    body: sender?.displayName && groupData.type !== "channel" ? `${sender.displayName}: ${text}` : text,
+    silent: !!groupData.lastSilent,
+    chatId: groupId,
+    kind: groupData.type || "group",
+    avatar: groupAvatarHTML({ id: groupId, ...groupData }),
+  });
 }
+
+// ---------- "Turn on notifications" prompt ----------
+
+const notifPrompt = document.getElementById("notif-prompt");
+
+function setupNotificationPrompt() {
+  if (readStore("lm-notif-prompt") === "dismissed") return;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const title = notifPrompt.querySelector(".np-title");
+  const sub = notifPrompt.querySelector(".np-sub");
+  const btn = document.getElementById("notif-prompt-btn");
+  if ("Notification" in window && Notification.permission === "default") {
+    title.textContent = "Включите уведомления";
+    sub.textContent = "Чтобы не пропускать новые сообщения";
+    btn.classList.remove("hidden");
+  } else if (!("Notification" in window) && isIOS && !navigator.standalone) {
+    title.textContent = "Уведомления на iPhone";
+    sub.textContent = "Поделиться → «На экран „Домой“», затем откройте приложение оттуда";
+    btn.classList.add("hidden");
+  } else {
+    return;
+  }
+  reveal(notifPrompt);
+}
+
+document.getElementById("notif-prompt-btn").addEventListener("click", async () => {
+  const result = await Notification.requestPermission().catch(() => "denied");
+  conceal(notifPrompt);
+  if (result !== "granted") {
+    toast("Уведомления запрещены — их можно разрешить в настройках браузера", { tone: "error", duration: 5000 });
+    return;
+  }
+  const notifications = { ...(myProfile.notifications || {}), desktop: true };
+  myProfile.notifications = notifications;
+  updateNotifications(currentUser.uid, notifications).catch(console.error);
+  toast("Уведомления включены", { icon: "🔔" });
+  successPulse(notifPrompt);
+});
+document.getElementById("notif-prompt-close").addEventListener("click", () => {
+  try {
+    localStorage.setItem("lm-notif-prompt", "dismissed");
+  } catch (_) {}
+  conceal(notifPrompt);
+});
+
+document.getElementById("notif-test-btn").addEventListener("click", async () => {
+  audio();
+  chime();
+  if (!("Notification" in window)) {
+    toast("Этот браузер не поддерживает уведомления", { tone: "error" });
+    return;
+  }
+  if (Notification.permission === "default") await Notification.requestPermission().catch(() => {});
+  if (Notification.permission !== "granted") {
+    toast("Уведомления запрещены в настройках браузера для этого сайта", { tone: "error", duration: 5000 });
+    return;
+  }
+  const shown = await systemNotify("Linkage Message", "Так будут выглядеть уведомления 🔔", { chatId: null });
+  toast(shown ? "Тестовое уведомление отправлено" : "Не удалось показать уведомление", { tone: shown ? "" : "error", icon: "🔔" });
+});
 
 // ---------- Language (i18n) ----------
 
@@ -4828,7 +5763,7 @@ function openSettings() {
 
   notifMuteAll.checked = !!myProfile.notifications?.muteAll;
   notifSound.checked = myProfile.notifications?.sound !== false;
-  notifDesktop.checked = !!myProfile.notifications?.desktop;
+  notifDesktop.checked = myProfile.notifications?.desktop !== false && "Notification" in window && Notification.permission === "granted";
   notifPreview.checked = myProfile.notifications?.preview !== false;
   notifGroups.checked = myProfile.notifications?.groups !== false;
 
@@ -4843,6 +5778,8 @@ function openSettings() {
   });
 
   settingsLanguage.value = myProfile.language || "ru";
+  selectedQuickReaction = quickReactionEmoji();
+  renderQuickReactionPicker();
 
   showSettingsMenu();
   showOverlay(settingsOverlay);
@@ -4960,6 +5897,24 @@ chatsAccentSwatches.forEach((btn) => {
   });
 });
 
+const quickReactionPicker = document.getElementById("chats-quick-reaction");
+let selectedQuickReaction = "❤️";
+function renderQuickReactionPicker() {
+  quickReactionPicker.innerHTML = "";
+  QUICK_REACTIONS.forEach((emoji) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "status-chip" + (emoji === selectedQuickReaction ? " selected" : "");
+    b.textContent = emoji;
+    b.addEventListener("click", () => {
+      selectedQuickReaction = emoji;
+      quickReactionPicker.querySelectorAll(".status-chip").forEach((c) => c.classList.toggle("selected", c === b));
+      emojiEffect(emoji, ...centerOf(b), 80);
+    });
+    quickReactionPicker.appendChild(b);
+  });
+}
+
 settingsChatsSave.addEventListener("click", async () => {
   settingsChatsError.textContent = "";
   settingsChatsSave.disabled = true;
@@ -4970,6 +5925,7 @@ settingsChatsSave.addEventListener("click", async () => {
       fontSize: chatsFontSize.value,
       compact: chatsCompact.checked,
       accentColor: selectedChatsAccent || myProfile.chatPrefs?.accentColor || DEFAULT_ACCENT,
+      quickReaction: selectedQuickReaction,
     };
     await updateProfileFields(currentUser.uid, { chatPrefs });
     myProfile.chatPrefs = chatPrefs;
@@ -5443,8 +6399,8 @@ function setupCalls() {
     onMissedCall: (profile) => toast(`Пропущенный звонок от ${profile?.displayName || "контакта"}`, { icon: "📞", duration: 4500 }),
     notify: (title, body) => {
       const prefs = myProfile?.notifications || {};
-      if (prefs.muteAll || !document.hidden) return;
-      if (prefs.desktop && "Notification" in window && Notification.permission === "granted") new Notification(title, { body });
+      if (prefs.muteAll || !document.hidden || prefs.desktop === false) return;
+      systemNotify(title, body, { chatId: null });
     },
   });
 }
@@ -5466,6 +6422,10 @@ chatMenuMuteBtn.addEventListener("click", () => {
   hidePopover(chatMenuDropdown);
   const muted = isChatMuted(currentChatId);
   toggleUserList("mutedChats", currentChatId, !muted, { success: muted ? "Уведомления включены" : "Уведомления выключены" });
+});
+document.getElementById("chat-menu-archive-btn").addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  setArchived(currentChatId, !isChatArchived(currentChatId));
 });
 chatMenuPinBtn.addEventListener("click", () => {
   hidePopover(chatMenuDropdown);
@@ -5685,7 +6645,6 @@ tilt(document.getElementById("empty-orb"), 22);
 
 magnetize(fabNewChat, 0.3);
 magnetize(sendBtn, 0.22);
-magnetize(voiceBtn, 0.18);
 
 const fxQuality = document.getElementById("fx-quality");
 fxQuality.value = window.LinkageFX?.pref?.() || "auto";
