@@ -43,44 +43,116 @@ if (configLooksEmpty) {
 
 let mode = "login";
 let selectedAvatarImage = null;
+let step = 0;
 
-function applyMode() {
-  const isRegister = mode === "register";
-  registerAvatarField.classList.toggle("hidden", !isRegister);
-  nicknameField.classList.toggle("hidden", !isRegister);
-  confirmPasswordField.classList.toggle("hidden", !isRegister);
-  nicknameInput.required = isRegister;
-  confirmPasswordInput.required = isRegister;
+const usernameField = usernameInput.closest(".field");
+const passwordField = passwordInput.closest(".field");
 
-  authSubmit.textContent = isRegister ? "Зарегистрироваться" : "Войти";
-  authSub.textContent = isRegister ? "Создайте аккаунт" : "Войдите в свой аккаунт";
-  switchModeBtn.textContent = isRegister ? "Уже есть аккаунт? Войдите" : "Ещё нет аккаунта? Зарегистрируйтесь";
-  authError.textContent = "";
-  usernameHint.classList.add("hidden");
+// Login and registration are shown one step at a time.
+const STEPS = {
+  login: [
+    { fields: [usernameField], sub: "Введите имя пользователя", focus: usernameInput },
+    { fields: [passwordField], sub: "Введите пароль", focus: passwordInput },
+  ],
+  register: [
+    { fields: [usernameField], sub: "Придумайте имя пользователя", focus: usernameInput },
+    { fields: [registerAvatarField, nicknameField], sub: "Как вас будут видеть другие", focus: nicknameInput },
+    { fields: [passwordField, confirmPasswordField], sub: "Придумайте пароль", focus: passwordInput },
+  ],
+};
+const ALL_FIELDS = [registerAvatarField, nicknameField, usernameField, passwordField, confirmPasswordField];
+
+const stepBar = document.createElement("div");
+stepBar.className = "auth-steps";
+authForm.prepend(stepBar);
+const backBtn = document.createElement("button");
+backBtn.type = "button";
+backBtn.className = "auth-back-btn";
+backBtn.setAttribute("aria-label", "Назад");
+backBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+const subRow = document.createElement("div");
+subRow.className = "auth-sub-row";
+authSub.before(subRow);
+subRow.append(backBtn, authSub);
+
+const isLastStep = () => step === STEPS[mode].length - 1;
+
+function renderStep(dir = 0) {
+  const cfg = STEPS[mode][step];
+  ALL_FIELDS.forEach((f) => f.classList.toggle("hidden", !cfg.fields.includes(f)));
+  nicknameInput.required = mode === "register" && step === 1;
+  confirmPasswordInput.required = mode === "register" && isLastStep();
+  passwordInput.required = isLastStep();
+  usernameInput.required = step === 0;
+  passwordInput.autocomplete = mode === "register" ? "new-password" : "current-password";
+  authSub.textContent = cfg.sub;
+  authSubmit.textContent = isLastStep() ? (mode === "register" ? "Зарегистрироваться" : "Войти") : "Далее";
+  backBtn.classList.toggle("shown", step > 0);
+  stepBar.innerHTML = STEPS[mode].map((_, i) => `<span class="${i < step ? "done" : i === step ? "on" : ""}"></span>`).join("");
+  if (dir && !reducedMotion) {
+    const from = dir > 0 ? 36 : -36;
+    cfg.fields.forEach((f, i) =>
+      animate(f, [{ opacity: 0, transform: `translateX(${from}px)`, filter: "blur(8px)" }, { opacity: 1, transform: "none", filter: "blur(0)" }], { spring: "smooth", delay: i * 60 })
+    );
+  }
+  setTimeout(() => cfg.focus?.focus({ preventScroll: true }), dir ? 180 : 0);
 }
 
-// Switching modes morphs the card's height on a spring while the extra
-// register fields condense into place one by one.
-switchModeBtn.addEventListener("click", () => {
+function morphHeight(change) {
   const before = authCard.getBoundingClientRect().height;
-  mode = mode === "login" ? "register" : "login";
-  applyMode();
+  change();
   const after = authCard.getBoundingClientRect().height;
-  if (!reducedMotion) {
+  if (!reducedMotion && Math.abs(before - after) > 1) {
     authCard.style.overflow = "hidden";
     animate(authCard, [{ height: before + "px" }, { height: after + "px" }], { spring: "smooth" }).finished.then(
       () => (authCard.style.overflow = ""),
       () => (authCard.style.overflow = "")
     );
   }
+}
+
+function goStep(next) {
+  const dir = next > step ? 1 : -1;
+  authError.textContent = "";
+  morphHeight(() => {
+    step = next;
+    renderStep(dir);
+  });
+}
+
+backBtn.addEventListener("click", () => step > 0 && goStep(step - 1));
+
+// Validates the current step; resolves true when it's fine to move on.
+async function validateStep() {
+  const uname = normalizeUsername(usernameInput.value);
+  if (step === 0) {
+    if (!isValidUsername(uname)) throw new Error("3-20 символов: латиница, цифры, _");
+    const free = await usernameAvailable(uname);
+    if (mode === "register" && !free) throw new Error("Это имя уже занято");
+    if (mode === "login" && free) throw new Error("Пользователь не найден");
+  }
+  if (mode === "register" && step === 1 && !nicknameInput.value.trim()) {
+    nicknameInput.focus();
+    throw new Error("Введите ник");
+  }
+}
+
+function applyMode() {
+  step = 0;
+  switchModeBtn.textContent = mode === "register" ? "Уже есть аккаунт? Войдите" : "Ещё нет аккаунта? Зарегистрируйтесь";
+  authError.textContent = "";
+  usernameHint.classList.add("hidden");
+  renderStep();
+}
+
+switchModeBtn.addEventListener("click", () => {
+  mode = mode === "login" ? "register" : "login";
+  morphHeight(applyMode);
   const blurIn = [
     { opacity: 0, filter: "blur(8px)", transform: "translateY(6px)" },
     { opacity: 1, filter: "blur(0px)", transform: "none" },
   ];
   [authSub, authSubmit, switchModeBtn].forEach((el, i) => animate(el, blurIn, { spring: "smooth", delay: i * 40 }));
-  if (mode === "register") {
-    stagger([registerAvatarField, nicknameField, confirmPasswordField], { y: 18, blur: 10, step: 70, delay: 60 });
-  }
 });
 
 const checkUsernameDebounced = debounce(async (raw) => {
@@ -153,6 +225,18 @@ authForm.addEventListener("submit", async (e) => {
   if (configLooksEmpty) return;
   authError.textContent = "";
   authSubmit.disabled = true;
+  if (!isLastStep()) {
+    try {
+      await validateStep();
+      goStep(step + 1);
+    } catch (err) {
+      authError.textContent = err.message;
+      shake(authCard);
+    } finally {
+      authSubmit.disabled = false;
+    }
+    return;
+  }
   let succeeded = false;
   try {
     if (mode === "register") {

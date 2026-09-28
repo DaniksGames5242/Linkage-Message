@@ -98,7 +98,15 @@ export function animate(el, keyframes, opts = {}) {
 
 // Cascades a list of elements in with a small rise + blur, one after another.
 export function stagger(elements, { y = 14, x = 0, blur = 6, step = 32, delay = 0, spring: springName = "bouncy", scale = 1 } = {}) {
-  const list = Array.from(elements).filter((el) => el && el.getClientRects().length > 0);
+  // Only what's on screen is worth animating; off-screen rows just appear.
+  const vh = window.innerHeight;
+  const list = Array.from(elements)
+    .filter((el) => {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      return (r.width || r.height) && r.bottom > -40 && r.top < vh + 40;
+    })
+    .slice(0, fxLevel() === "lite" ? 14 : 30);
   list.forEach((el, i) => {
     animate(
       el,
@@ -973,4 +981,22 @@ export function progressToast(label, { onCancel } = {}) {
       remove();
     },
   };
+}
+
+// While scrolling, pause decorative CSS loops (see .is-scrolling in style.css).
+{
+  let t = 0;
+  const root = document.documentElement;
+  document.addEventListener(
+    "scroll",
+    () => {
+      if (!t) root.classList.add("is-scrolling");
+      clearTimeout(t);
+      t = setTimeout(() => {
+        root.classList.remove("is-scrolling");
+        t = 0;
+      }, 140);
+    },
+    { capture: true, passive: true }
+  );
 }

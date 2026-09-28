@@ -3,6 +3,13 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Далее": "Next",
+  "Введите имя пользователя": "Enter your username",
+  "Придумайте имя пользователя": "Choose a username",
+  "Как вас будут видеть другие": "How others will see you",
+  "Придумайте пароль": "Create a password",
+  "Это имя уже занято": "This username is taken",
+  "Введите ник": "Enter a nickname",
   "Комментарии": "Comments",
   "Комментировать…": "Comment…",
   "Пока нет комментариев": "No comments yet",
