@@ -68,6 +68,13 @@ export function emojiOnly(text, max = 3) {
 
 // ---------- Rendering ----------
 
+// While a screen slides in, big emoji wait on their first frame: animating
+// (and re-shadowing) them during the transition steals the GPU from it.
+let holdUntil = 0;
+export function holdEmojiPlayback(ms) {
+  holdUntil = Math.max(holdUntil, performance.now() + ms);
+}
+
 let observer = null;
 function watchVisibility(el) {
   if (!("IntersectionObserver" in window)) {
@@ -107,6 +114,11 @@ export function animatedEmoji(emoji, size, { play = "visible", loop = false } = 
   let wantPlay = false;
   wrap._play = () => {
     wantPlay = true;
+    const wait = holdUntil - performance.now();
+    if (wait > 0) {
+      setTimeout(() => anim && !reducedMotion && anim.goToAndPlay(0, true), wait);
+      return;
+    }
     if (anim && !reducedMotion) anim.goToAndPlay(0, true);
   };
   wrap.replay = wrap._play;
@@ -129,8 +141,8 @@ export function animatedEmoji(emoji, size, { play = "visible", loop = false } = 
       anim.addEventListener("DOMLoaded", () => {
         fallback.remove();
         wrap.classList.add("ready");
-        if (wantPlay && !reducedMotion) anim.goToAndPlay(0, true);
-        else anim.goToAndStop(0, true);
+        anim.goToAndStop(0, true);
+        if (wantPlay && !reducedMotion) wrap._play();
       });
     })
     .catch(() => {});

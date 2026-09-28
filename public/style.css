@@ -8965,3 +8965,28 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
    easing lag between them. */
 .vnote-ring circle,
 .vnote-ring path { transition: none; }
+
+.chat-edge-shade { display: none; }
+
+/* ---------- Android GPU budget ----------
+   Still backdrop: shown as the page background (see bg.js), canvas hidden. */
+#bg-canvas.bg-frozen { display: none; }
+
+@media (max-width: 720px) {
+  /* Full-screen panels on phones: their outer glass shadow is off-screen
+     anyway, but a 60px blur over the whole screen is re-rasterised often. */
+  #sidebar { box-shadow: none; }
+  /* The chat's edge shadow while it slides in: a gradient strip instead of a
+     full-screen blurred box-shadow. */
+  #chat { box-shadow: none; }
+  #chat > .chat-edge-shade {
+    display: block;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -40px;
+    width: 40px;
+    pointer-events: none;
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.45), transparent);
+  }
+}

@@ -239,11 +239,33 @@
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  // Static render: jump straight to the target colours.
+  // Static render: jump straight to the target colours. The still frame is
+  // then shown as an ordinary background picture and the canvas is hidden:
+  // a live WebGL layer costs a full-screen blend on every composited frame
+  // (noticeable on Android GPUs), a picture in the page background doesn't.
+  let stillKey = "";
   function drawStill() {
     colA = targetA.slice();
     colB = targetB.slice();
     draw(start + 20000);
+    const key = `${canvas.width}x${canvas.height}|${colA.join()}|${colB.join()}`;
+    if (key === stillKey && canvas.classList.contains("bg-frozen")) return;
+    stillKey = key;
+    try {
+      const url = canvas.toDataURL("image/png"); // same task as the draw, so the buffer is still there
+      const body = document.body.style;
+      body.backgroundImage = `url("${url}")`;
+      body.backgroundSize = "100% 100%";
+      body.backgroundRepeat = "no-repeat";
+      canvas.classList.add("bg-frozen");
+    } catch (_) {
+      /* keep the canvas */
+    }
+  }
+  function unfreeze() {
+    if (!canvas.classList.contains("bg-frozen")) return;
+    canvas.classList.remove("bg-frozen");
+    document.body.style.backgroundImage = "";
   }
 
   function loop(now) {
@@ -259,6 +281,7 @@
   function refresh() {
     resize();
     if (shouldRun()) {
+      unfreeze();
       if (!rafId) rafId = requestAnimationFrame(loop);
     } else if (!animated()) {
       drawStill();

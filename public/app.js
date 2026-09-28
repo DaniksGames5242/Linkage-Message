@@ -70,7 +70,7 @@ import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS,
 } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
 import { initCalls, startCall, fmtDuration } from "./call-ui.js";
-import { emojiOnly, animatedEmoji, emojiEffect, emojiPop } from "./emoji-anim.js";
+import { emojiOnly, animatedEmoji, emojiEffect, emojiPop, holdEmojiPlayback } from "./emoji-anim.js";
 import { EMOJI_GROUPS, ANIMATED_EMOJI } from "./emoji-data.js";
 import { EFFECTS, playEffect } from "./effects.js";
 import { GAMES, gameForText, rollGame, renderGame, isWin } from "./games.js";
@@ -2449,6 +2449,7 @@ new ResizeObserver(() => {
 // ---------- Shared chat-view plumbing ----------
 
 function resetChatView() {
+  holdEmojiPlayback(520);
   if (currentChatId) writeDraft(currentChatId, msgInput.value);
   closeChatSearch(true);
   scrollBottomBtn.classList.add("hidden");
