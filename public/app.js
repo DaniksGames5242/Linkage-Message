@@ -1183,6 +1183,34 @@ function groupAvatarHTML(group) {
   return `<div class="avatar" style="background:${color}">${icon}</div>`;
 }
 
+// ---------- Profile cache ----------
+// Chat docs change on every "typing…" update, so the list re-renders often.
+// Profiles of non-contacts are fetched once (concurrent callers share the
+// in-flight request) and refreshed in the background, so a render never has
+// to wait on the network more than once per person.
+
+const PROFILE_TTL_MS = 60 * 1000;
+const profileCache = new Map(); // uid -> { profile, at, pending }
+
+function loadProfile(uid) {
+  const entry = profileCache.get(uid);
+  if (entry?.pending) return entry.pending;
+  const pending = getProfile(uid).then(
+    (profile) => {
+      profileCache.set(uid, { profile, at: Date.now(), pending: null });
+      return profile;
+    },
+    (err) => {
+      console.error("getProfile failed:", uid, err);
+      const fallback = entry?.profile ?? null;
+      profileCache.set(uid, { profile: fallback, at: Date.now(), pending: null });
+      return fallback;
+    }
+  );
+  profileCache.set(uid, { profile: entry?.profile, at: entry?.at || 0, pending });
+  return pending;
+}
+
 // Builds the list off-screen, then swaps it in one go (so overlapping async
 // renders can't interleave) and FLIP-animates rows to their new positions.
 let renderChatsToken = 0;
@@ -1212,6 +1240,23 @@ async function renderChats() {
     return tb - ta;
   });
 
+  const neededUids = [
+    ...new Set(
+      combined
+        .filter((e) => e.kind === "contact")
+        .map((e) => e.data.participants.find((p) => p !== currentUser.uid))
+        .filter((uid) => uid && !contactsMap.has(uid))
+    ),
+  ];
+  const missing = neededUids.filter((uid) => profileCache.get(uid)?.profile === undefined);
+  if (missing.length) await Promise.all(missing.map(loadProfile));
+  const stale = neededUids.filter((uid) => {
+    const e = profileCache.get(uid);
+    return e && !e.pending && Date.now() - e.at > PROFILE_TTL_MS;
+  });
+  if (stale.length) Promise.all(stale.map(loadProfile)).then(() => renderChats());
+  if (token !== renderChatsToken) return; // a newer render superseded this one
+
   for (const entry of combined) {
     if (entry.kind === "group") {
       const group = entry.data;
@@ -1240,7 +1285,7 @@ async function renderChats() {
     const chat = entry.data;
     const otherUid = chat.participants.find((p) => p !== currentUser.uid);
     const contact = contactsMap.get(otherUid);
-    const profile = contact?.profile || (await getProfile(otherUid));
+    const profile = contact?.profile || profileCache.get(otherUid)?.profile;
     if (!profile) continue;
 
     const name = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
@@ -1598,11 +1643,14 @@ async function renderGroupMessagesList(msgs) {
   const token = ++groupRenderToken;
   const chatId = currentChatId;
   // Resolve sender names first so the DOM swap below is synchronous.
-  for (const msg of msgs) {
-    if (msg.senderId === currentUser.uid || groupSenderCache.has(msg.senderId)) continue;
-    const p = contactsMap.get(msg.senderId)?.profile || (await getProfile(msg.senderId));
-    groupSenderCache.set(msg.senderId, p);
-  }
+  const missingSenders = [...new Set(msgs.map((m) => m.senderId))].filter(
+    (uid) => uid !== currentUser.uid && !groupSenderCache.has(uid)
+  );
+  await Promise.all(
+    missingSenders.map(async (uid) => {
+      groupSenderCache.set(uid, contactsMap.get(uid)?.profile || (await loadProfile(uid)));
+    })
+  );
   if (token !== groupRenderToken || chatId !== currentChatId) return;
 
   const snap = snapshotScroll();
