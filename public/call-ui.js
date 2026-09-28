@@ -15,6 +15,8 @@ const ICONS = {
   cam: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
   camOff: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
   flip: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2"/><polyline points="14.5 9.5 14.5 11.2 12.8 11.2"/><polyline points="9.5 16.5 9.5 14.8 11.2 14.8"/></svg>',
+  speaker: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
+  speakerOff: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>',
   minimize: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>',
 };
 
@@ -68,6 +70,9 @@ export async function startCall({ chatId, otherUid, profile, kind }) {
 
   const pc = createPeer();
   call.localStream.getTracks().forEach((t) => pc.addTrack(t, call.localStream));
+  // Always negotiate a video slot, so the camera can be switched on later in
+  // an audio call without renegotiating.
+  if (!videoSender()) pc.addTransceiver("video", { direction: "sendrecv" });
   call.id = newCallId();
   try {
     const offer = await pc.createOffer();
@@ -79,6 +84,7 @@ export async function startCall({ chatId, otherUid, profile, kind }) {
       kind,
       status: "ringing",
       offer: { type: offer.type, sdp: offer.sdp },
+      media: { [ctx.me]: { cam: kind === "video" } },
     });
   } catch (err) {
     console.error(err);
@@ -153,9 +159,17 @@ async function acceptIncoming() {
   try {
     await pc.setRemoteDescription(call.offer);
     flushRemoteCandidates();
+    // Keep the video slot two-way even in an audio call (camera can join later).
+    pc.getTransceivers().forEach((t) => {
+      if (t.receiver?.track?.kind === "video") t.direction = "sendrecv";
+    });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    await updateCall(call.id, { status: "accepted", answer: { type: answer.type, sdp: answer.sdp } });
+    await updateCall(call.id, {
+      status: "accepted",
+      answer: { type: answer.type, sdp: answer.sdp },
+      [`media.${ctx.me}.cam`]: !!call.localStream.getVideoTracks()[0],
+    });
   } catch (err) {
     console.error(err);
     toast("Не удалось принять звонок", { tone: "error" });
@@ -170,8 +184,8 @@ async function acceptIncoming() {
 async function onCallDoc(doc) {
   if (!call || !doc || doc.id !== call.id) return;
   call.lastStatus = doc.status;
-  const remoteMedia = doc.media?.[call.otherUid];
-  if (remoteMedia) setRemoteCamOff(remoteMedia.cam === false);
+  call.remoteCam = doc.media?.[call.otherUid]?.cam === true;
+  refreshVideoMode();
 
   if (call.role === "caller" && doc.status === "accepted" && doc.answer && !call.answered) {
     call.answered = true;
@@ -204,13 +218,16 @@ function createPeer() {
     if (call.docReady) addCandidate(call.id, ctx.me, c).catch(() => {});
     else call.pendingLocal.push(c);
   };
+  // Collect every incoming track into one stream (a late video slot may
+  // arrive without a stream id).
   pc.ontrack = (e) => {
-    const stream = e.streams[0] || new MediaStream([e.track]);
-    if (el.remoteVideo.srcObject !== stream) {
-      el.remoteVideo.srcObject = stream;
-      el.remoteVideo.play().catch(() => {});
-      startVoiceMeter(stream);
-    }
+    if (!call.remoteStream) call.remoteStream = new MediaStream();
+    if (!call.remoteStream.getTracks().includes(e.track)) call.remoteStream.addTrack(e.track);
+    el.remoteVideo.srcObject = null;
+    el.remoteVideo.srcObject = call.remoteStream;
+    el.remoteVideo.play().catch(() => {});
+    applySpeaker();
+    if (e.track.kind === "audio") startVoiceMeter(new MediaStream([e.track]));
   };
   pc.onconnectionstatechange = () => onConnectionState(pc.connectionState);
   pc.oniceconnectionstatechange = () => {
@@ -353,12 +370,93 @@ function toggleMic() {
   updateToggles();
 }
 
-function toggleCam() {
-  const track = call?.localStream?.getVideoTracks()[0];
-  if (!track) return;
-  track.enabled = !track.enabled;
+function videoSender() {
+  const t = call?.pc?.getTransceivers().find((x) => x.sender?.track?.kind === "video" || x.receiver?.track?.kind === "video");
+  return t?.sender || null;
+}
+
+// Camera on/off at any point of the call: turns an audio call into a video
+// call and back by swapping the track in the pre-negotiated video slot.
+async function toggleCam() {
+  if (!call || call.camBusy) return;
+  call.camBusy = true;
+  const current = call.localStream?.getVideoTracks()[0];
+  try {
+    if (current) {
+      await videoSender()?.replaceTrack(null);
+      current.stop();
+      call.localStream.removeTrack(current);
+    } else {
+      const fresh = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: call.facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      const track = fresh.getVideoTracks()[0];
+      call.localStream.addTrack(track);
+      await videoSender()?.replaceTrack(track);
+      el.localVideo.srcObject = call.localStream;
+      el.localVideo.play().catch(() => {});
+      if (!call.speakerTouched && !call.speaker) {
+        call.speaker = true; // video calls default to loudspeaker
+        applySpeaker();
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    toast(mediaErrorText(err, "video"), { tone: "error" });
+  } finally {
+    if (call) call.camBusy = false;
+  }
+  if (!call) return;
   updateToggles();
-  if (call.id && call.docReady) updateCall(call.id, { [`media.${ctx.me}.cam`]: track.enabled }).catch(() => {});
+  refreshVideoMode();
+  const camOn = !!call.localStream?.getVideoTracks()[0];
+  if (call.id && call.docReady) updateCall(call.id, { [`media.${ctx.me}.cam`]: camOn }).catch(() => {});
+}
+
+// ---------- Loudspeaker ----------
+// Browsers only let a page pick the output device (setSinkId, mostly
+// desktop Chrome/Edge). Where a "speaker"/"earpiece" device is exposed we
+// route to it; otherwise "off" means a quiet, hold-to-ear volume.
+async function applySpeaker() {
+  if (!call) return;
+  const v = el.remoteVideo;
+  let routed = false;
+  if (typeof v.setSinkId === "function" && navigator.mediaDevices?.enumerateDevices) {
+    try {
+      const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+      const pick = call.speaker
+        ? outs.find((d) => /speaker|динамик|громк/i.test(d.label))
+        : outs.find((d) => /earpiece|receiver|handset|headset|headphone|наушник|телефон/i.test(d.label));
+      if (pick) {
+        await v.setSinkId(pick.deviceId);
+        routed = true;
+      } else if (call.speaker && v.sinkId) {
+        await v.setSinkId("");
+      }
+    } catch (_) {
+      /* output selection not permitted */
+    }
+  }
+  v.volume = call.speaker || routed ? 1 : 0.3;
+}
+
+function toggleSpeaker() {
+  if (!call) return;
+  call.speaker = !call.speaker;
+  call.speakerTouched = true;
+  applySpeaker();
+  updateToggles();
+  toast(call.speaker ? "Громкая связь включена" : "Громкая связь выключена", { icon: call.speaker ? "🔊" : "🔈" });
+}
+
+function refreshVideoMode() {
+  if (!call) return;
+  const localCam = !!call.localStream?.getVideoTracks()[0];
+  const video = localCam || !!call.remoteCam;
+  el.overlay.classList.toggle("is-video", video);
+  el.overlay.classList.toggle("remote-cam-off", !call.remoteCam);
+  el.overlay.classList.toggle("local-cam-off", !localCam);
+  el.kind.textContent = video ? "Видеозвонок" : "Аудиозвонок";
 }
 
 async function flipCamera() {
@@ -370,8 +468,7 @@ async function flipCamera() {
     const fresh = await navigator.mediaDevices.getUserMedia({ video: { facingMode: call.facing } });
     const track = fresh.getVideoTracks()[0];
     track.enabled = current.enabled;
-    const sender = call.pc?.getSenders().find((s) => s.track?.kind === "video");
-    await sender?.replaceTrack(track);
+    await videoSender()?.replaceTrack(track);
     call.localStream.removeTrack(current);
     current.stop();
     call.localStream.addTrack(track);
@@ -393,12 +490,10 @@ function updateToggles() {
   el.micBtn.innerHTML = micOn ? ICONS.mic : ICONS.micOff;
   el.micBtn.classList.toggle("off", !micOn);
   el.camBtn.innerHTML = camOn ? ICONS.cam : ICONS.camOff;
-  el.camBtn.classList.toggle("off", !camOn);
+  el.camBtn.classList.toggle("active", camOn);
+  el.speakerBtn.innerHTML = call.speaker ? ICONS.speaker : ICONS.speakerOff;
+  el.speakerBtn.classList.toggle("active", !!call.speaker);
   el.overlay.classList.toggle("local-cam-off", !camOn);
-}
-
-function setRemoteCamOff(off) {
-  el.overlay.classList.toggle("remote-cam-off", off);
 }
 
 // ---------- Voice meter (avatar rings follow the other person's voice) ----------
@@ -524,6 +619,10 @@ function newCallState(fields) {
     unsubs: [],
     facing: "user",
     lastStatus: "ringing",
+    remoteCam: false,
+    remoteStream: null,
+    // Phones hold audio calls to the ear; video calls and desktops use the speaker.
+    speaker: fields.kind === "video" || !window.matchMedia("(hover: none)").matches,
   };
 }
 
@@ -554,8 +653,9 @@ function buildDOM() {
       </div>
       <div class="call-controls call-controls-active">
         <div class="call-ctl"><button type="button" class="call-round call-mic" title="Микрофон"></button><span>Микрофон</span></div>
-        <div class="call-ctl call-only-video"><button type="button" class="call-round call-cam" title="Камера"></button><span>Камера</span></div>
-        <div class="call-ctl call-only-video"><button type="button" class="call-round call-flip" title="Сменить камеру">${ICONS.flip}</button><span>Повернуть</span></div>
+        <div class="call-ctl"><button type="button" class="call-round call-speaker" title="Громкая связь"></button><span>Динамик</span></div>
+        <div class="call-ctl"><button type="button" class="call-round call-cam" title="Камера"></button><span>Камера</span></div>
+        <div class="call-ctl call-flip-ctl"><button type="button" class="call-round call-flip" title="Сменить камеру">${ICONS.flip}</button><span>Повернуть</span></div>
         <div class="call-ctl"><button type="button" class="call-round call-end" title="Завершить">${ICONS.hangup}</button><span>Завершить</span></div>
       </div>
     </div>
@@ -579,6 +679,7 @@ function buildDOM() {
     kind: root.querySelector(".call-kind"),
     micBtn: root.querySelector(".call-mic"),
     camBtn: root.querySelector(".call-cam"),
+    speakerBtn: root.querySelector(".call-speaker"),
     pill: root.querySelector(".call-pill"),
     pillAvatar: root.querySelector(".call-pill-avatar"),
     pillName: root.querySelector(".call-pill-name"),
@@ -592,6 +693,7 @@ function buildDOM() {
   root.querySelector(".call-minimize").addEventListener("click", () => setMinimized(true));
   el.micBtn.addEventListener("click", toggleMic);
   el.camBtn.addEventListener("click", toggleCam);
+  el.speakerBtn.addEventListener("click", toggleSpeaker);
   el.pill.addEventListener("click", (e) => {
     if (e.target.closest(".call-pill-end")) hangUp();
     else setMinimized(false);
@@ -610,8 +712,12 @@ function showScreen(state) {
     el.pillAvatar.innerHTML = avatar;
     el.name.textContent = call.profile.displayName || "—";
     el.pillName.textContent = call.profile.displayName || "—";
-    el.kind.textContent = call.kind === "video" ? "Видеозвонок" : "Аудиозвонок";
-    el.overlay.classList.toggle("is-video", call.kind === "video");
+    if (state === "incoming") {
+      el.kind.textContent = call.kind === "video" ? "Видеозвонок" : "Аудиозвонок";
+      el.overlay.classList.toggle("is-video", call.kind === "video");
+    } else {
+      refreshVideoMode();
+    }
     const img = call.profile.avatarImage;
     el.bg.style.backgroundImage = img ? `url("${img}")` : "";
     el.bg.style.backgroundColor = call.profile.avatarColor || "";

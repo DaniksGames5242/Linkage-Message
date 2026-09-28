@@ -41,12 +41,10 @@ export async function createGroup({ type, name, avatarImage, avatarColor, ownerI
 }
 
 export function listenMyGroups(uid, onChange, onError) {
-  const q = query(
-    collection(db, "groups"),
-    where("members", "array-contains", uid),
-    orderBy("lastMessageAt", "desc"),
-    limit(100)
-  );
+  // No orderBy here on purpose: array-contains + orderBy needs a composite
+  // index, and without it the whole list silently fails to load. The client
+  // sorts by lastMessageAt anyway.
+  const q = query(collection(db, "groups"), where("members", "array-contains", uid));
   return onSnapshot(
     q,
     (snap) => {

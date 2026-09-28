@@ -46,6 +46,7 @@ import {
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
 import { initCalls, startCall, fmtDuration } from "./call-ui.js";
+import { emojiOnly, animatedEmoji, emojiEffect } from "./emoji-anim.js";
 import {
   colorForUid,
   initials,
@@ -65,7 +66,7 @@ import {
   EMOJI_PICKER_SET,
   REACTION_EMOJIS,
 } from "./utils.js";
-import { uploadToCloudinary } from "./upload.js";
+import { uploadToCloudinary, prepareImageForUpload, uploadsConfigured } from "./upload.js";
 import {
   SPRINGS,
   animate,
@@ -96,6 +97,7 @@ import {
   centerOf,
   reducedMotion,
   toast,
+  progressToast,
 } from "./ui.js";
 
 const ADMIN_USERNAME = "danik";
@@ -186,6 +188,7 @@ const storyViewerAvatar = document.getElementById("story-viewer-avatar");
 const storyViewerName = document.getElementById("story-viewer-name");
 const storyViewerTime = document.getElementById("story-viewer-time");
 const storyViewerImage = document.getElementById("story-viewer-image");
+const storyViewerVideo = document.getElementById("story-viewer-video");
 const storyDeleteBtn = document.getElementById("story-delete-btn");
 const storyCloseBtn = document.getElementById("story-close-btn");
 const storyPrevBtn = document.getElementById("story-prev-btn");
@@ -994,16 +997,19 @@ function listenContactsList() {
 
 // ---------- Chats list (pinned Избранное + Linkage Notifications, then real chats/groups) ----------
 
+// Load errors are kept and rendered at the end of the list (a plain
+// innerHTML write would be wiped by the next renderChats()).
+let chatsLoadError = null;
 function showChatsLoadError(err) {
   const isIndexError = err?.code === "failed-precondition" || /index/i.test(err?.message || "");
-  chatListEl.innerHTML = `<div class="empty-list">
-    Не удалось загрузить список чатов.<br />
-    ${
-      isIndexError
-        ? "Firestore просит создать составной индекс — откройте консоль браузера (F12), там будет ссылка вида «Create index», перейдите по ней и нажмите «Create». Через 1-2 минуты обновите страницу."
-        : "Проверьте правила Firestore (firestore.rules) и консоль браузера для деталей."
-    }
-  </div>`;
+  const isRulesError = err?.code === "permission-denied";
+  chatsLoadError = isIndexError
+    ? "Firestore просит создать индекс — откройте консоль браузера (F12) и перейдите по ссылке «Create index»."
+    : isRulesError
+    ? "Нет доступа к чатам: опубликуйте актуальные правила из firestore.rules в Firebase Console."
+    : "Не удалось загрузить список чатов: " + (err?.message || "неизвестная ошибка");
+  toast(chatsLoadError, { tone: "error", duration: 7000 });
+  renderChats();
 }
 
 function listenChatsList() {
@@ -1011,6 +1017,7 @@ function listenChatsList() {
     currentUser.uid,
     (list, changes) => {
       chats = list;
+      chatsLoadError = null;
       renderChats();
       if (currentChatType === "contact") onCurrentChatDataChanged();
       if (chatsInitialized) {
@@ -1108,13 +1115,37 @@ storyAddInput.addEventListener("change", async () => {
   storyAddInput.value = "";
   if (!file) return;
   try {
-    const dataUrl = await imageFileToDataUrl(file, 1080, 0.7);
-    await addStory(currentUser.uid, dataUrl);
+    if (file.type.startsWith("video/")) {
+      const meta = await readVideoMeta(file);
+      if (meta.duration > 61) throw new Error("Видео для истории — не длиннее 60 секунд");
+      const progress = uploadToast("Публикуем видео в историю");
+      const { url } = await uploadToCloudinary(file, "video", progress.update);
+      progress.done();
+      await addStory(currentUser.uid, { videoUrl: url, duration: meta.duration });
+    } else {
+      const dataUrl = await imageFileToDataUrl(file, 1080, 0.7);
+      await addStory(currentUser.uid, dataUrl);
+    }
+    toast("История опубликована", { icon: "✨" });
   } catch (err) {
     console.error(err);
-    alert(err.message || "Не удалось опубликовать историю");
+    toast(err.message || "Не удалось опубликовать историю", { tone: "error", duration: 5000 });
   }
 });
+
+function readVideoMeta(file) {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.onloadedmetadata = () => {
+      resolve({ duration: v.duration || 15 });
+      URL.revokeObjectURL(v.src);
+    };
+    v.onerror = () => resolve({ duration: 15 });
+    v.src = URL.createObjectURL(file);
+  });
+}
+
 
 function openStoryViewer(ownerUid, profile, items) {
   activeStoryGroup = { ownerUid, profile, items: [...items] };
@@ -1145,10 +1176,27 @@ function showStoryAt(index) {
   }
   activeStoryIndex = index;
   const story = activeStoryGroup.items[index];
-  storyViewerImage.src = story.image;
-  storyViewerImage.classList.remove("kenburns");
-  void storyViewerImage.offsetWidth; // restart the slow zoom for every story
-  storyViewerImage.classList.add("kenburns");
+  const isVideo = !!story.videoUrl;
+  const durationMs = isVideo ? Math.min(60, story.duration || 15) * 1000 : STORY_DURATION_MS;
+  storyViewerImage.classList.toggle("hidden", isVideo);
+  storyViewerVideo.classList.toggle("hidden", !isVideo);
+  storyViewerVideo.pause();
+  if (isVideo) {
+    storyViewerVideo.src = story.videoUrl;
+    storyViewerVideo.currentTime = 0;
+    storyViewerVideo.play().catch(() => {
+      storyViewerVideo.muted = true; // autoplay policy: retry silently
+      storyViewerVideo.play().catch(() => {});
+    });
+    storyViewerVideo.classList.remove("kenburns");
+    void storyViewerVideo.offsetWidth;
+    storyViewerVideo.classList.add("kenburns");
+  } else {
+    storyViewerImage.src = story.image;
+    storyViewerImage.classList.remove("kenburns");
+    void storyViewerImage.offsetWidth; // restart the slow zoom for every story
+    storyViewerImage.classList.add("kenburns");
+  }
   storyViewerTime.textContent = fmtRelative(story.createdAt);
 
   const bars = storyProgressTrack.querySelectorAll(".story-progress-bar");
@@ -1162,7 +1210,7 @@ function showStoryAt(index) {
       fill.style.transition = "none";
       fill.style.width = "0%";
       requestAnimationFrame(() => {
-        fill.style.transition = `width ${STORY_DURATION_MS}ms linear`;
+        fill.style.transition = `width ${durationMs}ms linear`;
         fill.style.width = "100%";
       });
     } else {
@@ -1171,11 +1219,13 @@ function showStoryAt(index) {
     }
   });
 
-  storyAdvanceTimer = setTimeout(() => showStoryAt(index + 1), STORY_DURATION_MS);
+  storyAdvanceTimer = setTimeout(() => showStoryAt(index + 1), durationMs);
 }
 
 function closeStoryViewer() {
   clearTimeout(storyAdvanceTimer);
+  storyViewerVideo.pause();
+  storyViewerVideo.removeAttribute("src");
   hideOverlay(storyViewerOverlay);
   activeStoryGroup = null;
 }
@@ -1656,6 +1706,12 @@ async function renderChats() {
   }
 
   if (token !== renderChatsToken) return; // a newer render superseded this one
+  if (chatsLoadError) {
+    const note = document.createElement("div");
+    note.className = "empty-list";
+    note.textContent = chatsLoadError;
+    frag.appendChild(note);
+  }
   const prevRects = captureRects(chatListEl);
   chatListEl.replaceChildren(frag);
   if (!chatListRendered) {
@@ -2343,6 +2399,24 @@ function renderBubbleContent(bubble, msg) {
     renderCallBubble(bubble, msg);
     return;
   }
+  const hasMedia = !!(msg.imageUrl || msg.voiceUrl || msg.fileUrl);
+  const bigEmoji = !hasMedia && emojiOnly(msg.text);
+  if (bigEmoji) {
+    // Emoji-only messages: large animated emoji without a bubble; tap to replay.
+    bubble.classList.add("emoji-bubble");
+    const size = [0, 132, 100, 84][bigEmoji.length];
+    bigEmoji.forEach((emoji) => {
+      const el = animatedEmoji(emoji, size);
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        el.replay();
+        const r = el.getBoundingClientRect();
+        emojiEffect(emoji, r.left + r.width / 2, r.top + r.height / 2, size * 1.1);
+      });
+      bubble.appendChild(el);
+    });
+    return;
+  }
   if (msg.imageUrl) {
     const img = document.createElement("img");
     img.className = "msg-image";
@@ -2414,7 +2488,7 @@ function buildReactionsBar(msg, reactFn) {
     pill.dataset.emoji = emoji;
     pill.textContent = `${emoji} ${uids.length}`;
     pill.addEventListener("click", (e) => {
-      if (!mine) burst(e.clientX, e.clientY, { content: emoji, count: 6, spread: 46 });
+      if (!mine) emojiEffect(emoji, e.clientX, e.clientY, 90);
       reactFn(msg.id, emoji, !mine);
     });
     bar.appendChild(pill);
@@ -2445,7 +2519,7 @@ function toggleReactionPicker(anchorBtn, msg, reactFn) {
     btn.textContent = emoji;
     btn.addEventListener("click", () => {
       const mine = (msg.reactions?.[emoji] || []).includes(currentUser.uid);
-      if (!mine) burst(...centerOf(btn), { content: emoji, count: 8, spread: 60 });
+      if (!mine) emojiEffect(emoji, ...centerOf(btn), 110);
       reactFn(msg.id, emoji, !mine);
       closeReactionPicker(picker);
     });
@@ -2602,7 +2676,7 @@ function renderMessage(msg, isMine, senderName) {
   if (touchOnly) {
     // Tap a bubble to get its actions (links, media and buttons keep working).
     bubbleArea.addEventListener("click", (e) => {
-      if (e.target.closest("button, a, img, audio, video, textarea, .msg-reply-quote")) return;
+      if (e.target.closest("button, a, img, audio, video, textarea, .msg-reply-quote, .anim-emoji")) return;
       const r = row.querySelector(".bubble").getBoundingClientRect();
       openMessageMenu(menuCtx, isMine ? r.right - 220 : r.left, r.bottom + 6);
     });
@@ -2620,7 +2694,7 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
         mine: new Set(Object.entries(msg.reactions || {}).filter(([, u]) => (u || []).includes(currentUser.uid)).map(([e]) => e)),
         onPick: (emoji, btn) => {
           const mine = (msg.reactions?.[emoji] || []).includes(currentUser.uid);
-          if (!mine) burst(...centerOf(btn), { content: emoji, count: 8, spread: 60 });
+          if (!mine) emojiEffect(emoji, ...centerOf(btn), 110);
           ops.react(msg.id, emoji, !mine);
         },
       }
@@ -2983,7 +3057,7 @@ async function doSendMessage(attachment) {
   cancelReply();
   try {
     if (currentChatType === "saved") {
-      await addSavedMessage(currentUser.uid, text, replyPayload);
+      await addSavedMessage(currentUser.uid, text || attachment?.defaultCaption || "", replyPayload, attachment?.fields);
     } else if (currentChatType === "notifications") {
       await addBroadcast(currentUser.uid, text);
     } else if (currentChatType === "group" || currentChatType === "channel") {
@@ -3012,6 +3086,20 @@ function openEmojiPicker() {
     btn.type = "button";
     btn.className = "emoji-option";
     btn.textContent = emoji;
+    if (!touchOnly) {
+      // Hovered emoji come alive, like Telegram's panel.
+      btn.addEventListener("pointerenter", () => {
+        if (btn._anim) return;
+        btn._anim = animatedEmoji(emoji, 30, { play: "now", loop: true });
+        btn.textContent = "";
+        btn.appendChild(btn._anim);
+      });
+      btn.addEventListener("pointerleave", () => {
+        btn._anim?.destroy();
+        btn._anim = null;
+        btn.textContent = emoji;
+      });
+    }
     btn.addEventListener("click", () => {
       msgInput.value += emoji;
       msgInput.dispatchEvent(new Event("input"));
@@ -3044,58 +3132,121 @@ emojiBtn.addEventListener("click", () => {
 
 // ---------- File / photo / video attachments ----------
 
-async function buildFileAttachment(file) {
-  if (file.type.startsWith("image/")) {
-    const { url } = await uploadToCloudinary(file, "image");
+// Uploads one file to Cloudinary (with a progress toast that can cancel
+// it) and describes it as a message attachment.
+function uploadToast(label) {
+  const ctrl = new AbortController();
+  const t = progressToast(label, { onCancel: () => ctrl.abort() });
+  return { update: t.update, done: t.done, fail: t.fail, signal: ctrl.signal };
+}
+
+const FILE_LABELS = { image: "фото", video: "видео", audio: "аудио", file: "файл" };
+
+async function buildFileAttachment(original) {
+  const kind = original.type.startsWith("image/")
+    ? "image"
+    : original.type.startsWith("video/")
+    ? "video"
+    : original.type.startsWith("audio/")
+    ? "audio"
+    : "file";
+  const file = kind === "image" ? await prepareImageForUpload(original) : original;
+  const progress = uploadToast(`Отправка ${FILE_LABELS[kind]}: ${original.name || "файл"}`);
+  let url;
+  try {
+    const resourceType = kind === "image" ? "image" : kind === "file" ? "raw" : "video"; // Cloudinary files audio under "video"
+    ({ url } = await uploadToCloudinary(file, resourceType, progress.update, progress.signal));
+    progress.done();
+  } catch (err) {
+    progress.fail();
+    throw err;
+  }
+  if (kind === "image") {
     const label = file.type === "image/gif" ? "📷 GIF" : "📷 Фото";
     return { fields: { imageUrl: url }, previewText: label, defaultCaption: "📷" };
   }
-  if (file.type.startsWith("video/")) {
-    const { url } = await uploadToCloudinary(file, "video");
-    return {
-      fields: { fileUrl: url, fileName: file.name, fileType: file.type, fileSize: file.size },
-      previewText: "🎬 Видео",
-      defaultCaption: "🎬",
-    };
+  const fields = { fileUrl: url, fileName: original.name, fileType: original.type || "application/octet-stream", fileSize: file.size };
+  if (kind === "video") return { fields, previewText: "🎬 Видео", defaultCaption: "🎬" };
+  return { fields, previewText: `📎 ${original.name}`, defaultCaption: `📎 ${original.name}` };
+}
+
+// Sends several files one after another (picker, drag & drop, paste).
+async function sendFiles(files) {
+  const list = Array.from(files || []).slice(0, 10);
+  if (!list.length || !currentChatId) return;
+  if (composer.classList.contains("hidden") || currentChatType === "notifications") {
+    toast("В этот чат нельзя отправлять файлы", { tone: "error" });
+    return;
   }
-  if (file.type.startsWith("audio/")) {
-    const { url } = await uploadToCloudinary(file, "video"); // Cloudinary files audio under "video"
-    return {
-      fields: { fileUrl: url, fileName: file.name, fileType: file.type, fileSize: file.size },
-      previewText: `📎 ${file.name}`,
-      defaultCaption: `📎 ${file.name}`,
-    };
+  if (!uploadsConfigured) {
+    toast("Отправка файлов ещё не настроена (Cloudinary, см. README)", { tone: "error", duration: 5000 });
+    return;
   }
-  const { url } = await uploadToCloudinary(file, "raw");
-  return {
-    fields: {
-      fileUrl: url,
-      fileName: file.name,
-      fileType: file.type || "application/octet-stream",
-      fileSize: file.size,
-    },
-    previewText: `📎 ${file.name}`,
-    defaultCaption: `📎 ${file.name}`,
-  };
+  attachErrorEl.textContent = "";
+  attachBtn.disabled = true;
+  try {
+    for (const file of list) {
+      try {
+        const attachment = await buildFileAttachment(file);
+        await doSendMessage(attachment);
+      } catch (err) {
+        if (err?.name === "AbortError") continue;
+        console.error(err);
+        toast(`${file.name}: ${err.message || "не удалось отправить"}`, { tone: "error", duration: 5000 });
+      }
+    }
+  } finally {
+    attachBtn.disabled = false;
+  }
 }
 
 attachBtn.addEventListener("click", () => attachInput.click());
 
-attachInput.addEventListener("change", async () => {
-  const file = attachInput.files?.[0];
+attachInput.addEventListener("change", () => {
+  const files = Array.from(attachInput.files || []);
   attachInput.value = "";
-  if (!file) return;
-  attachErrorEl.textContent = "";
-  attachBtn.disabled = true;
-  try {
-    const attachment = await buildFileAttachment(file);
-    await doSendMessage(attachment);
-  } catch (err) {
-    console.error(err);
-    attachErrorEl.textContent = err.message || "Не удалось прикрепить файл";
-  } finally {
-    attachBtn.disabled = false;
-  }
+  sendFiles(files);
+});
+
+// Paste screenshots/files straight into the composer.
+msgInput.addEventListener("paste", (e) => {
+  const files = Array.from(e.clipboardData?.files || []);
+  if (!files.length) return;
+  e.preventDefault();
+  sendFiles(files);
+});
+
+// Drag files onto the open chat.
+let dropZone = null;
+let dragDepth = 0;
+chatSection.addEventListener("dragenter", (e) => {
+  if (!currentChatId || !e.dataTransfer?.types?.includes("Files")) return;
+  e.preventDefault();
+  dragDepth++;
+  if (dropZone) return;
+  dropZone = document.createElement("div");
+  dropZone.id = "drop-zone";
+  dropZone.innerHTML =
+    '<svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Отпустите, чтобы отправить</span>';
+  chatSection.appendChild(dropZone);
+  animate(dropZone, [{ opacity: 0, transform: "scale(.96)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+});
+chatSection.addEventListener("dragover", (e) => {
+  if (dropZone) e.preventDefault();
+});
+const clearDropZone = () => {
+  dragDepth = 0;
+  dropZone?.remove();
+  dropZone = null;
+};
+chatSection.addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) clearDropZone();
+});
+chatSection.addEventListener("drop", (e) => {
+  if (!dropZone) return;
+  e.preventDefault();
+  clearDropZone();
+  sendFiles(e.dataTransfer.files);
 });
 
 // ---------- Voice messages ----------
@@ -3126,7 +3277,15 @@ async function startVoiceRecording() {
     try {
       const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
       const voiceFile = new File([blob], "voice.webm", { type: blob.type });
-      const { url } = await uploadToCloudinary(voiceFile, "video"); // Cloudinary files audio under "video"
+      const progress = uploadToast("Отправка голосового сообщения");
+      let url;
+      try {
+        ({ url } = await uploadToCloudinary(voiceFile, "video", progress.update, progress.signal)); // Cloudinary files audio under "video"
+        progress.done();
+      } catch (e) {
+        progress.fail();
+        throw e;
+      }
       await doSendMessage({ fields: { voiceUrl: url }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" });
     } catch (err) {
       console.error(err);

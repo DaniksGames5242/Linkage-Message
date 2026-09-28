@@ -15,12 +15,17 @@ import {
 
 export const STORY_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
-export async function addStory(uid, image) {
-  await addDoc(collection(db, "stories"), {
-    ownerId: uid,
-    image,
-    createdAt: serverTimestamp(),
-  });
+// A story is either an inline (downscaled) image or a video hosted on
+// Cloudinary: addStory(uid, { image }) / addStory(uid, { videoUrl, duration }).
+export async function addStory(uid, media) {
+  const payload = { ownerId: uid, createdAt: serverTimestamp() };
+  if (typeof media === "string") payload.image = media;
+  else if (media?.videoUrl) {
+    payload.videoUrl = media.videoUrl;
+    payload.duration = Math.min(60, Math.max(1, Math.round(media.duration || 15)));
+    if (media.poster) payload.poster = media.poster;
+  } else payload.image = media?.image;
+  await addDoc(collection(db, "stories"), payload);
 }
 
 export async function deleteStory(storyId) {

@@ -856,3 +856,39 @@ export function toast(text, { icon = "", duration = 2600, tone = "" } = {}) {
     ).finished.then(() => el.remove(), () => el.remove());
   }, duration);
 }
+
+// A toast with a live progress bar (and optional cancel) for uploads.
+export function progressToast(label, { onCancel } = {}) {
+  if (!toastHost) {
+    toastHost = document.createElement("div");
+    toastHost.className = "toast-host";
+    document.body.appendChild(toastHost);
+  }
+  const el = document.createElement("div");
+  el.className = "toast glass toast-progress";
+  el.innerHTML = `
+    <span class="toast-spinner"></span>
+    <span class="toast-body"><span class="toast-text"></span><span class="toast-bar"><i></i></span></span>
+    ${onCancel ? '<button type="button" class="toast-cancel" title="Отменить">✕</button>' : ""}`;
+  el.querySelector(".toast-text").textContent = label;
+  if (onCancel) el.querySelector(".toast-cancel").addEventListener("click", onCancel);
+  toastHost.appendChild(el);
+  animate(el, [{ opacity: 0, transform: "translateY(-20px) scale(.8)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  const bar = el.querySelector(".toast-bar i");
+  const remove = () =>
+    el
+      .animate([{ opacity: 1 }, { opacity: 0, transform: "translateY(-10px) scale(.92)" }], { duration: 220, fill: "forwards" })
+      .finished.then(() => el.remove(), () => el.remove());
+  return {
+    update(p) {
+      bar.style.transform = `scaleX(${Math.max(0.02, Math.min(1, p))})`;
+    },
+    done() {
+      bar.style.transform = "scaleX(1)";
+      setTimeout(remove, 250);
+    },
+    fail() {
+      remove();
+    },
+  };
+}

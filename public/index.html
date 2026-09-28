@@ -48,7 +48,7 @@
       </div>
 
       <div id="stories-strip"></div>
-      <input type="file" id="story-add-input" accept="image/*" class="hidden" />
+      <input type="file" id="story-add-input" accept="image/*,video/*" class="hidden" />
 
       <div id="search-box">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -170,7 +170,7 @@
         <button type="button" class="icon-btn" id="attach-btn" title="Прикрепить файл">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
-        <input type="file" id="attach-input" class="hidden" />
+        <input type="file" id="attach-input" class="hidden" multiple />
         <textarea id="msg-input" rows="1" placeholder="Написать сообщение…" autocomplete="off" data-i18n-ph="composer_placeholder"></textarea>
         <button type="button" class="icon-btn hidden" id="voice-btn" title="Голосовое сообщение">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
@@ -329,6 +329,7 @@
         <button type="button" class="icon-btn" id="story-close-btn">✕</button>
       </div>
       <img id="story-viewer-image" src="" alt="" />
+      <video id="story-viewer-video" class="hidden" playsinline preload="auto"></video>
       <button type="button" class="story-nav story-nav-prev" id="story-prev-btn" aria-label="Назад"></button>
       <button type="button" class="story-nav story-nav-next" id="story-next-btn" aria-label="Вперёд"></button>
     </div>

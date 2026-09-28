@@ -108,9 +108,14 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn()
         && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.image is string
-        && request.resource.data.image.size() > 0
-        && request.resource.data.image.size() <= 900000;
+        && (
+          (request.resource.data.image is string
+            && request.resource.data.image.size() > 0
+            && request.resource.data.image.size() <= 900000)
+          || (request.resource.data.videoUrl is string
+            && request.resource.data.videoUrl.size() > 0
+            && request.resource.data.videoUrl.size() <= 500)
+        );
       allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
       allow update: if false;
     }

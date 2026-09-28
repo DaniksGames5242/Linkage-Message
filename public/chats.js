@@ -37,12 +37,10 @@ export async function ensureChat(myUid, otherUid) {
 }
 
 export function listenMyChats(myUid, onChange, onError) {
-  const q = query(
-    collection(db, "chats"),
-    where("participants", "array-contains", myUid),
-    orderBy("lastMessageAt", "desc"),
-    limit(100)
-  );
+  // No orderBy here on purpose: array-contains + orderBy needs a composite
+  // index, and without it the whole list silently fails to load. The client
+  // sorts by lastMessageAt anyway.
+  const q = query(collection(db, "chats"), where("participants", "array-contains", myUid));
   return onSnapshot(
     q,
     (snap) => {
