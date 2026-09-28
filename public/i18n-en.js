@@ -3,6 +3,20 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Музыка": "Music",
+  "Список": "List",
+  "Контакт": "Contact",
+  "Новый список": "New list",
+  "Название, например «Продукты»": "Title, e.g. “Groceries”",
+  "+ Добавить пункт": "+ Add item",
+  "Добавьте хотя бы один пункт": "Add at least one item",
+  "Не удалось отправить список": "Couldn’t send the list",
+  "Отправить контакт": "Share contact",
+  "Не удалось отправить контакт": "Couldn’t share the contact",
+  "Это вы": "That’s you",
+  "Не удалось отметить (обновите правила Firestore)": "Couldn’t check the item (update Firestore rules)",
+  "Из галереи": "From gallery",
+  "Фото слишком большое": "Photo is too large",
   "Ссылка": "Link",
   "Тип": "Type",
   "Частная": "Private",

@@ -264,3 +264,7 @@ export async function removeGroupMember(groupId, uid) {
 export async function joinGroup(groupId, uid, code) {
   await updateDoc(doc(db, "groups", groupId), { members: arrayUnion(uid), joinCode: code || null });
 }
+
+export async function setGroupChecklistItem(groupId, messageId, idx, uid) {
+  await updateDoc(doc(db, "groups", groupId, "messages", messageId), { [`checks.${idx}`]: uid || deleteField() });
+}

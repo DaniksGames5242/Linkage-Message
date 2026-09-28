@@ -8812,3 +8812,41 @@ html.privacy-veil .settings-panel {
 .seg button.active { background: var(--accent, #3390ec); color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
 .invite-row { display: flex; gap: 8px; }
 .invite-row input { flex: 1; min-width: 0; font-size: 13px; }
+
+/* Wallpaper from gallery */
+#chat[data-wall="custom"] { --wall: var(--wall-img) center / cover no-repeat; }
+#chat[data-wall="custom"]::before { inset: 0; animation: none; filter: brightness(.85); }
+.wall-gallery .wall-swatch-art { display: grid; place-items: center; font-size: 26px; background: rgba(127,127,127,.15) center / cover no-repeat; }
+
+/* Swipe-to-archive */
+.room-item { touch-action: pan-y; }
+.room-item.swiping { position: relative; background: linear-gradient(90deg, transparent, #6b7a90 40%); overflow: hidden; }
+.room-item.swiping.swipe-armed { background: linear-gradient(90deg, transparent, var(--accent, #3390ec) 30%); }
+.room-item.swiping::after {
+  content: "В архив"; position: absolute; right: 18px; top: 50%; transform: translateY(-50%) scale(.9);
+  color: #fff; font-size: 13px; font-weight: 600; transition: transform .2s cubic-bezier(.2,1.5,.4,1);
+  padding-top: 26px; background: center top / 22px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='3.5' width='19' height='5' rx='1.5'/%3E%3Cpath d='M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5'/%3E%3Cline x1='10' y1='12.5' x2='14' y2='12.5'/%3E%3C/svg%3E");
+}
+.room-item.swipe-unarchive::after { content: "Вернуть"; }
+.room-item.swipe-armed::after { transform: translateY(-50%) scale(1.08); }
+html[lang="en"] .room-item.swiping::after { content: "Archive"; }
+html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
+
+/* Checklist message */
+.checklist .check-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 4px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 10px; transition: background .15s; }
+.checklist .check-row:hover:not(:disabled) { background: rgba(127,127,127,.1); }
+.checklist .check-row:disabled { cursor: default; }
+.checklist .check-box { width: 20px; height: 20px; border-radius: 6px; flex: none; border: 2px solid currentColor; opacity: .55; transition: background .2s, transform .25s cubic-bezier(.2,1.6,.4,1), opacity .2s; }
+.checklist .check-row.done .check-box { opacity: 1; border-color: transparent; transform: scale(1.08); background: var(--accent, #3390ec) center/13px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E"); }
+.checklist .check-label { flex: 1; transition: opacity .2s; background: linear-gradient(currentColor, currentColor) 0 55% / 0 1.5px no-repeat; transition: background-size .3s ease, opacity .2s; }
+.checklist .check-row.done .check-label { opacity: .55; background-size: 100% 1.5px; }
+.checklist .check-who .avatar { width: 20px; height: 20px; font-size: 9px; }
+/* Contact card message */
+.contact-card { display: flex; align-items: center; gap: 10px; min-width: 220px; padding: 4px 2px; }
+.contact-card .avatar { width: 44px; height: 44px; flex: none; }
+.contact-card-meta { flex: 1; min-width: 0; }
+.contact-card-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contact-card-sub { font-size: 13px; opacity: .7; }
+.modal-card .cl-items { display: flex; flex-direction: column; gap: 6px; }
+.modal-card .cs-list { max-height: 50vh; overflow-y: auto; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }

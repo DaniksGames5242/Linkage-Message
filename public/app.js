@@ -32,6 +32,7 @@ import {
   cancelScheduled,
   editEncryptedMessage,
   votePoll,
+  setChecklistItem,
   hideMessageForMe,
 } from "./chats.js";
 import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
@@ -58,6 +59,7 @@ import {
   publishScheduledGroup,
   cancelScheduledGroup,
   voteGroupPoll,
+  setGroupChecklistItem,
   hideGroupMessageForMe,
 } from "./groups.js";
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
@@ -1667,6 +1669,8 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
 // ---------- Context menus ----------
 
 const MI = {
+  music: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  list: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><polyline points="3.5 6 4.5 7 6.5 5"/><polyline points="3.5 12 4.5 13 6.5 11"/><polyline points="3.5 18 4.5 19 6.5 17"/></svg>',
   lock: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
   link: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
   user: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
@@ -1829,7 +1833,63 @@ function onContextGesture(el, handler) {
   );
 }
 
+// Swipe a chat row left (touch) to archive / unarchive it.
+function attachRoomSwipe(item, entry) {
+  let x0 = 0, y0 = 0, dx = 0, active = false, tracking = false, pid = null;
+  const parts = () => Array.from(item.children);
+  const setX = (x, t = "") => parts().forEach((c) => ((c.style.transition = t), (c.style.transform = x ? `translate3d(${x}px,0,0)` : "")));
+  item.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch") return;
+    x0 = e.clientX; y0 = e.clientY; dx = 0; tracking = true; active = false; pid = e.pointerId;
+  });
+  item.addEventListener("pointermove", (e) => {
+    if (!tracking || e.pointerId !== pid) return;
+    const mx = e.clientX - x0, my = e.clientY - y0;
+    if (!active) {
+      if (Math.abs(my) > 12) return (tracking = false);
+      if (mx < -12 && Math.abs(mx) > Math.abs(my) * 1.5) {
+        active = true;
+        item.classList.add("swiping");
+        item.classList.toggle("swipe-unarchive", isChatArchived(entry.id));
+        try { item.setPointerCapture(pid); } catch {}
+      } else return;
+    }
+    dx = Math.min(0, mx);
+    const w = item.offsetWidth;
+    const eased = dx < -w * 0.6 ? -w * 0.6 + (dx + w * 0.6) * 0.3 : dx;
+    setX(eased);
+    const armed = dx < -w * 0.3;
+    if (armed !== item.classList.contains("swipe-armed")) {
+      item.classList.toggle("swipe-armed", armed);
+      navigator.vibrate?.(8);
+    }
+  });
+  const end = () => {
+    if (!tracking) return;
+    tracking = false;
+    if (!active) return;
+    active = false;
+    item._suppressClick = true;
+    setTimeout(() => (item._suppressClick = false), 350);
+    const armed = item.classList.contains("swipe-armed");
+    if (armed) {
+      setX(-item.offsetWidth, "transform .22s ease-in");
+      setTimeout(() => {
+        setX(0);
+        item.classList.remove("swiping", "swipe-armed", "swipe-unarchive");
+        setArchived(entry.id, !isChatArchived(entry.id));
+      }, 200);
+    } else {
+      setX(0, "transform .35s cubic-bezier(.2,1.4,.4,1)");
+      setTimeout(() => item.classList.remove("swiping", "swipe-armed", "swipe-unarchive"), 350);
+    }
+  };
+  item.addEventListener("pointerup", end);
+  item.addEventListener("pointercancel", end);
+}
+
 function attachRoomMenu(item, entry) {
+  attachRoomSwipe(item, entry);
   onContextGesture(item, (x, y) => {
     const pinned = isChatPinned(entry.id);
     const muted = isChatMuted(entry.id);
@@ -2346,11 +2406,63 @@ function wallpaperFor(chatId) {
   return readStore("lm-wall:" + chatId) || readStore("lm-wall:*") || "none";
 }
 
+function customWallFor(chatId) {
+  return readStore("lm-wallimg:" + chatId) || readStore("lm-wallimg:*");
+}
+
+// Gallery photos are downscaled (keeps aspect) so they fit in localStorage.
+function fitImageToDataUrl(file, max = 1400, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onerror = () => (URL.revokeObjectURL(url), reject(new Error("Файл не похож на изображение")));
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k);
+      c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", quality));
+    };
+    img.src = url;
+  });
+}
+
 function applyWallpaper() {
   if (!currentChatId) return;
   const wall = wallpaperFor(currentChatId);
-  if (wall === "none") chatSection.removeAttribute("data-wall");
+  if (wall === "custom") {
+    const img = customWallFor(currentChatId);
+    if (img) chatSection.style.setProperty("--wall-img", `url("${img}")`);
+  } else chatSection.style.removeProperty("--wall-img");
+  if (wall === "none" || (wall === "custom" && !customWallFor(currentChatId))) chatSection.removeAttribute("data-wall");
   else if (chatSection.dataset.wall !== wall) chatSection.dataset.wall = wall;
+}
+
+async function pickGalleryWallpaper() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const data = await fitImageToDataUrl(file);
+      const scope = wallAll.checked ? "*" : currentChatId;
+      try {
+        localStorage.setItem("lm-wallimg:" + scope, data);
+      } catch {
+        toast("Фото слишком большое", { tone: "error" });
+        return;
+      }
+      setWallpaper("custom");
+      openWallpaperPicker();
+    } catch (err) {
+      toast(err.message, { tone: "error" });
+    }
+  };
+  input.click();
 }
 
 function setWallpaper(wall) {
@@ -2383,6 +2495,20 @@ function openWallpaperPicker() {
     });
     wallGrid.appendChild(b);
   });
+  const custom = customWallFor(currentChatId);
+  const g = document.createElement("button");
+  g.type = "button";
+  g.className = "wall-swatch wall-gallery" + (current === "custom" ? " selected" : "");
+  g.innerHTML = '<span class="wall-swatch-art"></span><span class="wall-swatch-label">Из галереи</span>';
+  if (custom) g.querySelector(".wall-swatch-art").style.backgroundImage = `url("${custom}")`;
+  else g.querySelector(".wall-swatch-art").textContent = "＋";
+  g.addEventListener("click", () => {
+    if (custom && current !== "custom") {
+      setWallpaper("custom");
+      wallGrid.querySelectorAll(".wall-swatch").forEach((w) => w.classList.toggle("selected", w === g));
+    } else pickGalleryWallpaper();
+  });
+  wallGrid.appendChild(g);
   showOverlay(wallOverlay);
   stagger(wallGrid.children, { y: 14, scale: 0.8, step: 28, delay: 80 });
 }
@@ -3161,6 +3287,7 @@ function messageOps() {
       hide: (id) => hideGroupMessageForMe(currentChatId, id, currentUser.uid),
       react: (id, emoji, add) => toggleGroupReaction(currentChatId, id, emoji, currentUser.uid, add),
       vote: (id, choices) => voteGroupPoll(currentChatId, id, currentUser.uid, choices),
+      check: (id, idx, on) => setGroupChecklistItem(currentChatId, id, idx, on ? currentUser.uid : null),
     };
   }
   if (currentChatType === "contact") {
@@ -3176,6 +3303,7 @@ function messageOps() {
       hide: (id) => hideMessageForMe(currentChatId, id, currentUser.uid),
       react: (id, emoji, add) => toggleReaction(currentChatId, id, emoji, currentUser.uid, add),
       vote: (id, choices) => votePoll(currentChatId, id, currentUser.uid, choices),
+      check: (id, idx, on) => setChecklistItem(currentChatId, id, idx, on ? currentUser.uid : null),
     };
   }
   return { edit: null, del: null, react: null };
@@ -3195,6 +3323,9 @@ function replySenderLabel(msg) {
 
 function replyPreviewText(msg) {
   if (msg.poll) return "📊 " + msg.poll.q;
+  if (msg.checklist) return "📝 " + (msg.checklist.title || "Список");
+  if (msg.contactCard) return "👤 " + (msg.contactCard.name || "Контакт");
+  if (msg.music) return "🎵 " + (msg.music.title || "Музыка");
   if (msg.location) return "📍 Геопозиция";
   if (msg.videoNoteUrl) return msg.videoShape === "triangle" ? "🔺 Видеотреугольник" : "⭕ Видеосообщение";
   if (msg.imageUrl) return "📷 Фото";
@@ -3254,6 +3385,16 @@ function renderBubbleContent(bubble, msg) {
   if (msg.poll && Array.isArray(msg.poll.options)) {
     bubble.classList.add("poll-bubble");
     bubble.appendChild(renderPoll(msg));
+    return;
+  }
+  if (msg.checklist && Array.isArray(msg.checklist.items)) {
+    bubble.classList.add("poll-bubble", "checklist-bubble");
+    bubble.appendChild(renderChecklist(msg));
+    return;
+  }
+  if (msg.contactCard?.uid) {
+    bubble.classList.add("contact-bubble");
+    bubble.appendChild(renderContactCard(msg.contactCard));
     return;
   }
   if (msg.location) {
@@ -3586,6 +3727,178 @@ function renderPoll(msg) {
     });
   }
   return box;
+}
+
+// ---------- Shared checklist (e.g. groceries) ----------
+
+function renderChecklist(msg) {
+  const list = msg.checklist;
+  const ops = messageOps();
+  const checks = msg.checks || {};
+  const canCheck = !!ops.check && !msg._scheduled;
+  const items = list.items.slice(0, 30).map(String);
+  const done = items.filter((_, i) => checks[i]).length;
+  const box = document.createElement("div");
+  box.className = "poll checklist";
+  box.innerHTML = `<div class="poll-q"></div><div class="poll-kind"></div><div class="poll-opts"></div>`;
+  box.querySelector(".poll-q").textContent = list.title || "Список";
+  box.querySelector(".poll-kind").textContent = `Выполнено ${done} из ${items.length}`;
+  const wrap = box.querySelector(".poll-opts");
+  items.forEach((label, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "check-row" + (checks[i] ? " done" : "");
+    b.innerHTML = '<span class="check-box"></span><span class="check-label"></span><span class="check-who"></span>';
+    b.querySelector(".check-label").textContent = label;
+    if (checks[i] && currentChatType !== "contact") {
+      const p = profileForUid(checks[i]);
+      if (p) b.querySelector(".check-who").innerHTML = visibleAvatarHTML(p, checks[i]);
+    }
+    b.disabled = !canCheck;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const on = !b.classList.contains("done");
+      b.classList.toggle("done", on);
+      if (on) burst(...centerOf(b.querySelector(".check-box")), { count: 8, spread: 30, colors: accentColors() });
+      ops.check(msg.id, i, on).catch((err) => {
+        console.error(err);
+        b.classList.toggle("done", !on);
+        toast("Не удалось отметить (обновите правила Firestore)", { tone: "error" });
+      });
+    });
+    wrap.appendChild(b);
+  });
+  return box;
+}
+
+function openChecklistCreator() {
+  if (!currentChatId) return;
+  const target = { type: currentChatType, id: currentChatId };
+  const wrap = document.createElement("div");
+  wrap.className = "modal-overlay";
+  wrap.innerHTML = `
+    <div class="modal-card glass">
+      <h3>Новый список</h3>
+      <input class="cl-title" maxlength="100" placeholder="Название, например «Продукты»" />
+      <div class="cl-items"></div>
+      <button type="button" class="small-btn secondary" data-act="add">+ Добавить пункт</button>
+      <div class="modal-actions"><button type="button" class="small-btn secondary" data-act="cancel">Отмена</button><button type="button" class="small-btn" data-act="send">Отправить</button></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add("open"));
+  const itemsEl = wrap.querySelector(".cl-items");
+  const addItem = (focus) => {
+    if (itemsEl.children.length >= 30) return;
+    const inp = document.createElement("input");
+    inp.maxLength = 100;
+    inp.placeholder = "Пункт " + (itemsEl.children.length + 1);
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (inp === itemsEl.lastElementChild) addItem(true);
+        else inp.nextElementSibling?.focus();
+      }
+    });
+    itemsEl.appendChild(inp);
+    if (focus) inp.focus();
+  };
+  addItem();
+  addItem();
+  addItem();
+  const close = () => {
+    wrap.classList.remove("open");
+    setTimeout(() => wrap.remove(), 220);
+  };
+  wrap.querySelector('[data-act="add"]').addEventListener("click", () => addItem(true));
+  wrap.querySelector('[data-act="cancel"]').addEventListener("click", close);
+  wrap.addEventListener("click", (e) => e.target === wrap && close());
+  wrap.querySelector('[data-act="send"]').addEventListener("click", async () => {
+    const title = wrap.querySelector(".cl-title").value.trim().slice(0, 100) || "Список";
+    const items = [...itemsEl.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean);
+    if (!items.length) return toast("Добавьте хотя бы один пункт", { tone: "error" });
+    close();
+    try {
+      await deliver({ ...target, text: "📝 " + title, extra: { checklist: { title, items } }, plain: { checks: {} } });
+    } catch (err) {
+      console.error(err);
+      toast("Не удалось отправить список", { tone: "error" });
+    }
+  });
+  setTimeout(() => wrap.querySelector(".cl-title").focus(), 80);
+}
+
+// ---------- Contact card ----------
+
+function renderContactCard(card) {
+  const profile = profileForUid(card.uid) || { displayName: card.name, username: card.username };
+  const box = document.createElement("div");
+  box.className = "contact-card";
+  box.innerHTML = `${visibleAvatarHTML(profile, card.uid)}<div class="contact-card-meta"><div class="contact-card-name"></div><div class="contact-card-sub"></div></div><button type="button" class="small-btn">${card.uid === currentUser.uid ? "Это вы" : "Написать"}</button>`;
+  box.querySelector(".contact-card-name").textContent = card.name || profile.displayName || "Контакт";
+  box.querySelector(".contact-card-sub").textContent = card.username ? "@" + card.username : "";
+  const btn = box.querySelector("button");
+  btn.disabled = card.uid === currentUser.uid;
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    btn.disabled = true;
+    try {
+      const p = (await loadProfile(card.uid)) || profile;
+      await openChatWith(card.uid, p);
+    } catch (err) {
+      console.error(err);
+      toast("Не удалось открыть чат", { tone: "error" });
+      btn.disabled = false;
+    }
+  });
+  return box;
+}
+
+function openContactSharer() {
+  if (!currentChatId) return;
+  const target = { type: currentChatType, id: currentChatId };
+  const wrap = document.createElement("div");
+  wrap.className = "modal-overlay";
+  wrap.innerHTML = `
+    <div class="modal-card glass">
+      <h3>Отправить контакт</h3>
+      <input class="cs-q" placeholder="Поиск среди ваших чатов…" />
+      <div class="cs-list"></div>
+      <div class="modal-actions"><button type="button" class="small-btn secondary" data-act="cancel">Отмена</button></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add("open"));
+  const close = () => {
+    wrap.classList.remove("open");
+    setTimeout(() => wrap.remove(), 220);
+  };
+  const listEl = wrap.querySelector(".cs-list");
+  const render = (q) =>
+    renderPeopleChecklist(listEl, q, {
+      isChecked: () => false,
+      onToggle: async (uid, profile) => {
+        close();
+        const contact = contactsMap.get(uid);
+        const name = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
+        await deliver({ ...target, text: "👤 " + name, extra: { contactCard: { uid, name, username: profile.username || "" } } }).catch((err) => {
+          console.error(err);
+          toast("Не удалось отправить контакт", { tone: "error" });
+        });
+        return true;
+      },
+    });
+  wrap.querySelector(".cs-q").addEventListener("input", (e) => render(e.target.value.trim()));
+  wrap.querySelector('[data-act="cancel"]').addEventListener("click", close);
+  wrap.addEventListener("click", (e) => e.target === wrap && close());
+  render("");
+}
+
+function pickMusic() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "audio/*,.mp3,.m4a,.flac,.ogg,.wav";
+  input.multiple = true;
+  input.onchange = () => sendFiles(Array.from(input.files || []));
+  input.click();
 }
 
 // ---------- Location ----------
@@ -4021,7 +4334,7 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
     });
     return;
   }
-  const hasText = !!msg.text && !msg.call && !msg.poll && !msg.game && !msg.location && !DEFAULT_CAPTIONS.includes(msg.text);
+  const hasText = !!msg.text && !msg.call && !msg.poll && !msg.game && !msg.location && !msg.checklist && !msg.contactCard && !DEFAULT_CAPTIONS.includes(msg.text);
   const pinnedId = currentChatData()?.pinned?.id;
   const reactions = canReact
     ? {
@@ -4359,7 +4672,7 @@ msgInput.addEventListener("keydown", (e) => {
   if (e.key === "ArrowUp" && !msgInput.value && !e.shiftKey) {
     const row = [...messagesEl.querySelectorAll(".msg-row.me")].reverse().find((r) => {
       const c = r._ctx;
-      return c?.canEdit && c.msg.text && !c.msg.call && !c.msg.poll && !c.msg.game && !c.msg.location && !c.msg._scheduled && !DEFAULT_CAPTIONS.includes(c.msg.text);
+      return c?.canEdit && c.msg.text && !c.msg.call && !c.msg.poll && !c.msg.game && !c.msg.location && !c.msg.checklist && !c.msg.contactCard && !c.msg._scheduled && !DEFAULT_CAPTIONS.includes(c.msg.text);
     });
     if (row) {
       e.preventDefault();
@@ -5058,7 +5371,10 @@ function openAttachMenu() {
     items: [
       { label: "Камера", icon: MI.camera, onClick: openCameraRecorder },
       { label: "Фото, видео или файл", icon: MI.image, onClick: () => attachInput.click() },
+      { label: "Музыка", icon: MI.music, onClick: pickMusic },
       social && { label: "Опрос", icon: MI.poll, onClick: openPollCreator },
+      canPlay && { label: "Список", icon: MI.list, onClick: openChecklistCreator },
+      canPlay && { label: "Контакт", icon: MI.user, onClick: openContactSharer },
       canPlay && { label: "Геопозиция", icon: MI.location, onClick: sendLocation },
     ],
   });

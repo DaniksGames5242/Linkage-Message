@@ -241,3 +241,7 @@ export async function clearChatForMe(chatId, uid) {
     [`clearedFor.${uid}`]: serverTimestamp(),
   });
 }
+
+export async function setChecklistItem(chatId, messageId, idx, uid) {
+  await updateDoc(doc(db, "chats", chatId, "messages", messageId), { [`checks.${idx}`]: uid || deleteField() });
+}

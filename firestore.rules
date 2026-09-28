@@ -55,6 +55,11 @@ service cloud.firestore {
     }
 
     // Poll votes: a member may only change their own entry in `votes`.
+    function isChecklistEdit() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checks'])
+        && request.resource.data.get('checks', {}).diff(resource.data.get('checks', {})).affectedKeys().size() == 1;
+    }
+
     function isPollVote() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes'])
         && request.resource.data.get('votes', {}).diff(resource.data.get('votes', {})).affectedKeys().hasOnly([request.auth.uid]);
@@ -223,7 +228,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members
-          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe() || isChecklistEdit());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }
@@ -288,7 +293,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
-          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe() || isChecklistEdit());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }
