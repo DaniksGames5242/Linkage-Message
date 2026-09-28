@@ -8850,3 +8850,20 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 .modal-card .cl-items { display: flex; flex-direction: column; gap: 6px; }
 .modal-card .cs-list { max-height: 50vh; overflow-y: auto; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Story comments */
+.story-reply { position: absolute; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 5; display: flex; gap: 8px; align-items: center; }
+.story-reply input { flex: 1; min-width: 0; height: 44px; padding: 0 16px; border-radius: 22px; border: 1px solid rgba(255,255,255,.35); background: rgba(0,0,0,.28); color: #fff; font: inherit; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.story-reply input::placeholder { color: rgba(255,255,255,.75); }
+.story-comments-btn, .story-send-btn { height: 44px; min-width: 44px; padding: 0 10px; border-radius: 22px; border: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: #fff; background: rgba(0,0,0,.28); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); font: inherit; font-weight: 600; cursor: pointer; }
+.story-send-btn { background: var(--accent, #3390ec); }
+.story-comments { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; max-height: 55%; padding: 16px 12px calc(70px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, rgba(0,0,0,.75) 18%); animation: storyCommentsIn .3s cubic-bezier(.2,1.2,.4,1); }
+@keyframes storyCommentsIn { from { transform: translateY(24px); opacity: 0; } }
+.story-comments-list { max-height: calc(55vh - 90px); overflow-y: auto; display: flex; flex-direction: column; gap: 10px; color: #fff; }
+.story-comment { display: flex; gap: 10px; align-items: flex-start; }
+.story-comment .avatar { width: 32px; height: 32px; flex: none; font-size: 12px; }
+.story-comment-body { flex: 1; min-width: 0; }
+.story-comment-name { font-weight: 600; font-size: 13px; opacity: .85; }
+.story-comment-text { word-wrap: break-word; }
+.story-comment-del { border: 0; background: transparent; color: rgba(255,255,255,.6); cursor: pointer; }
+.story-comments-empty { opacity: .7; text-align: center; padding: 8px; color: #fff; }

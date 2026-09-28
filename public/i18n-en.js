@@ -3,6 +3,10 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Комментарии": "Comments",
+  "Комментировать…": "Comment…",
+  "Пока нет комментариев": "No comments yet",
+  "Не удалось отправить комментарий (обновите правила Firestore)": "Couldn’t post the comment (update Firestore rules)",
   "Музыка": "Music",
   "Список": "List",
   "Контакт": "Contact",

@@ -62,7 +62,11 @@ import {
   setGroupChecklistItem,
   hideGroupMessageForMe,
 } from "./groups.js";
-import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
+import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS,
+  addStoryComment,
+  deleteStoryComment,
+  listenStoryComments,
+} from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
 import { initCalls, startCall, fmtDuration } from "./call-ui.js";
 import { emojiOnly, animatedEmoji, emojiEffect, emojiPop } from "./emoji-anim.js";
@@ -1522,10 +1526,115 @@ function showStoryAt(index) {
   });
 
   storyAdvanceTimer = setTimeout(() => showStoryAt(index + 1), durationMs);
+  storyTiming = { start: Date.now(), dur: durationMs, left: durationMs };
+  storyPaused = false;
+  watchStoryComments(story);
 }
+
+// ---------- Story comments ----------
+
+const storyCommentsEl = document.getElementById("story-comments");
+const storyCommentsList = document.getElementById("story-comments-list");
+const storyCommentsCount = document.getElementById("story-comments-count");
+const storyReplyForm = document.getElementById("story-reply");
+const storyReplyInput = document.getElementById("story-reply-input");
+let unsubStoryComments = null;
+let storyTiming = { start: 0, dur: 0, left: 0 };
+let storyPaused = false;
+
+function pauseStory() {
+  if (storyPaused || !activeStoryGroup) return;
+  storyPaused = true;
+  clearTimeout(storyAdvanceTimer);
+  storyTiming.left = Math.max(0, storyTiming.left - (Date.now() - storyTiming.start));
+  const fill = storyProgressTrack.querySelectorAll(".story-progress-fill")[activeStoryIndex];
+  if (fill) {
+    const w = getComputedStyle(fill).width;
+    fill.style.transition = "none";
+    fill.style.width = w;
+  }
+  if (!storyViewerVideo.classList.contains("hidden")) storyViewerVideo.pause();
+}
+
+function resumeStory() {
+  if (!storyPaused || !activeStoryGroup) return;
+  if (document.activeElement === storyReplyInput || !storyCommentsEl.classList.contains("hidden")) return;
+  storyPaused = false;
+  storyTiming.start = Date.now();
+  const fill = storyProgressTrack.querySelectorAll(".story-progress-fill")[activeStoryIndex];
+  if (fill) {
+    requestAnimationFrame(() => {
+      fill.style.transition = `width ${storyTiming.left}ms linear`;
+      fill.style.width = "100%";
+    });
+  }
+  if (!storyViewerVideo.classList.contains("hidden")) storyViewerVideo.play().catch(() => {});
+  const idx = activeStoryIndex;
+  storyAdvanceTimer = setTimeout(() => showStoryAt(idx + 1), storyTiming.left);
+}
+
+function watchStoryComments(story) {
+  unsubStoryComments?.();
+  storyCommentsList.innerHTML = "";
+  storyCommentsCount.textContent = "";
+  const owner = activeStoryGroup.ownerUid;
+  unsubStoryComments = listenStoryComments(story.id, async (list) => {
+    if (activeStoryGroup?.items[activeStoryIndex]?.id !== story.id) return;
+    storyCommentsCount.textContent = list.length || "";
+    const profiles = await Promise.all(list.map((c) => profileForUid(c.uid) || loadProfile(c.uid)));
+    storyCommentsList.innerHTML = list.length ? "" : '<div class="story-comments-empty">Пока нет комментариев</div>';
+    list.forEach((c, i) => {
+      const p = profiles[i] || { displayName: "…" };
+      const row = document.createElement("div");
+      row.className = "story-comment";
+      row.innerHTML = `${visibleAvatarHTML(p, c.uid)}<div class="story-comment-body"><div class="story-comment-name"></div><div class="story-comment-text"></div></div>`;
+      row.querySelector(".story-comment-name").textContent = c.uid === currentUser.uid ? "Вы" : p.displayName;
+      row.querySelector(".story-comment-text").textContent = c.text;
+      if (c.uid === currentUser.uid || owner === currentUser.uid) {
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "story-comment-del";
+        del.textContent = "✕";
+        del.title = "Удалить";
+        del.addEventListener("click", () => deleteStoryComment(story.id, c.id).catch(() => toast("Не удалось удалить", { tone: "error" })));
+        row.appendChild(del);
+      }
+      storyCommentsList.appendChild(row);
+    });
+    storyCommentsList.scrollTop = storyCommentsList.scrollHeight;
+  });
+}
+
+document.getElementById("story-comments-btn").addEventListener("click", () => {
+  const open = storyCommentsEl.classList.contains("hidden");
+  storyCommentsEl.classList.toggle("hidden", !open);
+  if (open) pauseStory();
+  else resumeStory();
+});
+storyReplyInput.addEventListener("focus", pauseStory);
+storyReplyInput.addEventListener("blur", () => setTimeout(resumeStory, 150));
+storyReplyForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const story = activeStoryGroup?.items[activeStoryIndex];
+  const text = storyReplyInput.value.trim();
+  if (!story || !text) return;
+  storyReplyInput.value = "";
+  storyCommentsEl.classList.remove("hidden");
+  try {
+    await addStoryComment(story.id, currentUser.uid, text);
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось отправить комментарий (обновите правила Firestore)", { tone: "error" });
+  }
+});
 
 function closeStoryViewer() {
   clearTimeout(storyAdvanceTimer);
+  unsubStoryComments?.();
+  unsubStoryComments = null;
+  storyCommentsEl.classList.add("hidden");
+  storyReplyInput.value = "";
+  storyPaused = false;
   storyViewerVideo.pause();
   storyViewerVideo.removeAttribute("src");
   hideOverlay(storyViewerOverlay);

@@ -47,3 +47,24 @@ export function listenRecentStories(onChange, onError) {
     }
   );
 }
+
+// ---------- Story comments ----------
+
+export async function addStoryComment(storyId, uid, text) {
+  const t = (text || "").trim().slice(0, 500);
+  if (!t) return;
+  await addDoc(collection(db, "stories", storyId, "comments"), { uid, text: t, createdAt: serverTimestamp() });
+}
+
+export async function deleteStoryComment(storyId, commentId) {
+  await deleteDoc(doc(db, "stories", storyId, "comments", commentId));
+}
+
+export function listenStoryComments(storyId, onChange) {
+  const q = query(collection(db, "stories", storyId, "comments"), orderBy("createdAt", "asc"), limit(200));
+  return onSnapshot(
+    q,
+    (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    (err) => console.error("listenStoryComments failed:", err)
+  );
+}
