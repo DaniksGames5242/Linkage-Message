@@ -35,14 +35,15 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 // ---------- Triangles ----------
 // A rounded equilateral triangle (apex up) in a 0..1 box, shared by the
 // recorder preview, the chat bubble and the kaleidoscope.
-export const TRI = { apexY: 0.04, baseY: 0.84, half: 0.46 };
+// Centred in its square (apex 10 %, base 90 %), so it doesn't sit high in the bubble.
+export const TRI = { apexY: 0.1, baseY: 0.9, half: 0.46 };
 const TRI_PATH_01 =
-  "M0.5,0.04 Q0.528,0.04 0.542,0.065 L0.945,0.79 Q0.968,0.84 0.915,0.84 L0.085,0.84 Q0.032,0.84 0.055,0.79 L0.458,0.065 Q0.472,0.04 0.5,0.04Z";
+  "M0.5,0.1 Q0.528,0.1 0.542,0.125 L0.945,0.85 Q0.968,0.9 0.915,0.9 L0.085,0.9 Q0.032,0.9 0.055,0.85 L0.458,0.125 Q0.472,0.1 0.5,0.1Z";
 const TRI_PATH_100 =
-  "M50,4 Q52.8,4 54.2,6.5 L94.5,79 Q96.8,84 91.5,84 L8.5,84 Q3.2,84 5.5,79 L45.8,6.5 Q47.2,4 50,4Z";
+  "M50,10 Q52.8,10 54.2,12.5 L94.5,85 Q96.8,90 91.5,90 L8.5,90 Q3.2,90 5.5,85 L45.8,12.5 Q47.2,10 50,10Z";
 
 // One <clipPath> in the document; elements use `clip-path: url(#tri-clip)`.
-function ensureTriangleClip() {
+export function ensureTriangleClip() {
   if (document.getElementById("tri-clip")) return;
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("width", "0");
@@ -53,14 +54,20 @@ function ensureTriangleClip() {
   document.body.appendChild(svg);
 }
 
-function ringSVG(cls, triangle) {
+// `seekable` adds an invisible wide copy of the outline to grab and a knob.
+function ringSVG(cls, triangle, seekable = false) {
   if (triangle) {
     // Same box as the clipped video; the outline is grown around the
-    // triangle's incentre (x 50, y 57.3), so it hugs every edge evenly.
-    return `<svg class="${cls} tri" viewBox="0 0 100 100" overflow="visible"><path pathLength="100" transform="translate(50 57.33) scale(1.075) translate(-50 -57.33)" d="${TRI_PATH_100}" style="stroke-dasharray:100;stroke-dashoffset:100"/></svg>`;
+    // triangle's incentre (x 50, y 63.3), so it hugs every edge evenly.
+    const tf = 'transform="translate(50 63.33) scale(1.075) translate(-50 -63.33)"';
+    return `<svg class="${cls} tri" viewBox="0 0 100 100" overflow="visible"><path pathLength="100" ${tf} d="${TRI_PATH_100}" style="stroke-dasharray:100;stroke-dashoffset:100"/>${
+      seekable ? `<path class="ring-hit" ${tf} d="${TRI_PATH_100}"/><circle class="ring-knob" r="3.4" cx="50" cy="10"/>` : ""
+    }</svg>`;
   }
   const C = 2 * Math.PI * 48.5;
-  return `<svg class="${cls}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48.5" style="stroke-dasharray:${C};stroke-dashoffset:${C}"/></svg>`;
+  return `<svg class="${cls}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48.5" style="stroke-dasharray:${C};stroke-dashoffset:${C}"/>${
+    seekable ? '<circle class="ring-hit" cx="50" cy="50" r="48.5"/><circle class="ring-knob" r="3.4" cx="98.5" cy="50"/>' : ""
+  }</svg>`;
 }
 const ringLength = (triangle) => (triangle ? 100 : 2 * Math.PI * 48.5);
 export const MAX_ZOOM = 4;
@@ -70,7 +77,7 @@ export const MAX_ZOOM = 4;
 //   finish(send), lock(), setZoom(z), drag(dx, dy)
 // With { hold: true } it starts in "hold to record" mode (the caller tracks the
 // finger): no buttons, just hints, until lock() makes it hands-free.
-// Zoom: pinch, mouse wheel, the slider, double tap, or sliding further up
+// Zoom: a real two-finger pinch, mouse wheel, double tap, or sliding further up
 // after locking.
 export function recordCircle({ hold = false, shape = "circle" } = {}) {
   let resolveDone;
@@ -96,7 +103,6 @@ export function recordCircle({ hold = false, shape = "circle" } = {}) {
         <span class="crh-send">Отпустите, чтобы отправить</span>
       </div>
     </div>
-    <label class="circle-rec-zoom-slider" title="Зум"><span>${MAX_ZOOM}×</span><input type="range" min="1" max="${MAX_ZOOM}" step="0.01" value="1" /><span>1×</span></label>
     <div class="circle-rec-controls">
       <button type="button" class="call-round circle-rec-cancel" title="Отменить">${ICON.close}</button>
       <button type="button" class="call-round circle-rec-send" title="Отправить">${ICON.send}</button>
@@ -110,7 +116,6 @@ export function recordCircle({ hold = false, shape = "circle" } = {}) {
   const ring = root.querySelector(".circle-rec-ring circle, .circle-rec-ring path");
   const clock = root.querySelector(".circle-rec-clock");
   const zoomBadge = root.querySelector(".circle-rec-zoom");
-  const zoomSlider = root.querySelector(".circle-rec-zoom-slider input");
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = SIZE;
   const ctx2d = canvas.getContext("2d");
@@ -133,7 +138,6 @@ export function recordCircle({ hold = false, shape = "circle" } = {}) {
 
   const setZoom = (z) => {
     zoom = clamp(z, 1, MAX_ZOOM);
-    zoomSlider.value = String(zoom);
     zoomBadge.textContent = zoom.toFixed(1) + "×";
     root.classList.add("zooming");
     clearTimeout(badgeTimer);
@@ -203,7 +207,6 @@ export function recordCircle({ hold = false, shape = "circle" } = {}) {
     root.classList.remove("hold");
     root.classList.add("locked");
     animate(root.querySelector(".circle-rec-controls"), [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
-    animate(root.querySelector(".circle-rec-zoom-slider"), [{ opacity: 0, transform: "translateX(20px)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
   };
 
   // Feedback while the finger is still on the record button.
@@ -237,7 +240,6 @@ export function recordCircle({ hold = false, shape = "circle" } = {}) {
   });
 
   // ----- zoom gestures -----
-  zoomSlider.addEventListener("input", () => setZoom(Number(zoomSlider.value)));
   root.addEventListener(
     "wheel",
     (e) => {
@@ -361,7 +363,7 @@ export function buildVideoNote(url, duration, fmt, shape = "circle") {
   el.className = "vnote" + (triangle ? " vnote-tri" : "");
   el.innerHTML = `
     <video playsinline muted loop preload="metadata"></video>
-    ${ringSVG("vnote-ring", triangle)}
+    ${ringSVG("vnote-ring", triangle, true)}
     <span class="vnote-meta"><span class="vnote-dur"></span><span class="vnote-mute">🔇</span></span>
     ${
       triangle
@@ -383,15 +385,75 @@ export function buildVideoNote(url, duration, fmt, shape = "circle") {
   });
   v.src = url;
   el.querySelector(".vnote-dur").textContent = fmt(duration || 0);
+  const hit = el.querySelector(".ring-hit");
+  const knob = el.querySelector(".ring-knob");
+  const total = () => (Number.isFinite(v.duration) && v.duration > 0 ? v.duration : duration || 0);
+  const showProgress = (frac) => {
+    ring.style.strokeDashoffset = String(C * (1 - frac));
+    const len = hit.getTotalLength();
+    const p = hit.getPointAtLength(len * Math.min(0.9999, Math.max(0, frac)));
+    const m = hit.transform.baseVal.consolidate()?.matrix; // the path's own transform (triangle)
+    knob.setAttribute("cx", m ? m.a * p.x + m.c * p.y + m.e : p.x);
+    knob.setAttribute("cy", m ? m.b * p.x + m.d * p.y + m.f : p.y);
+  };
   v.addEventListener("timeupdate", () => {
-    if (el !== active || !v.duration) return;
-    ring.style.strokeDashoffset = String(C * (1 - v.currentTime / v.duration));
+    if (el !== active || !total() || el._scrubbing) return;
+    showProgress(v.currentTime / total());
   });
+
+  // Drag along the ring to rewind / fast-forward.
+  const fractionAt = (x, y) => {
+    const ctm = hit.getScreenCTM();
+    if (!ctm) return null;
+    const len = hit.getTotalLength();
+    let best = 0;
+    let bestD = Infinity;
+    const N = 160;
+    for (let i = 0; i <= N; i++) {
+      const p = hit.getPointAtLength((len * i) / N);
+      const sx = ctm.a * p.x + ctm.c * p.y + ctm.e;
+      const sy = ctm.b * p.x + ctm.d * p.y + ctm.f;
+      const d = (sx - x) ** 2 + (sy - y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i / N;
+      }
+    }
+    return best;
+  };
+  const scrubTo = (e) => {
+    const frac = fractionAt(e.clientX, e.clientY);
+    if (frac === null || !total()) return;
+    showProgress(frac);
+    v.currentTime = frac * total();
+  };
+  hit.addEventListener("pointerdown", (e) => {
+    if (active !== el) return;
+    e.stopPropagation();
+    e.preventDefault();
+    hit.setPointerCapture(e.pointerId);
+    el._scrubbing = true;
+    el.classList.add("scrubbing");
+    scrubTo(e);
+  });
+  hit.addEventListener("pointermove", (e) => {
+    if (el._scrubbing) scrubTo(e);
+  });
+  const endScrub = () => {
+    if (!el._scrubbing) return;
+    el._scrubbing = false;
+    el._scrubbedAt = performance.now();
+    el.classList.remove("scrubbing");
+    if (v.paused && v.currentTime < total()) v.play().catch(() => {});
+  };
+  hit.addEventListener("pointerup", endScrub);
+  hit.addEventListener("pointercancel", endScrub);
   v.addEventListener("ended", () => {
     if (el === active) stopActive();
   });
   el.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (performance.now() - (el._scrubbedAt || 0) < 350) return; // the end of a ring drag
     if (active === el) {
       if (v.paused) v.play().catch(() => {});
       else v.pause();

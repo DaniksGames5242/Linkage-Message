@@ -6,6 +6,7 @@
 // the plain system emoji, so nothing ever renders empty.
 
 import { burst, reducedMotion } from "./ui.js";
+import { ANIMATED_EMOJI } from "./emoji-data.js";
 
 const BASE = "https://fonts.gstatic.com/s/e/notoemoji/latest";
 
@@ -34,6 +35,8 @@ function codepoints(emoji, keepVariation) {
 }
 
 function fetchAnimation(emoji) {
+  // Only ~600 emoji have an animation; don't ask the CDN for the rest.
+  if (!ANIMATED_EMOJI.has(emoji) && !ANIMATED_EMOJI.has(emoji.replace(/\uFE0F/g, ""))) return Promise.resolve(null);
   if (!dataCache.has(emoji)) {
     const get = (cp) =>
       fetch(`${BASE}/${cp}/lottie.json`)
@@ -160,4 +163,23 @@ export function emojiEffect(emoji, x, y, size = 120) {
     },
     () => el.remove()
   );
+}
+
+// Tap on a big emoji in the chat: it plays again right where it is, squashes
+// like jelly and sprays small copies of itself.
+export function emojiPop(el, emoji) {
+  el.replay?.();
+  if (reducedMotion) return;
+  el.animate(
+    [
+      { transform: "scale(1)" },
+      { transform: "scale(1.22, .82)", offset: 0.18 },
+      { transform: "scale(.9, 1.12) translateY(-6px)", offset: 0.42 },
+      { transform: "scale(1.05, .96)", offset: 0.68 },
+      { transform: "scale(1)" },
+    ],
+    { duration: 700, easing: "cubic-bezier(.3,.7,.4,1)" }
+  );
+  const r = el.getBoundingClientRect();
+  burst(r.left + r.width / 2, r.top + r.height / 2, { content: emoji, count: 14, spread: Math.max(120, r.width * 1.4) });
 }

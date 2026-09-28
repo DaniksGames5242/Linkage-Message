@@ -12,7 +12,7 @@ import {
 } from "./auth.js";
 import { e2eSupported, initDevice, forgetDevice, hasDevice, deviceId, devicePublicKey, sealFor, openFrom, NotForThisDevice, fingerprint } from "./e2e.js";
 import { publishDevice } from "./e2e-store.js";
-import { recordCircle, buildVideoNote, circlesSupported, MAX_ZOOM } from "./circle.js";
+import { recordCircle, buildVideoNote, circlesSupported, MAX_ZOOM, ensureTriangleClip } from "./circle.js";
 import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName } from "./contacts.js";
 import {
   ensureChat,
@@ -56,7 +56,8 @@ import {
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
 import { initCalls, startCall, fmtDuration } from "./call-ui.js";
-import { emojiOnly, animatedEmoji, emojiEffect } from "./emoji-anim.js";
+import { emojiOnly, animatedEmoji, emojiEffect, emojiPop } from "./emoji-anim.js";
+import { EMOJI_GROUPS, ANIMATED_EMOJI } from "./emoji-data.js";
 import { EFFECTS, playEffect } from "./effects.js";
 import { GAMES, gameForText, rollGame, renderGame, isWin } from "./games.js";
 import { appendRich, stripRich, wrapSelection } from "./richtext.js";
@@ -114,6 +115,7 @@ import {
   progressToast,
   probeFps,
   setMotionScale,
+  pauseBackdrop,
 } from "./ui.js";
 
 const ADMIN_USERNAME = "danik";
@@ -2521,7 +2523,8 @@ function snapshotScroll() {
 
 function finishMessagesRender(snap) {
   applyWallpaper();
-  const rows = Array.from(messagesEl.querySelectorAll(".msg-row"));
+  appendPendingUploads();
+  const rows = Array.from(messagesEl.querySelectorAll(".msg-row:not(.pending-upload)"));
   refreshReceipts();
   maybeMarkRead();
   if (chatSearchQuery) applyChatSearch(false);
@@ -2624,6 +2627,7 @@ function renderPlainMessages(msgs, isMineFn) {
     messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
     msgAnim.chatId = currentChatId;
     msgAnim.seen = new Set();
+    appendPendingUploads();
     return;
   }
   renderMessageList(msgs, (msg) => renderMessage(msg, isMineFn(msg)));
@@ -2793,6 +2797,7 @@ async function renderGroupMessagesList(msgs) {
     messagesEl.innerHTML = '<div class="system-msg">Сообщений пока нет</div>';
     msgAnim.chatId = currentChatId;
     msgAnim.seen = new Set();
+    appendPendingUploads();
     return;
   }
   renderMessageList(msgs, (msg) => {
@@ -3154,9 +3159,7 @@ function renderBubbleContent(bubble, msg) {
       const el = animatedEmoji(emoji, size);
       el.addEventListener("click", (e) => {
         e.stopPropagation();
-        el.replay();
-        const r = el.getBoundingClientRect();
-        emojiEffect(emoji, r.left + r.width / 2, r.top + r.height / 2, size * 1.1);
+        emojiPop(el, emoji);
       });
       bubble.appendChild(el);
     });
@@ -3182,11 +3185,26 @@ function renderBubbleContent(bubble, msg) {
       video.src = msg.fileUrl;
       bubble.appendChild(msg.mediaSpoiler ? wrapMediaSpoiler(video, msg.id) : video);
     } else if (fileType.startsWith("audio/")) {
-      const audio = document.createElement("audio");
-      audio.className = "msg-audio";
-      audio.controls = true;
-      audio.src = msg.fileUrl;
-      bubble.appendChild(audio);
+      // Music and audio files play right here, with the voice player.
+      bubble.classList.add("voice-bubble");
+      bubble.appendChild(buildVoicePlayer({ ...msg, voiceUrl: msg.fileUrl }, { title: msg.fileName || "Аудио" }));
+    } else if (fileType.startsWith("image/")) {
+      // An uncompressed photo: preview inline, the original one tap away.
+      const img = document.createElement("img");
+      img.className = "msg-image";
+      img.src = msg.fileUrl;
+      img.alt = "";
+      img.loading = "lazy";
+      img.addEventListener("click", () => openLightbox(img));
+      bubble.appendChild(img);
+      const chip = document.createElement("a");
+      chip.className = "file-chip";
+      chip.href = msg.fileUrl;
+      chip.target = "_blank";
+      chip.rel = "noopener noreferrer";
+      chip.download = msg.fileName || "image";
+      chip.textContent = `⬇ ${msg.fileName || "Оригинал"} · ${fmtFileSize(msg.fileSize || 0)}`;
+      bubble.appendChild(chip);
     } else {
       const link = document.createElement("a");
       link.className = "msg-file-card";
@@ -3203,6 +3221,14 @@ function renderBubbleContent(bubble, msg) {
       `;
       link.querySelector(".msg-file-name").textContent = msg.fileName || "Файл";
       link.querySelector(".msg-file-size").textContent = fmtFileSize(msg.fileSize || 0);
+      if (viewerKind(msg)) {
+        // PDFs and text open in a viewer inside the app instead of downloading.
+        link.querySelector(".msg-file-icon").textContent = viewerKind(msg) === "pdf" ? "📄" : "📝";
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          openFileViewer(msg);
+        });
+      }
       bubble.appendChild(link);
     }
   }
@@ -3218,6 +3244,64 @@ function renderBubbleContent(bubble, msg) {
       bubble.prepend(p);
     } else bubble.appendChild(p);
   }
+}
+
+// ---------- In-app file viewer (PDF, text) ----------
+
+const TEXT_EXT = /\.(txt|md|csv|json|log|js|ts|py|html|css|xml|yml|yaml|ini|c|cpp|java|kt|swift|go|rs|sh)$/i;
+function viewerKind(msg) {
+  const type = msg.fileType || "";
+  const name = msg.fileName || "";
+  if (type === "application/pdf" || /\.pdf$/i.test(name)) return "pdf";
+  if (type.startsWith("text/") || type === "application/json" || TEXT_EXT.test(name)) return "text";
+  return null;
+}
+
+function openFileViewer(msg) {
+  const kind = viewerKind(msg);
+  const root = document.createElement("div");
+  root.className = "file-viewer";
+  root.innerHTML = `
+    <div class="fv-bar glass">
+      <div class="fv-meta"><b class="fv-name"></b><span class="fv-size"></span></div>
+      <a class="icon-btn fv-download" target="_blank" rel="noopener noreferrer" title="Скачать">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </a>
+      <button type="button" class="icon-btn fv-close" title="Закрыть">✕</button>
+    </div>
+    <div class="fv-body"></div>`;
+  root.querySelector(".fv-name").textContent = msg.fileName || "Файл";
+  root.querySelector(".fv-size").textContent = fmtFileSize(msg.fileSize || 0);
+  const dl = root.querySelector(".fv-download");
+  dl.href = msg.fileUrl;
+  dl.download = msg.fileName || "file";
+  const body = root.querySelector(".fv-body");
+  if (kind === "pdf") {
+    const frame = document.createElement("iframe");
+    frame.src = msg.fileUrl;
+    frame.title = msg.fileName || "PDF";
+    body.appendChild(frame);
+  } else {
+    const pre = document.createElement("pre");
+    pre.textContent = "Загрузка…";
+    body.appendChild(pre);
+    fetch(msg.fileUrl)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.status))))
+      .then((text) => (pre.textContent = text.length > 400000 ? text.slice(0, 400000) + "\n…" : text))
+      .catch(() => (pre.textContent = "Не удалось открыть файл — попробуйте скачать его."));
+  }
+  document.body.appendChild(root);
+  pauseBackdrop(true);
+  animate(root, [{ opacity: 0 }, { opacity: 1 }], { duration: 220 });
+  animate(body, [{ opacity: 0, transform: "translateY(40px) scale(.96)" }, { opacity: 1, transform: "none" }], { spring: "smooth" });
+  const close = () => {
+    document.removeEventListener("keydown", onKey);
+    pauseBackdrop(false);
+    root.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: "forwards" }).finished.then(() => root.remove(), () => root.remove());
+  };
+  const onKey = (e) => e.key === "Escape" && close();
+  document.addEventListener("keydown", onKey);
+  root.querySelector(".fv-close").addEventListener("click", close);
 }
 
 // ---------- Mini games ----------
@@ -4254,46 +4338,174 @@ async function doSendMessage(attachment, { scheduleAt = null, effect = null, sil
 
 // ---------- Emoji picker ----------
 
-function openEmojiPicker() {
-  emojiPicker.innerHTML = "";
-  EMOJI_PICKER_SET.forEach((emoji) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "emoji-option";
-    btn.textContent = emoji;
-    if (!touchOnly) {
-      // Hovered emoji come alive, like Telegram's panel.
-      btn.addEventListener("pointerenter", () => {
-        if (btn._anim) return;
-        btn._anim = animatedEmoji(emoji, 30, { play: "now", loop: true });
-        btn.textContent = "";
-        btn.appendChild(btn._anim);
-      });
-      btn.addEventListener("pointerleave", () => {
-        btn._anim?.destroy();
-        btn._anim = null;
-        btn.textContent = emoji;
-      });
-    }
-    btn.addEventListener("click", () => {
-      msgInput.value += emoji;
-      msgInput.dispatchEvent(new Event("input"));
-      msgInput.focus();
-      animate(btn, [{ transform: "scale(1.6) rotate(-12deg)" }, { transform: "none" }], { spring: "jelly" });
-    });
-    emojiPicker.appendChild(btn);
+// Every animated emoji, by category, with search and recently used.
+const RECENT_EMOJI_KEY = "lm-emoji-recent";
+let emojiPickerBuilt = false;
+
+function recentEmoji() {
+  try {
+    return JSON.parse(readStore(RECENT_EMOJI_KEY) || "[]").filter((e) => typeof e === "string").slice(0, 32);
+  } catch (_) {
+    return [];
+  }
+}
+
+function rememberEmoji(emoji) {
+  const list = [emoji, ...recentEmoji().filter((e) => e !== emoji)].slice(0, 32);
+  try {
+    localStorage.setItem(RECENT_EMOJI_KEY, JSON.stringify(list));
+  } catch (_) {}
+}
+
+function emojiButton(emoji) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "emoji-option";
+  btn.dataset.emoji = emoji;
+  btn.textContent = emoji;
+  return btn;
+}
+
+function fillEmojiSection(section, list) {
+  const grid = section.querySelector(".ep-grid");
+  grid.replaceChildren(...list.map(emojiButton));
+  section.classList.toggle("hidden", !list.length);
+}
+
+function buildEmojiPicker() {
+  emojiPickerBuilt = true;
+  emojiPicker.innerHTML = `
+    <div class="ep-head">
+      <label class="ep-search">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" placeholder="Поиск эмодзи" autocomplete="off" />
+      </label>
+      <div class="ep-tabs"></div>
+    </div>
+    <div class="ep-body"></div>`;
+  const tabs = emojiPicker.querySelector(".ep-tabs");
+  const body = emojiPicker.querySelector(".ep-body");
+  const search = emojiPicker.querySelector(".ep-search input");
+  const sections = [{ id: "recent", name: "Недавние", icon: "🕘", items: [] }, ...EMOJI_GROUPS];
+  sections.forEach((g) => {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "ep-tab";
+    tab.dataset.group = g.id;
+    tab.title = g.name;
+    tab.textContent = g.icon;
+    tabs.appendChild(tab);
+    const section = document.createElement("section");
+    section.className = "ep-section";
+    section.dataset.group = g.id;
+    section.innerHTML = '<div class="ep-title"></div><div class="ep-grid"></div>';
+    section.querySelector(".ep-title").textContent = g.name;
+    if (g.id !== "recent") fillEmojiSection(section, g.items.map((i) => i[0]));
+    body.appendChild(section);
   });
+  const results = document.createElement("section");
+  results.className = "ep-section ep-results hidden";
+  results.innerHTML = '<div class="ep-title">Результаты</div><div class="ep-grid"></div><div class="ep-empty hidden">Ничего не нашлось</div>';
+  body.prepend(results);
+
+  const setActiveTab = (id) => tabs.querySelectorAll(".ep-tab").forEach((t) => t.classList.toggle("active", t.dataset.group === id));
+  let spyPausedUntil = 0; // a tab click scrolls smoothly; don't let the spy fight it
+  tabs.addEventListener("click", (e) => {
+    const tab = e.target.closest(".ep-tab");
+    if (!tab) return;
+    if (search.value) {
+      search.value = "";
+      search.dispatchEvent(new Event("input"));
+    }
+    const section = body.querySelector(`.ep-section[data-group="${tab.dataset.group}"]`);
+    spyPausedUntil = performance.now() + 900;
+    if (section && !section.classList.contains("hidden")) body.scrollTo({ top: section.offsetTop, behavior: reducedMotion ? "auto" : "smooth" });
+    setActiveTab(tab.dataset.group);
+    animate(tab, [{ transform: "scale(.7)" }, { transform: "none" }], { spring: "jelly" });
+  });
+  // Scroll spy: the tab follows the section you're looking at.
+  body.addEventListener(
+    "scroll",
+    () => {
+      if (search.value || performance.now() < spyPausedUntil) return;
+      const visible = [...body.querySelectorAll(".ep-section:not(.hidden):not(.ep-results)")].filter((sec) => sec.offsetTop - body.scrollTop <= 24);
+      const current = visible.pop() || body.querySelector(".ep-section:not(.hidden):not(.ep-results)");
+      if (current) setActiveTab(current.dataset.group);
+    },
+    { passive: true }
+  );
+  search.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    body.querySelectorAll(".ep-section:not(.ep-results)").forEach((sec) => sec.classList.toggle("filtered", !!q));
+    results.classList.toggle("hidden", !q);
+    if (!q) return;
+    const hits = EMOJI_GROUPS.flatMap((g) => g.items)
+      .filter(([emoji, kw]) => kw.toLowerCase().includes(q) || emoji === q)
+      .map((i) => i[0])
+      .slice(0, 120);
+    const grid = results.querySelector(".ep-grid");
+    grid.replaceChildren(...hits.map(emojiButton));
+    results.querySelector(".ep-empty").classList.toggle("hidden", hits.length > 0);
+    body.scrollTop = 0;
+  });
+
+  // One set of listeners for all ~600 buttons.
+  body.addEventListener("click", (e) => {
+    const btn = e.target.closest(".emoji-option");
+    if (!btn) return;
+    const emoji = btn.dataset.emoji;
+    const start = msgInput.selectionStart ?? msgInput.value.length;
+    const end = msgInput.selectionEnd ?? msgInput.value.length;
+    msgInput.value = msgInput.value.slice(0, start) + emoji + msgInput.value.slice(end);
+    msgInput.selectionStart = msgInput.selectionEnd = start + emoji.length;
+    msgInput.dispatchEvent(new Event("input"));
+    if (!touchOnly) msgInput.focus();
+    rememberEmoji(emoji);
+    animate(btn, [{ transform: "scale(1.6) rotate(-12deg)" }, { transform: "none" }], { spring: "jelly" });
+  });
+  if (!touchOnly) {
+    // Hovered emoji come alive, like Telegram's panel.
+    body.addEventListener("pointerover", (e) => {
+      const btn = e.target.closest(".emoji-option");
+      if (!btn || btn._anim) return;
+      btn._anim = animatedEmoji(btn.dataset.emoji, 30, { play: "now", loop: true });
+      btn.textContent = "";
+      btn.appendChild(btn._anim);
+    });
+    body.addEventListener("pointerout", (e) => {
+      const btn = e.target.closest(".emoji-option");
+      if (!btn || btn.contains(e.relatedTarget)) return;
+      btn._anim?.destroy();
+      btn._anim = null;
+      btn.textContent = btn.dataset.emoji;
+    });
+  }
+}
+
+function openEmojiPicker() {
+  if (!emojiPickerBuilt) buildEmojiPicker();
+  const recentSection = emojiPicker.querySelector('.ep-section[data-group="recent"]');
+  const recents = recentEmoji();
+  fillEmojiSection(recentSection, recents);
+  emojiPicker.querySelector('.ep-tab[data-group="recent"]').classList.toggle("hidden", !recents.length);
+  const search = emojiPicker.querySelector(".ep-search input");
+  if (search.value) {
+    search.value = "";
+    search.dispatchEvent(new Event("input"));
+  }
+  emojiPicker.querySelector(".ep-body").scrollTop = 0;
+  emojiPicker.querySelectorAll(".ep-tab").forEach((t, i) => t.classList.toggle("active", i === (recents.length ? 0 : 1)));
   reveal(emojiPicker);
-  // Emojis ripple in diagonally from the corner nearest the button.
-  const cols = getComputedStyle(emojiPicker).gridTemplateColumns.split(" ").length || 8;
-  Array.from(emojiPicker.children).forEach((btn, i) => {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
+  // The first screen of emoji ripples in diagonally.
+  const first = [...emojiPicker.querySelectorAll(".ep-section:not(.hidden) .emoji-option")].slice(0, 48);
+  const cols = getComputedStyle(emojiPicker.querySelector(".ep-grid")).gridTemplateColumns.split(" ").length || 8;
+  first.forEach((btn, i) => {
     animate(btn, [{ opacity: 0, transform: "scale(.2) translateY(14px)" }, { opacity: 1, transform: "none" }], {
       spring: "jelly",
-      delay: 40 + (col + row) * 16,
+      delay: 40 + ((i % cols) + Math.floor(i / cols)) * 16,
     });
   });
+  stagger(emojiPicker.querySelectorAll(".ep-tab:not(.hidden)"), { y: 8, blur: 0, step: 22, spring: "jelly" });
 }
 
 function closeEmojiPicker() {
@@ -4317,7 +4529,154 @@ function uploadToast(label) {
 
 const FILE_LABELS = { image: "фото", video: "видео", audio: "аудио", file: "файл" };
 
-async function buildFileAttachment(original, { asFile = false } = {}) {
+// ---------- Uploads show up in the chat right away ----------
+// A sending file is a real-looking bubble at the bottom of its chat with a
+// circular progress ring (tap ✕ to cancel). It is kept across re-renders and
+// replaced by the actual message once that is delivered.
+
+const pendingUploads = new Map();
+let pendingSeq = 0;
+const UP_ICON_CANCEL = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="17" y1="7" x2="7" y2="17"/><line x1="7" y1="7" x2="17" y2="17"/></svg>';
+const UP_ICON_RETRY = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"/></svg>';
+
+function kindOfFile(file, asFile = false) {
+  if (asFile) return "file";
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "audio";
+  return "file";
+}
+
+function buildPendingRow(entry) {
+  const row = document.createElement("div");
+  row.className = "msg-row me pending-upload";
+  row.dataset.pendingId = entry.id;
+  row.innerHTML = `<div class="msg-group"><div class="bubble pending-bubble pk-${entry.kind}"></div><div class="msg-time"><span class="up-status"></span></div></div>`;
+  const bubble = row.querySelector(".bubble");
+  const ring = `<div class="up-progress"><svg viewBox="0 0 48 48"><circle class="up-track" cx="24" cy="24" r="20"/><circle class="up-bar" cx="24" cy="24" r="20" pathLength="100"/></svg><button type="button" class="up-cancel" title="Отменить">${UP_ICON_CANCEL}</button></div>`;
+  if (entry.kind === "image" && entry.url) {
+    bubble.innerHTML = `<img class="msg-image" alt="" src="${entry.url}" />${ring}`;
+  } else if (entry.kind === "video" && entry.url) {
+    bubble.innerHTML = `<video class="msg-video" muted playsinline preload="metadata" src="${entry.url}"></video>${ring}`;
+  } else if (entry.kind === "circle") {
+    if (entry.shape === "triangle") ensureTriangleClip();
+    bubble.classList.add("circle-bubble");
+    bubble.innerHTML = `<div class="vnote pending-vnote${entry.shape === "triangle" ? " vnote-tri" : ""}"><video muted autoplay loop playsinline src="${entry.url}"></video></div>${ring}`;
+  } else if (entry.kind === "voice") {
+    const bars = waveLevels({ wave: entry.wave, voiceUrl: entry.id })
+      .map((v) => `<i style="height:${Math.round(12 + v * 88)}%"></i>`)
+      .join("");
+    bubble.classList.add("voice-bubble");
+    bubble.innerHTML = `<div class="voice-player">${ring}<div class="vp-body"><div class="vp-wave"><div class="vp-bars">${bars}</div></div><div class="vp-meta"><span class="vp-time">${fmtDuration(entry.duration || 0)}</span></div></div></div>`;
+  } else {
+    bubble.innerHTML = `<div class="msg-file-card">${ring}<div class="msg-file-meta"><div class="msg-file-name"></div><div class="msg-file-size"></div></div></div>`;
+    bubble.querySelector(".msg-file-name").textContent = entry.name || "Файл";
+    bubble.querySelector(".msg-file-size").textContent = fmtFileSize(entry.size || 0);
+  }
+  row.querySelector(".up-cancel").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (entry.state === "failed") {
+      dropPending(entry.id);
+      entry.retry?.();
+      return;
+    }
+    entry.ctrl.abort();
+    dropPending(entry.id, true);
+  });
+  return row;
+}
+
+function paintPending(entry) {
+  const row = entry.row;
+  if (!row) return;
+  const p = Math.max(0, Math.min(1, entry.progress || 0));
+  row.querySelector(".up-bar").style.strokeDashoffset = String(100 - Math.max(4, p * 100));
+  row.classList.toggle("up-waiting", entry.state === "queued" || (entry.state === "uploading" && p === 0));
+  row.classList.toggle("up-failed", entry.state === "failed");
+  const btn = row.querySelector(".up-cancel");
+  btn.innerHTML = entry.state === "failed" ? UP_ICON_RETRY : UP_ICON_CANCEL;
+  btn.title = entry.state === "failed" ? "Отправить ещё раз" : "Отменить";
+  row.querySelector(".up-status").textContent =
+    entry.state === "failed" ? "Не отправлено · нажмите ↻" : entry.state === "queued" ? "В очереди…" : entry.state === "sending" ? "Отправка…" : `${Math.round(p * 100)}%`;
+}
+
+// Puts this chat's sending files back at the bottom after a re-render.
+function appendPendingUploads() {
+  const mine = [...pendingUploads.values()].filter((e) => e.chatId === currentChatId);
+  if (!mine.length) return;
+  messagesEl.querySelector(":scope > .system-msg")?.remove();
+  mine.forEach((e) => messagesEl.appendChild(e.row));
+}
+
+function dropPending(id, animated = false) {
+  const entry = pendingUploads.get(id);
+  if (!entry) return;
+  pendingUploads.delete(id);
+  const row = entry.row;
+  const cleanup = () => {
+    row.remove();
+    if (entry.url) setTimeout(() => URL.revokeObjectURL(entry.url), 1500);
+  };
+  if (animated && row.isConnected && !reducedMotion) {
+    row
+      .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(.7)" }], { duration: 220, easing: "ease-in" })
+      .finished.then(cleanup, cleanup);
+  } else cleanup();
+}
+
+// Returns the same { update, done, fail, signal } handle the uploaders use.
+function pendingUpload({ target, kind, file, name, shape, duration, wave, queued = false, retry = null }) {
+  const id = "up" + ++pendingSeq;
+  const hasPreview = kind === "image" || kind === "video" || kind === "circle";
+  const entry = {
+    id,
+    chatId: target.id,
+    kind,
+    name,
+    size: file?.size || 0,
+    url: hasPreview && file ? URL.createObjectURL(file) : null,
+    shape,
+    duration,
+    wave,
+    progress: 0,
+    state: queued ? "queued" : "uploading",
+    ctrl: new AbortController(),
+    retry,
+  };
+  entry.row = buildPendingRow(entry);
+  pendingUploads.set(id, entry);
+  paintPending(entry);
+  if (target.id === currentChatId) {
+    appendPendingUploads();
+    animate(entry.row.querySelector(".msg-group"), [{ opacity: 0, transform: "translateY(60px) scale(.6)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+    messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+  }
+  return {
+    signal: entry.ctrl.signal,
+    start: () => {
+      entry.state = "uploading";
+      paintPending(entry);
+    },
+    update: (p) => {
+      entry.progress = p;
+      if (entry.state === "queued") entry.state = "uploading";
+      paintPending(entry);
+    },
+    sending: () => {
+      entry.progress = 1;
+      entry.state = "sending";
+      paintPending(entry);
+    },
+    done: () => dropPending(id),
+    fail: () => {
+      if (!pendingUploads.has(id)) return;
+      entry.state = "failed";
+      paintPending(entry);
+    },
+  };
+}
+
+async function buildFileAttachment(original, { asFile = false, progress = null } = {}) {
   const kind = asFile
     ? "file"
     : original.type.startsWith("image/")
@@ -4328,12 +4687,13 @@ async function buildFileAttachment(original, { asFile = false } = {}) {
     ? "audio"
     : "file";
   const file = kind === "image" ? await prepareImageForUpload(original) : original;
-  const progress = uploadToast(`Отправка ${FILE_LABELS[kind]}: ${original.name || "файл"}`);
+  const own = !progress;
+  if (own) progress = uploadToast(`Отправка ${FILE_LABELS[kind]}: ${original.name || "файл"}`);
   let url;
   try {
     const resourceType = kind === "image" ? "image" : kind === "file" ? "raw" : "video"; // Cloudinary files audio under "video"
     ({ url } = await uploadToCloudinary(file, resourceType, progress.update, progress.signal));
-    progress.done();
+    if (own) progress.done();
   } catch (err) {
     progress.fail();
     throw err;
@@ -4487,27 +4847,37 @@ document.getElementById("media-send").addEventListener("click", async () => {
 
 async function sendMediaBatch(files, target, caption, { above = false, spoiler = false, asFile = false } = {}) {
   attachErrorEl.textContent = "";
-  attachBtn.disabled = true;
-  let captionUsed = false;
-  try {
-    for (const file of files) {
-      try {
-        const asPlainFile = asFile && file.type.startsWith("image/");
-        const attachment = await buildFileAttachment(file, { asFile: asPlainFile });
-        const visual = isVisualFile(file) && !asPlainFile;
-        const text = captionUsed ? "" : caption;
-        if (visual && spoiler) attachment.fields.mediaSpoiler = true;
-        if (visual && above && text) attachment.fields.captionAbove = true;
-        await deliver({ ...target, text, attachment });
-        if (text) captionUsed = true;
-      } catch (err) {
-        if (err?.name === "AbortError") continue;
-        console.error(err);
-        toast(`${file.name}: ${err.message || "не удалось отправить"}`, { tone: "error", duration: 5000 });
-      }
+  // Every file appears in the chat at once; they upload one after another.
+  const jobs = files.map((file, i) => {
+    const asPlainFile = asFile && file.type.startsWith("image/");
+    const job = { file, asPlainFile, text: i === 0 ? caption : "" };
+    job.progress = pendingUpload({
+      target,
+      kind: kindOfFile(file, asPlainFile),
+      file,
+      name: file.name,
+      queued: i > 0,
+      retry: () => sendMediaBatch([file], target, job.text, { above, spoiler, asFile }),
+    });
+    return job;
+  });
+  for (const job of jobs) {
+    if (job.progress.signal.aborted) continue;
+    try {
+      job.progress.start();
+      const attachment = await buildFileAttachment(job.file, { asFile: job.asPlainFile, progress: job.progress });
+      const visual = isVisualFile(job.file) && !job.asPlainFile;
+      if (visual && spoiler) attachment.fields.mediaSpoiler = true;
+      if (visual && above && job.text) attachment.fields.captionAbove = true;
+      job.progress.sending();
+      await deliver({ ...target, text: job.text, attachment });
+      job.progress.done();
+    } catch (err) {
+      if (err?.name === "AbortError") continue;
+      console.error(err);
+      job.progress.fail();
+      toast(`${job.file.name}: ${err.message || "не удалось отправить"}`, { tone: "error", duration: 5000 });
     }
-  } finally {
-    attachBtn.disabled = false;
   }
 }
 
@@ -5087,16 +5457,17 @@ async function sendVoice(blob, duration, wave, target) {
   const type = blob.type.split(";")[0];
   const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
   const file = new File([blob], `voice.${ext}`, { type });
-  const progress = uploadToast("Отправка голосового сообщения");
+  const progress = pendingUpload({ target, kind: "voice", file, duration, wave, retry: () => sendVoice(blob, duration, wave, target) });
   try {
     const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal); // Cloudinary files audio under "video"
-    progress.done();
+    progress.sending();
     // Served as MP3 so Safari can play recordings made in Chrome (webm/opus).
     const playable = url.replace(/\.(webm|ogg|weba|m4a)$/i, ".mp3");
     await deliver({
       ...target,
       attachment: { fields: { voiceUrl: playable, duration, wave }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
     });
+    progress.done();
   } catch (err) {
     progress.fail();
     if (err?.name === "AbortError") return;
@@ -5110,10 +5481,10 @@ async function sendVoice(blob, duration, wave, target) {
 async function sendCircle(result, target, shape = "circle") {
   const ext = result.mime.includes("mp4") ? "mp4" : "webm";
   const file = new File([result.blob], `circle.${ext}`, { type: result.mime.split(";")[0] });
-  const progress = uploadToast("Отправка видеосообщения");
+  const progress = pendingUpload({ target, kind: "circle", file, shape, retry: () => sendCircle(result, target, shape) });
   try {
     const { url } = await uploadToCloudinary(file, "video", progress.update, progress.signal);
-    progress.done();
+    progress.sending();
     // Cloudinary serves a square H.264 MP4 of it, which every browser plays.
     const playable = url.replace("/upload/", "/upload/c_fill,g_center,w_480,h_480,q_auto/").replace(/\.(webm|mov|mkv)$/i, ".mp4");
     await deliver({
@@ -5124,6 +5495,7 @@ async function sendCircle(result, target, shape = "circle") {
         defaultCaption: shape === "triangle" ? "🔺" : "⭕",
       },
     });
+    progress.done();
   } catch (err) {
     progress.fail();
     if (err?.name === "AbortError") return;
@@ -5154,18 +5526,20 @@ function waveLevels(msg, bars = 40) {
 const PLAY_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>';
 const PAUSE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>';
 
-function buildVoicePlayer(msg) {
+function buildVoicePlayer(msg, { title = "" } = {}) {
   const el = document.createElement("div");
-  el.className = "voice-player";
+  el.className = "voice-player" + (title ? " with-title" : "");
   const bars = waveLevels(msg)
     .map((v) => `<i style="height:${Math.round(12 + v * 88)}%"></i>`)
     .join("");
   el.innerHTML = `
     <button type="button" class="vp-play" title="Слушать">${PLAY_ICON}</button>
     <div class="vp-body">
+      ${title ? '<div class="vp-title"></div>' : ""}
       <div class="vp-wave"><div class="vp-bars">${bars}</div><div class="vp-bars vp-fill">${bars}</div></div>
       <div class="vp-meta"><span class="vp-time"></span><button type="button" class="vp-speed" title="Скорость"></button></div>
     </div>`;
+  if (title) el.querySelector(".vp-title").textContent = title;
   const playBtn = el.querySelector(".vp-play");
   const fill = el.querySelector(".vp-fill");
   const timeEl = el.querySelector(".vp-time");
@@ -7400,22 +7774,29 @@ document.addEventListener("keydown", (e) => {
   else if (!emojiPicker.classList.contains("hidden")) closeEmojiPicker();
 });
 
-// Mobile: swipe from the left edge to drag the chat away and reveal the list.
+// Mobile: swipe right anywhere in the chat (not just from the edge) to drag
+// it away and reveal the list. Things that scrub sideways keep their gesture.
+const SWIPE_BACK_IGNORE = "#chat-dock, textarea, input, video, .vp-wave, .ring-hit, .game-holder, .loc-card, .kaleido, .circle-rec, .ctx-menu, .react-picker";
 (function enableSwipeBack() {
   let startX = 0;
   let startY = 0;
   let dx = 0;
   let tracking = false;
   let dragging = false;
+  let lastX = 0;
+  let lastT = 0;
+  let velocity = 0;
 
   chatSection.addEventListener(
     "touchstart",
     (e) => {
       if (!isMobileLayout() || !sidebar.classList.contains("chat-open") || e.touches.length !== 1) return;
       const t = e.touches[0];
-      if (t.clientX > 32) return;
-      startX = t.clientX;
+      if (t.clientX > 32 && e.target.closest(SWIPE_BACK_IGNORE)) return;
+      startX = lastX = t.clientX;
       startY = t.clientY;
+      lastT = performance.now();
+      velocity = 0;
       dx = 0;
       tracking = true;
       dragging = false;
@@ -7428,13 +7809,18 @@ document.addEventListener("keydown", (e) => {
     (e) => {
       if (!tracking) return;
       const t = e.touches[0];
+      const now = performance.now();
+      velocity = (t.clientX - lastX) / Math.max(1, now - lastT);
+      lastX = t.clientX;
+      lastT = now;
       dx = Math.max(0, t.clientX - startX);
       if (!dragging) {
-        if (Math.abs(t.clientY - startY) > 10 && Math.abs(t.clientY - startY) > dx) {
+        const dy = Math.abs(t.clientY - startY);
+        if ((dy > 10 && dy > dx * 0.8) || t.clientX - startX < -10) {
           tracking = false;
           return;
         }
-        if (dx < 8) return;
+        if (dx < 14) return;
         dragging = true;
         chatSection.classList.add("dragging");
         sidebar.classList.add("peek");
@@ -7451,7 +7837,8 @@ document.addEventListener("keydown", (e) => {
     tracking = false;
     if (!dragging) return;
     dragging = false;
-    const goBack = dx > window.innerWidth * 0.3;
+    // Far enough, or a quick flick.
+    const goBack = dx > window.innerWidth * 0.3 || (dx > 40 && velocity > 0.45);
     chatSection.classList.remove("dragging");
     sidebar.classList.remove("peek");
     chatSection.style.transform = "";
