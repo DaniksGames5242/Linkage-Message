@@ -273,3 +273,7 @@ export async function joinGroup(groupId, uid, code) {
 export async function setGroupChecklistItem(groupId, messageId, idx, uid) {
   await updateDoc(doc(db, "groups", groupId, "messages", messageId), { [`checks.${idx}`]: uid || deleteField() });
 }
+
+export async function setGroupAutoDelete(groupId, seconds) {
+  await updateDoc(doc(db, "groups", groupId), { autoDelete: seconds || deleteField() });
+}

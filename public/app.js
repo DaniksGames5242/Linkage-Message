@@ -34,6 +34,8 @@ import {
   votePoll,
   setChecklistItem,
   addMessageKeys,
+  setChatAutoDelete,
+  expiryAt,
   hideMessageForMe,
 } from "./chats.js";
 import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
@@ -61,6 +63,7 @@ import {
   cancelScheduledGroup,
   voteGroupPoll,
   setGroupChecklistItem,
+  setGroupAutoDelete,
   hideGroupMessageForMe,
 } from "./groups.js";
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS,
@@ -1920,6 +1923,8 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
 // ---------- Context menus ----------
 
 const MI = {
+  timer: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
   unread: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/><circle cx="19" cy="5" r="3" fill="currentColor"/></svg>',
   folder: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   music: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
@@ -2963,6 +2968,55 @@ function openWallpaperPicker() {
 }
 
 wallAll.addEventListener("change", () => setWallpaper(wallpaperFor(currentChatId)));
+const AUTO_DELETE = [
+  [0, "Выключено"],
+  [86400, "1 день"],
+  [604800, "1 неделя"],
+  [2592000, "1 месяц"],
+];
+const autoDeleteLabel = (sec) => AUTO_DELETE.find(([v]) => v === sec)?.[1] || "";
+function canSetAutoDelete() {
+  if (currentChatType === "contact") return true;
+  if (currentChatType === "group" || currentChatType === "channel") return (currentGroupRef?.admins || []).includes(currentUser.uid);
+  return false;
+}
+document.getElementById("chat-menu-autodelete-btn").addEventListener("click", (e) => {
+  hidePopover(chatMenuDropdown);
+  const cur = currentChatData()?.autoDelete || 0;
+  const r = chatMenuBtn.getBoundingClientRect();
+  const chatId = currentChatId;
+  const kind = currentChatType;
+  setTimeout(
+    () =>
+      openContextMenu({
+        x: r.right - 220,
+        y: r.bottom + 6,
+        items: AUTO_DELETE.map(([sec, label]) => ({
+          label: (sec === cur ? "✓ " : "") + label,
+          icon: MI.timer,
+          onClick: async () => {
+            try {
+              await (kind === "contact" ? setChatAutoDelete : setGroupAutoDelete)(chatId, sec);
+              toast(sec ? `Новые сообщения удалятся через ${label.replace(/^1 /, "")}` : "Автоудаление выключено", { icon: "⏱" });
+            } catch (err) {
+              console.error(err);
+              toast("Не удалось изменить (обновите правила Firestore)", { tone: "error" });
+            }
+          },
+        })),
+      }),
+    60
+  );
+});
+
+function updateAutoDeleteBadge() {
+  const sec = currentChatData()?.autoDelete || 0;
+  const label = { 86400: "1д", 604800: "1н", 2592000: "1м" }[sec] || "";
+  chatHeaderAvatar.dataset.ttl = label;
+  chatHeaderAvatar.classList.toggle("has-ttl", !!label);
+  document.getElementById("chat-menu-autodelete-btn").classList.toggle("hidden", !canSetAutoDelete());
+}
+
 document.getElementById("chat-menu-wall-btn").addEventListener("click", () => {
   hidePopover(chatMenuDropdown);
   openWallpaperPicker();
@@ -2973,6 +3027,7 @@ wallOverlay.addEventListener("click", (e) => {
 });
 
 function refreshChatChrome() {
+  updateAutoDeleteBadge();
   if (!currentChatId) return;
   applyWallpaper();
   const isContact = currentChatType === "contact";
@@ -3112,6 +3167,8 @@ function refreshReceipts() {
 
 function onCurrentChatDataChanged() {
   if (!currentChatId) return;
+  updateAutoDeleteBadge();
+  refreshViews();
   if (currentChatType === "group" || currentChatType === "channel") {
     const fresh = groups.find((g) => g.id === currentChatId);
     if (fresh) {
@@ -3190,8 +3247,34 @@ function snapshotScroll() {
   return { top: messagesEl.scrollTop, nearBottom };
 }
 
+// Who has read a group message: members whose read marker is past it.
+function readersOf(msg) {
+  const g = currentGroupRef;
+  const at = msg.createdAt?.toMillis?.() || 0;
+  if (!g || !at) return [];
+  return Object.entries(g.lastRead || {})
+    .filter(([uid, ts]) => uid !== msg.senderId && (ts?.toMillis?.() || 0) >= at && (g.members || []).includes(uid))
+    .map(([uid]) => uid);
+}
+
+// Channel posts show a view count (author included), like Telegram.
+function refreshViews() {
+  if (currentChatType !== "channel") return;
+  messagesEl.querySelectorAll(".msg-row").forEach((row) => {
+    const el = row.querySelector(".msg-views");
+    if (!el || !row._msg) return;
+    const n = readersOf(row._msg).length + 1;
+    const text = n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "K" : String(n);
+    if (el.dataset.n === text) return;
+    el.dataset.n = text;
+    el.innerHTML = `${MI.eye}<span></span>`;
+    el.querySelector("span").textContent = text;
+  });
+}
+
 function finishMessagesRender(snap) {
   applyWallpaper();
+  refreshViews();
   appendPendingUploads();
   const rows = Array.from(messagesEl.querySelectorAll(".msg-row:not(.pending-upload)"));
   refreshReceipts();
@@ -3521,6 +3604,26 @@ async function renderGroupMessagesList(msgs) {
 }
 
 let shownMessages = [];
+let expiryTimer = 0;
+const sweptIds = new Set();
+// Deletes my own expired messages (in case no TTL policy is set up) and
+// re-renders when the next message is due to disappear.
+function sweepExpired(now) {
+  clearTimeout(expiryTimer);
+  let next = Infinity;
+  const ops = messageOps();
+  currentChatRawMessages.forEach((m) => {
+    const at = m.expireAt?.toMillis?.();
+    if (!at) return;
+    if (at > now) next = Math.min(next, at);
+    else if (m.senderId === currentUser.uid && ops.del && !sweptIds.has(m.id)) {
+      sweptIds.add(m.id);
+      ops.del(m.id).catch(() => {});
+    }
+  });
+  if (next < Infinity) expiryTimer = setTimeout(rerenderMessages, Math.min(next - now + 50, 2 ** 31 - 1));
+}
+
 function rerenderMessages() {
   const now = Date.now();
   const me = currentUser.uid;
@@ -3538,8 +3641,10 @@ function rerenderMessages() {
     .filter(Boolean)
     .filter((m) => !currentClearedAt || !m.createdAt?.toMillis || m.createdAt.toMillis() > currentClearedAt)
     .filter((m) => !(m.hiddenFor || []).includes(me)) // "deleted for me"
+    .filter((m) => !(m.expireAt?.toMillis?.() <= now)) // auto-deleted
     .sort((a, b) => (a._scheduled ? 1 : 0) - (b._scheduled ? 1 : 0) || ms(a) - ms(b));
   shownMessages = visible;
+  sweepExpired(now);
   if (currentChatType === "contact") {
     renderPlainMessages(visible, (msg) => msg.senderId === me);
   } else if (currentChatType === "group" || currentChatType === "channel") {
@@ -4743,6 +4848,11 @@ function renderMessage(msg, isMine, senderName) {
     pin.textContent = "📌";
     timeEl.prepend(pin);
   }
+  if (currentChatType === "channel" && !msg._scheduled) {
+    const views = document.createElement("span");
+    views.className = "msg-views";
+    timeEl.prepend(views);
+  }
   if (isMine && !msg._scheduled && ["contact", "group", "channel"].includes(currentChatType)) {
     const tick = document.createElement("span");
     tick.className = "msg-tick";
@@ -4944,6 +5054,7 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
     reactions,
     items: [
       canReply && { label: "Ответить", icon: MI.reply, onClick: () => startReply(msg) },
+      isMine && currentChatType === "group" && seenByItem(msg, x, y),
       { label: "Выбрать", icon: MI.check, onClick: () => enterSelectMode(msg.id) },
       msg.effect && EFFECTS[msg.effect] && {
         label: "Повторить эффект",
@@ -4969,6 +5080,28 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
       canDelete && { label: "Удалить", icon: MI.trash, danger: true, onClick: () => askDeleteMessage(row, msg, ops, isMine, x, y) },
     ],
   });
+}
+
+function seenByItem(msg, x, y) {
+  const readers = readersOf(msg);
+  if (!readers.length) return { label: "Ещё не прочитано", icon: MI.eye, onClick: () => {} };
+  return {
+    label: `Прочитали: ${readers.length}`,
+    icon: MI.eye,
+    onClick: () =>
+      setTimeout(async () => {
+        const profiles = await Promise.all(readers.map((uid) => profileForUid(uid) || loadProfile(uid).catch(() => null)));
+        openContextMenu({
+          x,
+          y,
+          items: readers.map((uid, i) => ({
+            label: profiles[i]?.displayName || "…",
+            icon: MI.check,
+            onClick: () => profiles[i] && openContactProfile(uid, profiles[i]),
+          })),
+        });
+      }, 60),
+  };
 }
 
 // Delete for me / for everyone, like Telegram.
@@ -8536,6 +8669,10 @@ async function initE2E() {
 // Handles encryption for 1:1 chats and scheduling everywhere.
 async function deliver({ type, id, text = "", attachment = null, replyTo = null, extra = null, scheduleAt = null, silent = false, plain = null }) {
   const me = currentUser.uid;
+  // Auto-delete: the message carries its expiry in the clear (a Firestore TTL
+  // policy on expireAt removes it server-side; clients hide it on time).
+  const ttl = (type === "contact" ? chats.find((c) => c.id === id) : type === "group" || type === "channel" ? groups.find((g) => g.id === id) : null)?.autoDelete;
+  if (ttl > 0) plain = { ...(plain || {}), expireAt: expiryAt((scheduleAt || Date.now()) + ttl * 1000) };
   if (type === "saved") {
     return addSavedMessage(me, text || attachment?.defaultCaption || "", replyTo, { ...(attachment?.fields || {}), ...(extra || {}) });
   }

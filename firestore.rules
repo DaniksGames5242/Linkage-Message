@@ -197,7 +197,7 @@ service cloud.firestore {
     }
     function memberGroupUpdateOk() {
       return !request.resource.data.diff(resource.data).affectedKeys()
-          .hasAny(['admins', 'ownerId', 'settings', 'perms', 'type', 'joinCode'])
+          .hasAny(['admins', 'ownerId', 'settings', 'perms', 'type', 'joinCode', 'autoDelete'])
         && (!groupMembersChanged() || isSelfLeave() || isMemberAdd());
     }
     function adminGroupUpdateOk() {

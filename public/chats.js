@@ -252,3 +252,13 @@ export async function addMessageKeys(chatId, messageId, entries) {
   for (const [id, v] of Object.entries(entries)) patch[`enc.keys.${id}`] = v;
   if (Object.keys(patch).length) await updateDoc(doc(db, "chats", chatId, "messages", messageId), patch);
 }
+
+// Auto-delete timer (Telegram's "Автоудаление"): seconds, 0 = off.
+export async function setChatAutoDelete(chatId, seconds) {
+  await updateDoc(doc(db, "chats", chatId), { autoDelete: seconds || deleteField() });
+}
+
+// Firestore Timestamp for a message's expireAt (also used by a TTL policy).
+export function expiryAt(ms) {
+  return Timestamp.fromMillis(ms);
+}

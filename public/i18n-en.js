@@ -3,6 +3,14 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Автоудаление": "Auto-delete",
+  "Выключено": "Off",
+  "1 день": "1 day",
+  "1 неделя": "1 week",
+  "1 месяц": "1 month",
+  "Автоудаление выключено": "Auto-delete is off",
+  "Ещё не прочитано": "Not read yet",
+  "Не удалось изменить (обновите правила Firestore)": "Couldn't change (update Firestore rules)",
   "Медиа": "Media",
   "Файлы": "Files",
   "Ссылки": "Links",
@@ -648,6 +656,9 @@ const MONTHS = { января: "January", февраля: "February", марта
 
 // Strings with numbers or names inside.
 export const EN_PATTERNS = [
+  [/^Прочитали: (\d+)$/, "Read by $1"],
+  [/^Новые сообщения удалятся через (.+)$/, (m, p) => `New messages will be deleted after ${{ "день": "1 day", "неделя": "1 week", "месяц": "1 month" }[p] || p}`],
+  [/^✓ (.+)$/, (m, rest) => "✓ " + (EN[rest] || rest)],
   [/^(\d+) сообщени(е|я|й)$/, (m, n) => `${n} message${n === "1" ? "" : "s"}`],
   [/^Удалить у меня \((\d+)\)$/, "Delete for me ($1)"],
   [/^Удалить у всех \((\d+)\)$/, "Delete for everyone ($1)"],
