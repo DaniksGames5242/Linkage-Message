@@ -8990,3 +8990,92 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
     background: linear-gradient(to left, rgba(0, 0, 0, 0.45), transparent);
   }
 }
+
+/* =====================================================================
+   Selecting several messages
+   ===================================================================== */
+.select-top,
+.select-bottom {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 22px;
+}
+.select-top { top: 12px; height: 62px; padding: 0 12px; }
+.select-bottom { bottom: 12px; padding: 6px; justify-content: space-around; }
+.select-count { font-weight: 800; font-size: 17px; }
+.select-action {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 4px;
+  border: none;
+  border-radius: 16px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s, transform var(--dur-jelly) var(--ease-jelly);
+}
+.select-action:hover:not(:disabled) { background: rgba(255, 255, 255, 0.07); }
+.select-action:active:not(:disabled) { transform: scale(0.92); }
+.select-action:disabled { opacity: 0.35; cursor: default; }
+.select-action.danger { color: #ff6b6b; }
+#chat.select-mode #chat-header,
+#chat.select-mode #chat-dock,
+#chat.select-mode #pinned-bar {
+  opacity: 0;
+  pointer-events: none;
+}
+#chat-header, #chat-dock { transition: opacity 0.2s; }
+
+/* Check circles slide in, incoming messages make room for them. */
+.msg-row::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  bottom: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 0.2s, transform var(--dur-jelly) var(--ease-jelly), background-color 0.2s, border-color 0.2s;
+  pointer-events: none;
+}
+#chat.select-mode .msg-row:not(.pending-upload)::before { opacity: 1; transform: none; }
+#chat.select-mode .msg-row.selected::before {
+  border-color: transparent;
+  background: var(--accent) center / 14px no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23111' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E");
+}
+.msg-row > .msg-group { transition: transform var(--dur-smooth) var(--ease-smooth); }
+#chat.select-mode .msg-row:not(.me) > .msg-group { transform: translateX(32px); }
+#chat.select-mode .msg-row { cursor: pointer; }
+#chat.select-mode .msg-row .msg-actions { display: none; }
+.msg-row::after {
+  content: "";
+  position: absolute;
+  inset: -4px -12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+  z-index: -1;
+}
+#chat.select-mode .msg-row.selected::after { opacity: 1; }
+
+@media (max-width: 720px) {
+  .select-top { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; height: 58px; border-radius: 20px; }
+  .select-bottom { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); }
+}

@@ -2450,6 +2450,7 @@ new ResizeObserver(() => {
 
 function resetChatView() {
   holdEmojiPlayback(520);
+  exitSelectMode();
   if (currentChatId) writeDraft(currentChatId, msgInput.value);
   closeChatSearch(true);
   scrollBottomBtn.classList.add("hidden");
@@ -3095,6 +3096,15 @@ function openContactChat(chatId, otherUid, profile) {
 }
 
 // ---------- Groups & channels ----------
+
+function pluralRu(n, one, few, many) {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b === 1) return one;
+  if (b >= 2 && b <= 4) return few;
+  return many;
+}
 
 function pluralMembers(n) {
   const mod10 = n % 10;
@@ -4250,6 +4260,9 @@ function renderMessage(msg, isMine, senderName) {
   row.dataset.msgId = msg.id;
   row.dataset.rx = JSON.stringify(msg.reactions || {});
   row.dataset.ts = String(msg.createdAt?.toMillis?.() || 0);
+  row._msg = msg;
+  row._isMine = isMine;
+  if (selection.ids.has(msg.id)) row.classList.add("selected");
 
   const actionsHTML = `<div class="msg-actions">
       ${canReply ? '<button type="button" class="msg-reply-btn" title="Ответить">↩</button>' : ""}
@@ -4333,6 +4346,7 @@ function renderMessage(msg, isMine, senderName) {
   onContextGesture(bubbleArea, (x, y) => openMessageMenu(menuCtx, x, y));
   // Double tap / double click = ❤️, like in Telegram and Instagram.
   const quickReact = (x, y) => {
+    if (selection.active) return;
     if (!canReact || msg._scheduled) return;
     const emoji = quickReactionEmoji();
     const mine = (msg.reactions?.[emoji] || []).includes(currentUser.uid);
@@ -4409,7 +4423,7 @@ function attachSwipeReply(row, msg) {
   row.addEventListener(
     "touchstart",
     (e) => {
-      state = e.touches.length === 1 ? 1 : 0;
+      state = e.touches.length === 1 && !selection.active ? 1 : 0;
       sx = e.touches[0].clientX;
       sy = e.touches[0].clientY;
       dx = 0;
@@ -4458,6 +4472,10 @@ function attachSwipeReply(row, msg) {
 }
 
 function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, canReply }, x, y) {
+  if (selection.active) {
+    toggleSelected(row);
+    return;
+  }
   if (msg._scheduled) {
     openContextMenu({
       x,
@@ -4493,6 +4511,7 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
     reactions,
     items: [
       canReply && { label: "Ответить", icon: MI.reply, onClick: () => startReply(msg) },
+      { label: "Выбрать", icon: MI.check, onClick: () => enterSelectMode(msg.id) },
       msg.effect && EFFECTS[msg.effect] && {
         label: "Повторить эффект",
         icon: MI.sparkle,
@@ -4555,6 +4574,156 @@ async function deleteMessageRow(row, msg, ops, scope = "all") {
   }
 }
 
+// ---------- Selecting several messages (Telegram-style) ----------
+
+const selection = { active: false, ids: new Set() };
+let selectTop = null;
+let selectBottom = null;
+
+function selectedRows() {
+  return [...messagesEl.querySelectorAll(".msg-row.selected")].filter((r) => r._msg);
+}
+
+function buildSelectBars() {
+  selectTop = document.createElement("div");
+  selectTop.className = "select-top glass hidden";
+  selectTop.innerHTML = `<button type="button" class="icon-btn" data-act="cancel" title="Отмена">✕</button><div class="select-count"></div>`;
+  selectBottom = document.createElement("div");
+  selectBottom.className = "select-bottom glass hidden";
+  selectBottom.innerHTML = `
+    <button type="button" class="select-action" data-act="copy">${MI.copy}<span>Копировать</span></button>
+    <button type="button" class="select-action" data-act="forward">${MI.forward}<span>Переслать</span></button>
+    <button type="button" class="select-action danger" data-act="delete">${MI.trash}<span>Удалить</span></button>`;
+  chatSection.append(selectTop, selectBottom);
+  selectTop.querySelector('[data-act="cancel"]').addEventListener("click", () => exitSelectMode());
+  selectBottom.addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "copy") copySelected();
+    if (act === "forward") forwardSelected();
+    if (act === "delete") deleteSelected(e.clientX, e.clientY);
+  });
+}
+
+function enterSelectMode(firstId) {
+  if (!selectTop) buildSelectBars();
+  selection.active = true;
+  selection.ids = new Set(firstId ? [firstId] : []);
+  chatSection.classList.add("select-mode");
+  messagesEl.querySelectorAll(".msg-row").forEach((r) => r.classList.toggle("selected", selection.ids.has(r.dataset.msgId)));
+  reveal(selectTop);
+  reveal(selectBottom);
+  updateSelectBars();
+}
+
+function exitSelectMode() {
+  if (!selection.active) return;
+  selection.active = false;
+  selection.ids.clear();
+  chatSection.classList.remove("select-mode");
+  messagesEl.querySelectorAll(".msg-row.selected").forEach((r) => r.classList.remove("selected"));
+  conceal(selectTop);
+  conceal(selectBottom);
+}
+
+function updateSelectBars() {
+  const n = selection.ids.size;
+  const label = selectTop.querySelector(".select-count");
+  morphText(label, `${n} ${pluralRu(n, "сообщение", "сообщения", "сообщений")}`, 1);
+  const rows = selectedRows();
+  const ops = messageOps();
+  const allMine = rows.length && rows.every((r) => r._isMine);
+  selectBottom.querySelector('[data-act="delete"]').disabled = !n || !(ops.hide || (allMine && ops.del));
+  selectBottom.querySelector('[data-act="forward"]').disabled = !rows.some((r) => !r._msg.call && !r._msg._scheduled && !r._msg._locked);
+  selectBottom.querySelector('[data-act="copy"]').disabled = !rows.some((r) => r._msg.text);
+  if (!n) exitSelectMode();
+}
+
+function toggleSelected(row) {
+  const id = row.dataset.msgId;
+  if (!id || row.classList.contains("pending-upload")) return;
+  const on = !selection.ids.has(id);
+  if (on) selection.ids.add(id);
+  else selection.ids.delete(id);
+  row.classList.toggle("selected", on);
+  animate(row.querySelector(".msg-group") || row, [{ transform: "scale(.97)" }, { transform: "none" }], { spring: "jelly" });
+  updateSelectBars();
+}
+
+// In select mode a tap anywhere on a message toggles it (nothing else fires).
+messagesEl.addEventListener(
+  "click",
+  (e) => {
+    if (!selection.active) return;
+    const row = e.target.closest(".msg-row");
+    e.stopPropagation();
+    e.preventDefault();
+    if (row) toggleSelected(row);
+  },
+  true
+);
+
+function sortedSelection() {
+  return selectedRows()
+    .map((r) => r._msg)
+    .sort((a, b) => (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0));
+}
+
+async function copySelected() {
+  const msgs = sortedSelection().filter((m) => m.text && !DEFAULT_CAPTIONS.includes(m.text));
+  const multi = msgs.length > 1;
+  const text = msgs
+    .map((m) => (multi ? `${replySenderLabel(m)}, [${fmtTime(m.createdAt)}]\n${stripRich(m.text)}` : stripRich(m.text)))
+    .join("\n\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(msgs.length > 1 ? "Сообщения скопированы" : "Текст скопирован", { icon: "📋" });
+    exitSelectMode();
+  } catch (_) {
+    toast("Не удалось скопировать", { tone: "error" });
+  }
+}
+
+function forwardSelected() {
+  const msgs = sortedSelection().filter((m) => !m.call && !m._scheduled && !m._locked);
+  if (!msgs.length) return;
+  exitSelectMode();
+  openForward(msgs);
+}
+
+function deleteSelected(x, y) {
+  const rows = selectedRows();
+  const ops = messageOps();
+  const allMine = rows.every((r) => r._isMine);
+  const run = async (scope) => {
+    exitSelectMode();
+    await Promise.all(rows.map((r) => dissolveRow(r)));
+    const failed = [];
+    for (const r of rows) {
+      try {
+        if (scope === "me") await ops.hide(r._msg.id);
+        else await ops.del(r._msg.id);
+      } catch (err) {
+        console.error(err);
+        failed.push(r);
+      }
+    }
+    if (failed.length) {
+      rerenderMessages();
+      toast("Не все сообщения удалось удалить", { tone: "error" });
+    }
+  };
+  const n = rows.length;
+  openContextMenu({
+    x,
+    y: y - 8,
+    items: [
+      ops.hide && { label: `Удалить у меня (${n})`, icon: MI.trash, onClick: () => run("me") },
+      allMine && ops.del && { label: `Удалить у всех (${n})`, icon: MI.trash, danger: true, onClick: () => run("all") },
+    ],
+  });
+  document.querySelector(".ctx-menu")?.classList.add("delete-choice");
+}
+
 // ---------- Forwarding ----------
 
 let forwardingMsg = null;
@@ -4613,13 +4782,15 @@ function renderForwardList() {
       b.querySelector(".pick-item-name").textContent = t.name;
       b.querySelector(".pick-item-sub").textContent = t.sub;
       b.addEventListener("click", async () => {
-        const msg = forwardingMsg;
-        if (!msg) return;
+        const list = Array.isArray(forwardingMsg) ? forwardingMsg : forwardingMsg ? [forwardingMsg] : [];
+        if (!list.length) return;
         b.disabled = true;
-        const attachment = attachmentOf(msg);
-        const extra = { forwardedFrom: { name: msg.forwardedFrom?.name || replySenderLabel(msg) } };
         try {
-          await t.send(msg.text || replyPreviewText(msg), attachment, extra);
+          for (const msg of list) {
+            const attachment = attachmentOf(msg);
+            const extra = { forwardedFrom: { name: msg.forwardedFrom?.name || replySenderLabel(msg) } };
+            await t.send(msg.text || replyPreviewText(msg), attachment, extra);
+          }
           b.classList.add("sent");
           burst(...centerOf(b), { count: 10, spread: 50, colors: ["#7ff0b4", "#2fcf7f", ...accentColors()] });
         } catch (err) {
@@ -8985,6 +9156,10 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (activeCtx) {
     closeContextMenu();
+    return;
+  }
+  if (selection.active) {
+    exitSelectMode();
     return;
   }
   if (!lightboxEl.classList.contains("hidden")) {
