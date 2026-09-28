@@ -833,8 +833,119 @@ function openContactProfile(uid, profile) {
   );
 
   renderContactProfileActions(uid);
+  renderSharedMedia(currentChatType === "contact" && currentOtherUid === uid);
   showOverlay(profileViewOverlay);
   staggerProfileView();
+}
+
+// ---------- Shared media in the profile (Медиа · Файлы · Ссылки · Голосовые) ----------
+
+const sharedMediaEl = document.createElement("div");
+sharedMediaEl.className = "shared-media hidden";
+let sharedTab = "media";
+
+function sharedMediaGroups() {
+  const out = { media: [], files: [], links: [], voice: [] };
+  [...shownMessages].reverse().forEach((m) => {
+    if (m._scheduled || m._locked) return;
+    const type = m.fileType || "";
+    if (m.imageUrl || (m.fileUrl && (type.startsWith("image/") || type.startsWith("video/")))) out.media.push(m);
+    else if (m.voiceUrl || m.videoNoteUrl || (m.fileUrl && type.startsWith("audio/"))) out.voice.push(m);
+    else if (m.fileUrl) out.files.push(m);
+    const url = m.linkPreview?.url || firstUrl(m.text || "");
+    if (url) out.links.push({ m, url });
+  });
+  return out;
+}
+
+function jumpToShared(m) {
+  hideOverlay(profileViewOverlay);
+  setTimeout(() => scrollToMessage(m.id), 260);
+}
+
+function renderSharedMedia(show) {
+  if (!sharedMediaEl.isConnected) profileViewActions.parentElement.appendChild(sharedMediaEl);
+  const g = show ? sharedMediaGroups() : null;
+  const total = g ? g.media.length + g.files.length + g.links.length + g.voice.length : 0;
+  sharedMediaEl.classList.toggle("hidden", !total);
+  if (!total) return;
+  const TABS = [
+    ["media", "Медиа"],
+    ["files", "Файлы"],
+    ["links", "Ссылки"],
+    ["voice", "Голосовые"],
+  ].filter(([k]) => g[k].length);
+  if (!TABS.some(([k]) => k === sharedTab)) sharedTab = TABS[0][0];
+  sharedMediaEl.innerHTML = `<div class="sm-tabs">${TABS.map(
+    ([k, label]) => `<button type="button" class="sm-tab${k === sharedTab ? " active" : ""}" data-tab="${k}">${label}<span>${g[k].length}</span></button>`
+  ).join("")}</div><div class="sm-body"></div>`;
+  const body = sharedMediaEl.querySelector(".sm-body");
+  const fill = () => {
+    body.innerHTML = "";
+    body.className = "sm-body sm-" + sharedTab;
+    if (sharedTab === "media") {
+      g.media.forEach((m) => {
+        const url = m.imageUrl || m.fileUrl;
+        const isVideo = (m.fileType || "").startsWith("video/");
+        const cell = document.createElement("button");
+        cell.type = "button";
+        cell.className = "sm-cell";
+        if (isVideo) {
+          const v = document.createElement("video");
+          v.src = url;
+          v.muted = true;
+          v.preload = "metadata";
+          v.playsInline = true;
+          cell.append(v);
+          cell.insertAdjacentHTML("beforeend", '<span class="sm-play">▶</span>');
+          cell.addEventListener("click", () => jumpToShared(m));
+        } else {
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = "";
+          img.loading = "lazy";
+          cell.append(img);
+          cell.addEventListener("click", () => openLightbox(img));
+        }
+        body.appendChild(cell);
+      });
+    } else {
+      const rows = sharedTab === "links" ? g.links : g[sharedTab].map((m) => ({ m }));
+      rows.forEach(({ m, url }) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "sm-row";
+        let icon = "📎";
+        let title = m.fileName || "Файл";
+        let sub = fmtFileSize(m.fileSize || 0);
+        if (sharedTab === "voice") {
+          icon = m.videoNoteUrl ? (m.videoShape === "triangle" ? "🔺" : "⭕") : m.voiceUrl ? "🎤" : "🎵";
+          title = m.voiceUrl ? "Голосовое сообщение" : m.videoNoteUrl ? "Видеосообщение" : m.fileName || "Аудио";
+          sub = fmtDuration(m.duration || 0);
+        } else if (sharedTab === "links") {
+          icon = "🔗";
+          title = m.linkPreview?.title || url.replace(/^https?:\/\//, "");
+          sub = m.linkPreview?.site || new URL(url).hostname;
+        }
+        row.innerHTML = `<span class="sm-icon">${icon}</span><span class="sm-meta"><span class="sm-title"></span><span class="sm-sub"></span></span><span class="sm-date"></span>`;
+        row.querySelector(".sm-title").textContent = title;
+        row.querySelector(".sm-sub").textContent = sub;
+        row.querySelector(".sm-date").textContent = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleDateString([], { day: "numeric", month: "short" }) : "";
+        row.addEventListener("click", () => (sharedTab === "links" ? window.open(url, "_blank", "noopener") : jumpToShared(m)));
+        body.appendChild(row);
+      });
+    }
+    stagger(body.children, { y: 10, blur: 0, scale: 0.94, step: 18, spring: "smooth" });
+  };
+  sharedMediaEl.querySelectorAll(".sm-tab").forEach((t) =>
+    t.addEventListener("click", () => {
+      if (t.dataset.tab === sharedTab) return;
+      sharedTab = t.dataset.tab;
+      sharedMediaEl.querySelectorAll(".sm-tab").forEach((x) => x.classList.toggle("active", x === t));
+      fill();
+    })
+  );
+  fill();
 }
 
 function staggerProfileView() {
@@ -851,6 +962,7 @@ function staggerProfileView() {
 
 function openGroupInfo(group) {
   if (!group) return;
+  renderSharedMedia(currentChatId === group.id);
   profileViewAvatar.innerHTML = groupAvatarHTML(group);
   profileViewName.textContent = group.name;
   profileViewUsername.textContent = group.type === "channel" ? "Канал" : "Группа";
@@ -3408,6 +3520,7 @@ async function renderGroupMessagesList(msgs) {
   finishMessagesRender(snap);
 }
 
+let shownMessages = [];
 function rerenderMessages() {
   const now = Date.now();
   const me = currentUser.uid;
@@ -3426,6 +3539,7 @@ function rerenderMessages() {
     .filter((m) => !currentClearedAt || !m.createdAt?.toMillis || m.createdAt.toMillis() > currentClearedAt)
     .filter((m) => !(m.hiddenFor || []).includes(me)) // "deleted for me"
     .sort((a, b) => (a._scheduled ? 1 : 0) - (b._scheduled ? 1 : 0) || ms(a) - ms(b));
+  shownMessages = visible;
   if (currentChatType === "contact") {
     renderPlainMessages(visible, (msg) => msg.senderId === me);
   } else if (currentChatType === "group" || currentChatType === "channel") {
@@ -7504,7 +7618,7 @@ let currentLanguage = "ru";
 // swapped through the EN dictionary. User content (messages, names) is skipped.
 
 const I18N_SKIP =
-  ".bubble, .mention-name, .link-bar-meta, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
+  ".bubble, .mention-name, .sm-meta, .link-bar-meta, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
 const I18N_ATTRS = ["placeholder", "title", "aria-label"];
 const CYRILLIC = /[А-Яа-яЁё]/;
 let i18nObserver = null;

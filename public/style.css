@@ -9204,3 +9204,48 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 .folder-tab.folder-add { font-size: 18px; font-weight: 800; padding-left: 14px; padding-right: 14px; opacity: 0.7; }
 .folder-tab.folder-add:hover { opacity: 1; }
 .modal-card .fe-list { max-height: 45vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+
+/* ---------- Shared media in profiles ---------- */
+.shared-media { width: 100%; margin-top: 14px; }
+.sm-tabs { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none; }
+.sm-tab {
+  flex: none;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, transform var(--dur-jelly) var(--ease-jelly);
+}
+.sm-tab span { margin-left: 6px; opacity: 0.6; font-weight: 600; }
+.sm-tab.active { background: var(--accent-grad); color: var(--on-accent); border-color: transparent; }
+.sm-tab:active { transform: scale(0.94); }
+.sm-body.sm-media { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.sm-cell { position: relative; aspect-ratio: 1; padding: 0; border: none; border-radius: 8px; overflow: hidden; background: rgba(255, 255, 255, 0.05); cursor: pointer; }
+.sm-cell img, .sm-cell video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sm-play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 20px; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6); }
+.sm-body:not(.sm-media) { display: flex; flex-direction: column; gap: 2px; }
+.sm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: none;
+  border-radius: 14px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.sm-row:hover { background: rgba(255, 255, 255, 0.06); }
+.sm-icon { width: 38px; height: 38px; flex: none; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 18%, transparent); font-size: 17px; }
+.sm-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sm-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sm-sub { font-size: 12.5px; opacity: 0.65; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sm-date { font-size: 12px; opacity: 0.5; flex: none; }

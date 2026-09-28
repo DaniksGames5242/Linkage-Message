@@ -3,6 +3,12 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Медиа": "Media",
+  "Файлы": "Files",
+  "Ссылки": "Links",
+  "Голосовые": "Voice",
+  "Голосовое сообщение": "Voice message",
+  "Видеосообщение": "Video message",
   "Пометить как непрочитанное": "Mark as unread",
   "Добавить в папку": "Add to folder",
   "Изменить папку": "Edit folder",
