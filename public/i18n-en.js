@@ -3,6 +3,8 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Не удалось соединиться": "Couldn't connect",
+  "Не удалось соединиться: нужен TURN-сервер (см. README → Звонки)": "Couldn't connect: a TURN server is needed (see README → Calls)",
   "Сохранено": "Saved",
   "История опубликована — её видят ваши контакты": "Story posted — your contacts can see it",
   "Далее": "Next",

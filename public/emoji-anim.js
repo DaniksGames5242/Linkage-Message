@@ -124,6 +124,8 @@ export function animatedEmoji(emoji, size, { play = "visible", loop = false } = 
         animationData: JSON.parse(JSON.stringify(data)),
         rendererSettings: { preserveAspectRatio: "xMidYMid meet" },
       });
+      // Native frame rate (the emoji are drawn at 30 fps) instead of redrawing the SVG every display frame.
+      anim.setSubframe(false);
       anim.addEventListener("DOMLoaded", () => {
         fallback.remove();
         wrap.classList.add("ready");

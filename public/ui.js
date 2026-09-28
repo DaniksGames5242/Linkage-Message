@@ -4,7 +4,14 @@
 // Chromium), pointer-reactive highlights and small celebratory effects.
 
 export const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const supportsLinearEasing = typeof CSS !== "undefined" && CSS.supports?.("animation-timing-function", "linear(0, 1)");
+// Safari/WebKit (and every browser on iOS) understands linear() easings but
+// can't hand them to the GPU compositor, so each frame of such an animation
+// is computed on the main thread and stutters whenever it's busy. There the
+// springs become cubic-bezier curves, which run on the compositor.
+const ua = navigator.userAgent;
+export const isWebKit = /iP(hone|ad|od)/.test(ua) || (/AppleWebKit/.test(ua) && !/Chrome\/|Chromium|Edg\//.test(ua));
+const supportsLinearEasing =
+  !isWebKit && typeof CSS !== "undefined" && CSS.supports?.("animation-timing-function", "linear(0, 1)");
 
 // ---------- Springs ----------
 
@@ -33,7 +40,10 @@ export function spring({ stiffness = 200, damping = 20, mass = 1, velocity = 0 }
     } else calm = 0;
   }
   if (!supportsLinearEasing) {
-    return { easing: zeta < 0.75 ? "cubic-bezier(.34,1.56,.64,1)" : "cubic-bezier(.22,1,.36,1)", duration: Math.round(duration * 1000) };
+    // Overshoot roughly as much as the spring would, settle a bit sooner
+    // (a bezier has no long tail to wait out).
+    const easing = zeta < 0.45 ? "cubic-bezier(.3,1.7,.5,1)" : zeta < 0.75 ? "cubic-bezier(.34,1.45,.64,1)" : "cubic-bezier(.22,1,.36,1)";
+    return { easing, duration: Math.round(Math.min(duration, 1.1) * 800) };
   }
   const n = Math.min(90, Math.max(24, Math.round(duration * 45)));
   const pts = [];
@@ -78,6 +88,14 @@ export function animate(el, keyframes, opts = {}) {
       return rest;
     });
   }
+  // z-index can't be animated on the compositor, and one such property drags
+  // the whole animation (transform included) onto the main thread: hold it
+  // as a plain style for the duration instead.
+  let zIndex = null;
+  if (Array.isArray(keyframes) && keyframes.some((k) => k && "zIndex" in k)) {
+    zIndex = keyframes.find((k) => "zIndex" in k).zIndex;
+    keyframes = keyframes.map(({ zIndex: _z, ...k }) => k);
+  }
   const { spring: springName, ...rest } = opts;
   const s = springName ? SPRINGS[springName] : null;
   // "backwards" holds the first frame during any delay; the last frame is
@@ -93,7 +111,14 @@ export function animate(el, keyframes, opts = {}) {
     options.duration = motionScale ? options.duration * motionScale : 1;
     options.delay = motionScale ? (options.delay || 0) * motionScale : 0;
   }
-  return el.animate(keyframes, options);
+  const anim = el.animate(keyframes, options);
+  if (zIndex !== null) {
+    const prev = el.style.zIndex;
+    el.style.zIndex = zIndex;
+    const restore = () => (el.style.zIndex = prev);
+    anim.finished.then(restore, restore);
+  }
+  return anim;
 }
 
 // Cascades a list of elements in with a small rise + blur, one after another.
@@ -372,12 +397,20 @@ export function hidePopover(el) {
 
 // Reveals / collapses an inline block (reply preview, emoji tray, inline
 // confirmations) by animating its height together with a soft blur.
+const inFlow = (el) => !["absolute", "fixed"].includes(getComputedStyle(el).position);
+
 export function reveal(el) {
   if (!el) return;
   (el._closeAnims || []).forEach((a) => a.cancel());
   el._closeAnims = null;
   if (!el.classList.contains("hidden") && !el.classList.contains("is-closing")) return;
   el.classList.remove("hidden", "is-closing");
+  // Overlaid elements don't push anything around: skip the (layout-heavy)
+  // height morph and keep it to transform/opacity, which run on the GPU.
+  if (!inFlow(el)) {
+    animate(el, [{ opacity: 0, transform: "translateY(-10px) scale(.97)" }, { opacity: 1, transform: "none" }], { spring: "smooth" });
+    return;
+  }
   const h = el.getBoundingClientRect().height;
   animate(
     el,
@@ -393,7 +426,13 @@ export function conceal(el) {
   if (!el || el.classList.contains("hidden") || el.classList.contains("is-closing")) return;
   el.classList.add("is-closing");
   const h = el.getBoundingClientRect().height;
-  const a = el.animate(
+  const a = !inFlow(el)
+    ? el.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-8px) scale(.97)" }], {
+        duration: reducedMotion ? 60 : 200,
+        easing: "cubic-bezier(.4,0,.2,1)",
+        fill: "forwards",
+      })
+    : el.animate(
     [
       { height: h + "px", opacity: 1, filter: "blur(0px)", overflow: "hidden" },
       { height: "0px", opacity: 0, filter: "blur(8px)", overflow: "hidden", paddingTop: "0px", paddingBottom: "0px" },
@@ -452,8 +491,8 @@ export function swapPanels({ container, clip, outgoing, incoming, direction = 1,
     ghost
       .animate(
         [
-          { transform: "none", opacity: 1, filter: "blur(0px)" },
-          { transform: `translateX(${-60 * direction}px) scale(.96)`, opacity: 0, filter: "blur(8px)" },
+          { transform: "none", opacity: 1 },
+          { transform: `translateX(${-60 * direction}px) scale(.96)`, opacity: 0 },
         ],
         { duration: 260, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" }
       )
@@ -1008,20 +1047,3 @@ export function progressToast(label, { onCancel } = {}) {
   };
 }
 
-// While scrolling, pause decorative CSS loops (see .is-scrolling in style.css).
-{
-  let t = 0;
-  const root = document.documentElement;
-  document.addEventListener(
-    "scroll",
-    () => {
-      if (!t) root.classList.add("is-scrolling");
-      clearTimeout(t);
-      t = setTimeout(() => {
-        root.classList.remove("is-scrolling");
-        t = 0;
-      }, 140);
-    },
-    { capture: true, passive: true }
-  );
-}

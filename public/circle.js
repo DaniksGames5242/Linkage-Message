@@ -396,9 +396,38 @@ export function buildVideoNote(url, duration, fmt, shape = "circle") {
     knob.setAttribute("cx", m ? m.a * p.x + m.c * p.y + m.e : p.x);
     knob.setAttribute("cy", m ? m.b * p.x + m.d * p.y + m.f : p.y);
   };
+  // Ring and knob follow the playhead every display frame. timeupdate only
+  // fires ~4 times a second, so between reports the position is extrapolated
+  // from the playback clock (browsers that update currentTime every frame
+  // simply keep resyncing it).
+  let tick = 0;
+  let lastT = -1;
+  let lastAt = 0;
+  const follow = (now) => {
+    tick = 0;
+    if (el !== active || v.paused || v.ended) return;
+    if (!el._scrubbing && total()) {
+      const t = v.currentTime;
+      if (t !== lastT) {
+        lastT = t;
+        lastAt = now;
+      }
+      const est = Math.min(total(), t + ((now - lastAt) / 1000) * (v.playbackRate || 1));
+      showProgress(est / total());
+    }
+    tick = requestAnimationFrame(follow);
+  };
+  const startFollow = () => {
+    lastT = -1;
+    if (!tick) tick = requestAnimationFrame(follow);
+  };
+  v.addEventListener("playing", startFollow);
+  v.addEventListener("play", startFollow);
+  v.addEventListener("seeked", () => (lastT = -1));
   v.addEventListener("timeupdate", () => {
     if (el !== active || !total() || el._scrubbing) return;
-    showProgress(v.currentTime / total());
+    if (v.paused) showProgress(v.currentTime / total());
+    else startFollow();
   });
 
   // Drag along the ring to rewind / fast-forward.

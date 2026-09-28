@@ -1,5 +1,8 @@
 {
   "cleanUrls": true,
   "trailingSlash": false,
-  "outputDirectory": "public"
-} 
+  "outputDirectory": "public",
+  "functions": {
+    "api/turn.js": { "includeFiles": "public/firebase-config.js", "maxDuration": 10 }
+  }
+}

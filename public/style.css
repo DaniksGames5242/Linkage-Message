@@ -1695,13 +1695,13 @@ button.is-success::after {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: typingSheen 1.2s linear infinite;
+  animation: typingPulse 1.2s ease-in-out infinite alternate;
 }
 
-@keyframes typingSheen {
-  to {
-    background-position: -200% 0;
-  }
+/* Opacity only: runs on the GPU instead of repainting the header text every frame. */
+@keyframes typingPulse {
+  from { opacity: 1; }
+  to { opacity: 0.55; }
 }
 
 #messages {
@@ -3720,7 +3720,7 @@ input.switch:checked:active::before {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 30%), rgba(12, 9, 8, 0.62);
-    transition: transform var(--dur-smooth) var(--ease-smooth), opacity 0.45s var(--ease-out), filter 0.45s, visibility 0s;
+    transition: transform var(--dur-smooth) var(--ease-smooth), opacity 0.45s var(--ease-out), visibility 0s;
   }
 
   #sidebar::before {
@@ -3730,10 +3730,9 @@ input.switch:checked:active::before {
   #sidebar.chat-open {
     transform: translateX(-26%) scale(0.94);
     opacity: 0;
-    filter: blur(6px);
     pointer-events: none;
     visibility: hidden;
-    transition: transform var(--dur-smooth) var(--ease-smooth), opacity 0.45s var(--ease-out), filter 0.45s, visibility 0s 0.5s;
+    transition: transform var(--dur-smooth) var(--ease-smooth), opacity 0.45s var(--ease-out), visibility 0s 0.5s;
   }
 
   #chat {
@@ -8884,9 +8883,6 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
    Off-screen rows skip layout/paint entirely; decorative loops pause while
    the user scrolls or the tab is busy, so frames go to scrolling. */
 .msg-row:nth-last-child(n+40) { content-visibility: auto; contain-intrinsic-size: auto 64px; }
-.room-item:not(.swiping) { content-visibility: auto; contain-intrinsic-size: auto 72px; }
-.is-scrolling *, .is-scrolling *::before, .is-scrolling *::after { animation-play-state: paused !important; }
-.is-scrolling .room-item, .is-scrolling .msg-row { pointer-events: none; }
 .fx-lite .bubble, .fx-lite .room-item, .fx-lite .glass { box-shadow: none; }
 .fx-lite #chat[data-wall]::before { will-change: auto; }
 
@@ -8964,3 +8960,8 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 .msg-file-card, .contact-card, .poll, .location-card, .call-card, .file-chip, .voice-player { white-space: normal; }
 #sidebar.under-page > * { visibility: hidden; }
 #sidebar.under-page > #fab-new-chat { opacity: 0; }
+
+/* Video notes: the ring is driven every frame from JS (with its knob), so no
+   easing lag between them. */
+.vnote-ring circle,
+.vnote-ring path { transition: none; }

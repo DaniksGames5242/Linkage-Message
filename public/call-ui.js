@@ -3,6 +3,7 @@
 
 import { newCallId, createCall, updateCall, listenCall, listenIncomingCalls, addCandidate, listenCandidates } from "./calls.js";
 import { animate, toast, reducedMotion, pauseBackdrop } from "./ui.js";
+import { auth } from "./firebase.js";
 
 const RING_TIMEOUT_MS = 45 * 1000;
 const STALE_INCOMING_MS = 60 * 1000;
@@ -25,11 +26,53 @@ let el = {}; // DOM refs
 let call = null; // active call state
 const handledIncoming = new Set();
 
+// ---------- ICE servers (STUN + TURN relay) ----------
+// Temporary TURN credentials come from /api/turn (a Vercel function that
+// keeps the relay's secret). They're fetched ahead of time and refreshed
+// every few hours, so starting or answering a call never waits on them.
+
+let iceCache = { at: 0, servers: null, promise: null, configured: false };
+const ICE_TTL_MS = 6 * 60 * 60 * 1000;
+
+function fetchIceServers() {
+  if (iceCache.promise) return iceCache.promise;
+  iceCache.promise = (async () => {
+    try {
+      const token = await auth?.currentUser?.getIdToken?.();
+      if (!token) return;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const r = await fetch("/api/turn", { headers: { Authorization: "Bearer " + token }, signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      iceCache.servers = Array.isArray(data.iceServers) ? data.iceServers : [];
+      iceCache.configured = !!data.configured;
+      iceCache.at = Date.now();
+    } catch (err) {
+      console.warn("TURN credentials unavailable:", err.message || err);
+    } finally {
+      iceCache.promise = null;
+    }
+  })();
+  return iceCache.promise;
+}
+
+async function iceServers() {
+  if (!iceCache.servers || Date.now() - iceCache.at > ICE_TTL_MS) {
+    // Waits at most ~1.5 s: a call on plain STUN is better than no call.
+    await Promise.race([fetchIceServers(), new Promise((r) => setTimeout(r, 1500))]);
+  }
+  const base = window.LINKAGE_ICE_SERVERS || [{ urls: "stun:stun.l.google.com:19302" }];
+  return [...base, ...(iceCache.servers || [])];
+}
+
 // ---------- Public API ----------
 
 export function initCalls(context) {
   ctx = context;
   buildDOM();
+  setTimeout(fetchIceServers, 3000);
   listenIncomingCalls(ctx.me, onIncomingList, (err) => {
     if (err?.code === "permission-denied") {
       console.warn("Calls are disabled until the updated firestore.rules are published.");
@@ -69,7 +112,8 @@ export async function startCall({ chatId, otherUid, profile, kind }) {
   if (!call) return; // hung up while the permission prompt was open
   attachLocal();
 
-  const pc = createPeer();
+  const pc = await createPeer();
+  if (!call) return;
   call.localStream.getTracks().forEach((t) => pc.addTrack(t, call.localStream));
   // Always negotiate a video slot, so the camera can be switched on later in
   // an audio call without renegotiating.
@@ -156,7 +200,8 @@ async function acceptIncoming() {
   }
   if (!call) return;
   attachLocal();
-  const pc = createPeer();
+  const pc = await createPeer();
+  if (!call) return;
   call.localStream.getTracks().forEach((t) => pc.addTrack(t, call.localStream));
   try {
     await pc.setRemoteDescription(call.offer);
@@ -211,8 +256,8 @@ async function onCallDoc(doc) {
   if (doc.status === "ended") return finish("ended", false);
 }
 
-function createPeer() {
-  const pc = new RTCPeerConnection({ iceServers: window.LINKAGE_ICE_SERVERS || [{ urls: "stun:stun.l.google.com:19302" }] });
+async function createPeer() {
+  const pc = new RTCPeerConnection({ iceServers: await iceServers() });
   call.pc = pc;
   pc.onicecandidate = (e) => {
     if (!e.candidate || !call) return;
@@ -256,7 +301,15 @@ function onConnectionState(state) {
     clearTimeout(call.dropTimer);
     call.dropTimer = setTimeout(() => call && finish("ended", true, "Соединение потеряно"), 12000);
   } else if (state === "failed") {
-    finish("ended", true, call.connectedAt ? "Соединение потеряно" : "Не удалось соединиться. Возможно, нужен TURN-сервер (см. ice-config.js)");
+    finish(
+      "ended",
+      true,
+      call.connectedAt
+        ? "Соединение потеряно"
+        : iceCache.configured
+        ? "Не удалось соединиться"
+        : "Не удалось соединиться: нужен TURN-сервер (см. README → Звонки)"
+    );
   }
 }
 

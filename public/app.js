@@ -2163,9 +2163,16 @@ function moveFolderGlider(animated = true) {
   const toW = tab.offsetWidth + "px";
   folderGlider.style.transform = to;
   folderGlider.style.width = toW;
+  folderGlider.style.transformOrigin = "0 50%";
   if (animated && from && from !== to) {
-    // Stretches like a droplet on the way, then settles.
-    animate(folderGlider, [{ transform: from, width: fromW }, { transform: to, width: toW }], { spring: "bouncy" });
+    // Slides and resizes with transform only (scaleX from the old width), so
+    // it stays on the GPU; stretches like a droplet on the way.
+    const k = (parseFloat(fromW) || tab.offsetWidth) / tab.offsetWidth;
+    animate(
+      folderGlider,
+      [{ transform: `${from} scaleX(${k})` }, { transform: `${to} scaleX(1)` }],
+      { spring: "bouncy" }
+    );
   }
   if (animated) tab.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
 }
@@ -2424,6 +2431,20 @@ function moveChatIndicator() {
   indicatorY = y;
   chatListIndicator.classList.add("visible");
 }
+
+// Rows change height (drafts, typing, fonts loading, stories strip): keep the
+// pill glued to the active row without replaying the glide.
+new ResizeObserver(() => {
+  const active = chatListEl.querySelector(".room-item.active");
+  if (!active || indicatorY === null) return;
+  const y = chatListEl.offsetTop + active.offsetTop;
+  if (Math.abs(y - indicatorY) > 0.5 || Math.abs(parseFloat(chatListIndicator.style.height) - active.offsetHeight) > 0.5) {
+    chatListIndicator.getAnimations().forEach((a) => a.finish());
+    chatListIndicator.style.height = active.offsetHeight + "px";
+    chatListIndicator.style.transform = `translateY(${y}px)`;
+    indicatorY = y;
+  }
+}).observe(chatListEl);
 
 // ---------- Shared chat-view plumbing ----------
 
@@ -2797,8 +2818,10 @@ function updateScrollBottomBtn() {
   scrollBottomBadge.textContent = unreadWhileAway > 99 ? "99+" : String(unreadWhileAway);
   scrollBottomBadge.classList.toggle("hidden", unreadWhileAway === 0);
 }
+let scrollBtnFrame = 0;
 messagesEl.addEventListener("scroll", () => {
-  updateScrollBottomBtn();
+  // Reading scroll metrics forces layout: once per frame is plenty.
+  if (!scrollBtnFrame) scrollBtnFrame = requestAnimationFrame(() => ((scrollBtnFrame = 0), updateScrollBottomBtn()));
   if (activeCtx) closeContextMenu();
 }, { passive: true });
 scrollBottomBtn.addEventListener("click", () => {
@@ -7941,14 +7964,17 @@ function selectTab(tab, animated = true) {
   currentTab = tab;
   tabbar.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === btn));
   const from = tabGlider.style.transform;
-  const fromW = tabGlider.style.width;
   const to = `translateX(${btn.offsetLeft}px)`;
-  const toW = btn.offsetWidth + "px";
   tabGlider.style.transform = to;
-  tabGlider.style.width = toW;
+  tabGlider.style.width = btn.offsetWidth + "px";
   if (animated && changed && from) {
-    // The highlight stretches across like a drop of liquid, then settles.
-    animate(tabGlider, [{ transform: from, width: fromW }, { transform: to, width: toW }], { spring: "bouncy" });
+    // The highlight slides across like a drop of liquid, stretching mid-way.
+    // Transform only, so it runs on the GPU even while the page is busy.
+    animate(
+      tabGlider,
+      [{ transform: from }, { transform: `${from} scaleX(1.18)`, offset: 0.35 }, { transform: to }],
+      { spring: "bouncy" }
+    );
     animate(btn.querySelector(".tab-icon"), [{ transform: "scale(.7) translateY(4px)" }, { transform: "none" }], { spring: "jelly" });
   }
 }
@@ -8939,10 +8965,19 @@ watchMessages(document.querySelectorAll(".auth-error, .attach-error"));
 
 // Messages scroll underneath the floating dock; keep its height in sync so
 // the last bubble always clears it.
+// While the dock animates (emoji panel, reply bar) this would re-lay out the
+// whole message list every frame, so it waits until the size settles.
+let dockTimer = 0;
+let dockWasNearBottom = null;
 new ResizeObserver(() => {
-  const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 160;
-  chatSection.style.setProperty("--dock-h", chatDock.offsetHeight + "px");
-  if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (dockWasNearBottom === null) dockWasNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 160;
+  clearTimeout(dockTimer);
+  dockTimer = setTimeout(() => {
+    const h = chatDock.offsetHeight + "px";
+    if (chatSection.style.getPropertyValue("--dock-h") !== h) chatSection.style.setProperty("--dock-h", h);
+    if (dockWasNearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+    dockWasNearBottom = null;
+  }, 90);
 }).observe(chatDock);
 
 document.addEventListener("keydown", (e) => {
