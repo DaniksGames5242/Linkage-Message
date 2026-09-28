@@ -199,6 +199,11 @@ export async function editMessage(chatId, messageId, newText) {
   });
 }
 
+// "Delete for me": the message stays for the other person.
+export async function hideMessageForMe(chatId, messageId, uid) {
+  await updateDoc(doc(db, "chats", chatId, "messages", messageId), { hiddenFor: arrayUnion(uid) });
+}
+
 export async function deleteMessage(chatId, messageId) {
   await deleteDoc(doc(db, "chats", chatId, "messages", messageId));
 }

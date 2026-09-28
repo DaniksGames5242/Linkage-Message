@@ -2779,32 +2779,45 @@ button.is-success::after {
   transform: rotate(-10deg) scale(1.08);
 }
 
-#settings-menu .settings-menu-item:nth-child(1) {
+/* Each section has its own colour (keyed by section, not position). */
+#settings-menu .settings-menu-item[data-section="profile"] {
   --chip: linear-gradient(135deg, #ffd84a, #ff8a1a);
   --chip-glow: rgba(255, 164, 27, 0.6);
 }
-#settings-menu .settings-menu-item:nth-child(1) svg:first-child {
-  color: #3a1d00;
+#settings-menu .settings-menu-item[data-section="security"] {
+  --chip: linear-gradient(135deg, #ff9f5a, #e2552d);
+  --chip-glow: rgba(226, 85, 45, 0.6);
 }
-#settings-menu .settings-menu-item:nth-child(2) {
+#settings-menu .settings-menu-item[data-section="privacy"] {
   --chip: linear-gradient(135deg, #5ee6a0, #14a37f);
   --chip-glow: rgba(46, 204, 140, 0.6);
 }
-#settings-menu .settings-menu-item:nth-child(3) {
+#settings-menu .settings-menu-item[data-section="notifications"] {
   --chip: linear-gradient(135deg, #ff8a7a, #ff3d6e);
   --chip-glow: rgba(255, 70, 100, 0.6);
 }
-#settings-menu .settings-menu-item:nth-child(4) {
+#settings-menu .settings-menu-item[data-section="chats"] {
   --chip: linear-gradient(135deg, #7fb2ff, #4a63ff);
   --chip-glow: rgba(80, 110, 255, 0.6);
 }
-#settings-menu .settings-menu-item:nth-child(5) {
+#settings-menu .settings-menu-item[data-section="appearance"] {
+  --chip: linear-gradient(135deg, #ff9ad5, #d9468f);
+  --chip-glow: rgba(217, 70, 143, 0.6);
+}
+#settings-menu .settings-menu-item[data-section="data"] {
+  --chip: linear-gradient(135deg, #6ee7f9, #0891b2);
+  --chip-glow: rgba(8, 145, 178, 0.6);
+}
+#settings-menu .settings-menu-item[data-section="language"] {
   --chip: linear-gradient(135deg, #d89bff, #8b4dff);
   --chip-glow: rgba(150, 90, 255, 0.6);
 }
-#settings-menu .settings-menu-item:nth-child(6) {
+#settings-menu .settings-menu-item[data-section="sessions"] {
   --chip: linear-gradient(135deg, #a8a29e, #57534e);
   --chip-glow: rgba(120, 113, 108, 0.6);
+}
+#settings-menu .settings-menu-item[data-section="profile"] svg:first-child {
+  color: #3a1d00;
 }
 
 #new-chat-menu .settings-menu-item:nth-of-type(1) {
@@ -8589,4 +8602,29 @@ html.privacy-veil .settings-panel {
   font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.settings-subhead {
+  margin: 22px 0 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--stroke);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+/* Game emoji in the picker carry a tiny "play" badge. */
+.emoji-option.is-game::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent-grad) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%231f1100'%3E%3Cpath d='M9 6.5v11l9-5.5z'/%3E%3C/svg%3E") center / 8px no-repeat;
+  box-shadow: 0 0 0 1.5px rgba(22, 17, 14, 0.95);
+  pointer-events: none;
 }

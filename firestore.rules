@@ -48,6 +48,12 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']);
     }
 
+    // "Delete for me": a participant may only add their own uid to hiddenFor.
+    function isHideForMe() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hiddenFor'])
+        && request.resource.data.hiddenFor.removeAll(resource.data.get('hiddenFor', [])).hasOnly([request.auth.uid]);
+    }
+
     // Poll votes: a member may only change their own entry in `votes`.
     function isPollVote() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes'])
@@ -168,7 +174,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members
-          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }
@@ -233,7 +239,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
-          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }

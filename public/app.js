@@ -32,6 +32,7 @@ import {
   cancelScheduled,
   editEncryptedMessage,
   votePoll,
+  hideMessageForMe,
 } from "./chats.js";
 import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
 import { listenNotificationsFeed, addBroadcast } from "./notify.js";
@@ -52,6 +53,7 @@ import {
   publishScheduledGroup,
   cancelScheduledGroup,
   voteGroupPoll,
+  hideGroupMessageForMe,
 } from "./groups.js";
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
@@ -478,7 +480,7 @@ function chipRow(container, options, current, onPick, styleFor) {
 
 const lookRadius = document.getElementById("look-radius");
 const lookRadiusValue = document.getElementById("look-radius-value");
-const lookPreview = document.getElementById("look-preview");
+const lookPreview = document.getElementById("chats-preview");
 
 function bounceLookPreview() {
   stagger(lookPreview.querySelectorAll(".cp-bubble"), { y: 8, blur: 0, scale: 0.94, step: 50, spring: "jelly" });
@@ -2840,6 +2842,7 @@ function rerenderMessages() {
     })
     .filter(Boolean)
     .filter((m) => !currentClearedAt || !m.createdAt?.toMillis || m.createdAt.toMillis() > currentClearedAt)
+    .filter((m) => !(m.hiddenFor || []).includes(me)) // "deleted for me"
     .sort((a, b) => (a._scheduled ? 1 : 0) - (b._scheduled ? 1 : 0) || ms(a) - ms(b));
   if (currentChatType === "contact") {
     renderPlainMessages(visible, (msg) => msg.senderId === me);
@@ -3056,6 +3059,7 @@ function messageOps() {
     return {
       edit: (id, text) => editGroupMessage(currentChatId, id, text),
       del: (id) => deleteGroupMessage(currentChatId, id),
+      hide: (id) => hideGroupMessageForMe(currentChatId, id, currentUser.uid),
       react: (id, emoji, add) => toggleGroupReaction(currentChatId, id, emoji, currentUser.uid, add),
       vote: (id, choices) => voteGroupPoll(currentChatId, id, currentUser.uid, choices),
     };
@@ -3070,6 +3074,7 @@ function messageOps() {
         return editMessage(currentChatId, id, text);
       },
       del: (id) => deleteMessage(currentChatId, id),
+      hide: (id) => hideMessageForMe(currentChatId, id, currentUser.uid),
       react: (id, emoji, add) => toggleReaction(currentChatId, id, emoji, currentUser.uid, add),
       vote: (id, choices) => votePoll(currentChatId, id, currentUser.uid, choices),
     };
@@ -3339,17 +3344,19 @@ function gameNode(msg) {
   }
   const holder = document.createElement("div");
   holder.className = "game-holder";
-  holder.title = "Нажмите, чтобы повторить";
+  holder.title = "Нажмите, чтобы бросить ещё раз";
   holder.appendChild(made.el);
   const celebrate = (delay) => {
     if (isWin(msg.game)) setTimeout(() => playEffect("confetti"), delay);
   };
   if (fresh) celebrate(made.duration);
+  // Tapping a game sends a fresh roll of the same game (like Telegram).
   holder.addEventListener("click", (e) => {
     e.stopPropagation();
-    const again = renderGame(msg.game, true);
-    holder.replaceChildren(again.el);
-    celebrate(again.duration);
+    const emoji = Object.keys(GAMES).find((k) => GAMES[k].kind === msg.game.kind);
+    if (!emoji || composer.classList.contains("hidden")) return;
+    animate(holder, [{ transform: "scale(.85)" }, { transform: "none" }], { spring: "jelly" });
+    sendGame(emoji);
   });
   gameNodes.set(key, holder);
   return holder;
@@ -3681,7 +3688,8 @@ const quickReactionEmoji = () => (QUICK_REACTIONS.includes(myProfile?.chatPrefs?
 function renderMessage(msg, isMine, senderName) {
   const ops = messageOps();
   const canEdit = isMine && !!ops.edit;
-  const canDelete = isMine && !!ops.del;
+  // Anyone can remove a message from their own view; senders from everyone's.
+  const canDelete = (isMine && !!ops.del) || !!ops.hide;
   const canReact = !!ops.react;
   const canReply = currentChatType !== "notifications" && !composer.classList.contains("hidden");
 
@@ -3954,15 +3962,37 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
         onClick: () => setPinnedMessage(pinnedId === msg.id ? null : msg),
       },
       canEdit && hasText && { label: "Изменить", icon: MI.edit, onClick: () => startEditingMessage(row, msg, ops.edit) },
-      canDelete && { label: "Удалить", icon: MI.trash, danger: true, onClick: () => deleteMessageRow(row, msg, ops) },
+      canDelete && { label: "Удалить", icon: MI.trash, danger: true, onClick: () => askDeleteMessage(row, msg, ops, isMine, x, y) },
     ],
   });
 }
 
-async function deleteMessageRow(row, msg, ops) {
-  if (!confirm("Удалить сообщение?")) return;
+// Delete for me / for everyone, like Telegram.
+function askDeleteMessage(row, msg, ops, isMine, x, y) {
+  if (!ops.hide) {
+    if (confirm("Удалить сообщение?")) deleteMessageRow(row, msg, ops, "all");
+    return;
+  }
+  setTimeout(() => {
+    openContextMenu({
+      x,
+      y,
+      items: [
+        { label: "Удалить у меня", icon: MI.trash, onClick: () => deleteMessageRow(row, msg, ops, "me") },
+        isMine && !msg._scheduled && { label: "Удалить у всех", icon: MI.trash, danger: true, onClick: () => deleteMessageRow(row, msg, ops, "all") },
+      ],
+    });
+    document.querySelector(".ctx-menu")?.classList.add("delete-choice");
+  }, 60);
+}
+
+async function deleteMessageRow(row, msg, ops, scope = "all") {
   await dissolveRow(row);
   try {
+    if (scope === "me") {
+      await ops.hide(msg.id);
+      return;
+    }
     await ops.del(msg.id);
     if (currentChatData()?.pinned?.id === msg.id) setPinnedMessage(null);
   } catch (err) {
@@ -4376,7 +4406,9 @@ function rememberEmoji(emoji) {
 function emojiButton(emoji) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "emoji-option";
+  // 🎲 🎯 🏀 🎰 live among the others; sent on their own they become a game.
+  btn.className = "emoji-option" + (GAMES[emoji] ? " is-game" : "");
+  if (GAMES[emoji]) btn.title = `${GAMES[emoji].label} — отправьте отдельно, чтобы сыграть`;
   btn.dataset.emoji = emoji;
   btn.textContent = emoji;
   return btn;
@@ -4920,7 +4952,6 @@ function openAttachMenu() {
   openContextMenu({
     x: r.left,
     y: r.top - 8,
-    reactions: canPlay ? { emojis: Object.keys(GAMES), mine: new Set(), onPick: (emoji) => sendGame(emoji) } : null,
     items: [
       { label: "Фото, видео или файл", icon: MI.image, onClick: () => attachInput.click() },
       social && { label: "Опрос", icon: MI.poll, onClick: openPollCreator },
@@ -6086,7 +6117,7 @@ const TRANSLATIONS = {
     menu_profile: "Профиль",
     menu_privacy: "Приватность",
     menu_notifications: "Уведомления",
-    menu_chats: "Чаты",
+    menu_chats: "Чаты и оформление",
     menu_language: "Язык",
     menu_sessions: "Сессии",
     save: "Сохранить",
@@ -6102,7 +6133,7 @@ const TRANSLATIONS = {
     menu_profile: "Profile",
     menu_privacy: "Privacy",
     menu_notifications: "Notifications",
-    menu_chats: "Chats",
+    menu_chats: "Chats & appearance",
     menu_language: "Language",
     menu_sessions: "Sessions",
     save: "Save",
@@ -6156,7 +6187,7 @@ function applyChatPrefs(prefs) {
   messagesEl.classList.remove("font-small", "font-large");
   if (fontSize === "small") messagesEl.classList.add("font-small");
   if (fontSize === "large") messagesEl.classList.add("font-large");
-  messagesEl.classList.toggle("compact", !!prefs.compact);
+  messagesEl.classList.toggle("compact", prefs.compact !== false); // compact is the default
 
   const accentKey = ACCENT_PRESETS[prefs.accentColor] ? prefs.accentColor : DEFAULT_ACCENT;
   const [accent, accent2, onAccent] = ACCENT_PRESETS[accentKey];
@@ -6194,7 +6225,7 @@ settingsOverlay.addEventListener("click", (e) => {
 
 function SETTINGS_SECTION_TITLES(section) {
   return {
-    appearance: "Оформление",
+    appearance: "Чаты и оформление",
     security: "Безопасность",
     data: "Данные и память",
     profile: t("menu_profile"),
@@ -6231,7 +6262,7 @@ function showSettingsMenu(animated = false) {
 }
 
 function showSettingsSection(section) {
-  if (section === "appearance") renderAppearance();
+  if (section === "chats" || section === "appearance") renderAppearance();
   if (section === "security") renderSecurity();
   if (section === "data") renderStorage();
   const outgoing = visibleSettingsView();
@@ -6356,7 +6387,7 @@ function openSettings() {
   const chatPrefs = myProfile.chatPrefs || {};
   chatsSendOnEnter.checked = chatPrefs.sendOnEnter !== false;
   chatsFontSize.value = chatPrefs.fontSize || "medium";
-  chatsCompact.checked = !!chatPrefs.compact;
+  chatsCompact.checked = chatPrefs.compact !== false;
   selectedChatsAccent = null;
   const accentKey = ACCENT_PRESETS[chatPrefs.accentColor] ? chatPrefs.accentColor : DEFAULT_ACCENT;
   chatsAccentSwatches.forEach((btn) => {

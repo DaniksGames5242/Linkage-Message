@@ -207,6 +207,10 @@ export async function editGroupMessage(groupId, messageId, newText) {
   });
 }
 
+export async function hideGroupMessageForMe(groupId, messageId, uid) {
+  await updateDoc(doc(db, "groups", groupId, "messages", messageId), { hiddenFor: arrayUnion(uid) });
+}
+
 export async function deleteGroupMessage(groupId, messageId) {
   await deleteDoc(doc(db, "groups", groupId, "messages", messageId));
 }
