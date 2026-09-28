@@ -63,6 +63,7 @@ import { EMOJI_GROUPS, ANIMATED_EMOJI } from "./emoji-data.js";
 import { EFFECTS, playEffect } from "./effects.js";
 import { GAMES, gameForText, rollGame, renderGame, isWin } from "./games.js";
 import { appendRich, stripRich, wrapSelection } from "./richtext.js";
+import { EN, EN_PATTERNS } from "./i18n-en.js";
 import {
   colorForUid,
   initials,
@@ -693,6 +694,8 @@ function onVisibilityChange() {
 
 function renderMe() {
   menuTriggerBtn.innerHTML = avatarHTML(myProfile, currentUser.uid);
+  document.getElementById("tab-avatar").innerHTML = avatarHTML(myProfile, currentUser.uid);
+  requestAnimationFrame(() => selectTab(currentTab, false));
   meName.textContent = myProfile.displayName;
   const badge = statusBadge(myProfile.emojiStatus);
   if (badge) meName.append(" ", badge);
@@ -2138,6 +2141,13 @@ async function renderChats() {
     .filter((e) => !isChatMuted(e.data.id))
     .reduce((sum, e) => sum + unreadFor(e.data), 0);
   document.title = totalUnread > 0 ? `(${totalUnread}) Linkage Message` : "Linkage Message";
+  const tabBadge = document.getElementById("tab-badge");
+  const badgeText = totalUnread > 99 ? "99+" : String(totalUnread);
+  if (tabBadge.textContent !== badgeText || tabBadge.classList.contains("hidden") !== !totalUnread) {
+    tabBadge.textContent = badgeText;
+    tabBadge.classList.toggle("hidden", !totalUnread);
+    if (totalUnread) animate(tabBadge, [{ transform: "scale(.3)" }, { transform: "none" }], { spring: "jelly" });
+  }
   // Unread count on the installed app's icon.
   if (navigator.setAppBadge) (totalUnread ? navigator.setAppBadge(totalUnread) : navigator.clearAppBadge()).catch(() => {});
 }
@@ -6127,8 +6137,14 @@ const TRANSLATIONS = {
     search_placeholder: "Найти по юзернейму…",
     composer_placeholder: "Написать сообщение…",
     empty_state: "Выберите чат слева<br />или найдите контакт по юзернейму",
+    tab_chats: "Чаты",
+    tab_settings: "Настройки",
+    tab_profile: "Профиль",
   },
   en: {
+    tab_chats: "Chats",
+    tab_settings: "Settings",
+    tab_profile: "Profile",
     settings_title: "Settings",
     menu_profile: "Profile",
     menu_privacy: "Privacy",
@@ -6148,6 +6164,75 @@ const TRANSLATIONS = {
 
 let currentLanguage = "ru";
 
+// ---------- Whole-interface translation ----------
+// The UI is authored in Russian. With English on, every interface string —
+// static markup and anything rendered later (menus, toasts, dialogs) — is
+// swapped through the EN dictionary. User content (messages, names) is skipped.
+
+const I18N_SKIP =
+  ".bubble, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
+const I18N_ATTRS = ["placeholder", "title", "aria-label"];
+const CYRILLIC = /[А-Яа-яЁё]/;
+let i18nObserver = null;
+let i18nTouched = false;
+
+function translateString(str) {
+  const trimmed = str.trim();
+  if (!trimmed || !CYRILLIC.test(trimmed)) return null;
+  let out = EN[trimmed];
+  if (out === undefined) {
+    for (const [re, rep] of EN_PATTERNS) {
+      if (re.test(trimmed)) {
+        out = trimmed.replace(re, rep);
+        break;
+      }
+    }
+  }
+  return out === undefined ? null : str.replace(trimmed, out);
+}
+
+function translateNode(node) {
+  if (node.nodeType === 3) {
+    const parent = node.parentElement;
+    if (!parent || parent.closest(I18N_SKIP)) return;
+    const tr = translateString(node.nodeValue);
+    if (tr !== null && tr !== node.nodeValue) {
+      node.nodeValue = tr;
+      i18nTouched = true;
+    }
+    return;
+  }
+  if (node.nodeType !== 1 || node.closest(I18N_SKIP)) return;
+  const translateAttrs = (el) =>
+    I18N_ATTRS.forEach((a) => {
+      const v = el.getAttribute(a);
+      const tr = v && translateString(v);
+      if (tr) el.setAttribute(a, tr);
+    });
+  translateAttrs(node);
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.nodeType === 1 && n.matches(I18N_SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  let n;
+  while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) translateAttrs(n);
+    else translateNode(n);
+  }
+}
+
+function startTranslator() {
+  if (i18nObserver) return;
+  translateNode(document.body);
+  i18nObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      if (m.type === "childList") m.addedNodes.forEach(translateNode);
+      else if (m.type === "characterData") translateNode(m.target);
+      else if (m.type === "attributes") translateNode(m.target);
+    }
+  });
+  i18nObserver.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: I18N_ATTRS });
+}
+
 function t(key) {
   return TRANSLATIONS[currentLanguage]?.[key] ?? TRANSLATIONS.ru[key] ?? key;
 }
@@ -6165,6 +6250,8 @@ function applyLanguage(lang, animated = false) {
     el.innerHTML = t(el.dataset.i18nHtml);
   });
   document.documentElement.lang = currentLanguage;
+  if (currentLanguage === "en") startTranslator();
+  else if (i18nObserver || i18nTouched) location.reload(); // back to Russian: start from the original markup
 }
 
 // ---------- Chat display preferences ----------
@@ -7012,6 +7099,69 @@ document.getElementById("chat-search-next").addEventListener("click", () => {
   focusSearchHit();
 });
 document.getElementById("chat-search-close").addEventListener("click", () => closeChatSearch());
+
+// ---------- Bottom tab bar: Чаты / Настройки / Профиль ----------
+
+const tabbar = document.getElementById("tabbar");
+const tabGlider = tabbar.querySelector(".tab-glider");
+let currentTab = "chats";
+
+function selectTab(tab, animated = true) {
+  const btn = tabbar.querySelector(`.tab[data-tab="${tab}"]`);
+  if (!btn) return;
+  const changed = tab !== currentTab;
+  currentTab = tab;
+  tabbar.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === btn));
+  const from = tabGlider.style.transform;
+  const fromW = tabGlider.style.width;
+  const to = `translateX(${btn.offsetLeft}px)`;
+  const toW = btn.offsetWidth + "px";
+  tabGlider.style.transform = to;
+  tabGlider.style.width = toW;
+  if (animated && changed && from) {
+    // The highlight stretches across like a drop of liquid, then settles.
+    animate(tabGlider, [{ transform: from, width: fromW }, { transform: to, width: toW }], { spring: "bouncy" });
+    animate(btn.querySelector(".tab-icon"), [{ transform: "scale(.7) translateY(4px)" }, { transform: "none" }], { spring: "jelly" });
+  }
+}
+
+// Which tab is "on" follows the settings overlay, however it was opened.
+function syncTabs() {
+  if (settingsOverlay.classList.contains("hidden") || settingsOverlay.classList.contains("is-closing")) selectTab("chats");
+  else {
+    const profileOpen = !document.querySelector('.settings-tab-panel[data-spanel="profile"]').classList.contains("hidden");
+    selectTab(profileOpen ? "profile" : "settings");
+  }
+}
+new MutationObserver(() => requestAnimationFrame(syncTabs)).observe(settingsOverlay, { attributes: true, attributeFilter: ["class"] });
+document.querySelectorAll(".settings-tab-panel, #settings-menu").forEach((el) =>
+  new MutationObserver(() => requestAnimationFrame(syncTabs)).observe(el, { attributes: true, attributeFilter: ["class"] })
+);
+// The bar steps aside while a chat is open on a phone.
+new MutationObserver(() => tabbar.classList.toggle("away", sidebar.classList.contains("chat-open"))).observe(sidebar, {
+  attributes: true,
+  attributeFilter: ["class"],
+});
+
+tabbar.addEventListener("click", (e) => {
+  const btn = e.target.closest(".tab");
+  if (!btn || !currentUser) return;
+  const tab = btn.dataset.tab;
+  const open = !settingsOverlay.classList.contains("hidden") && !settingsOverlay.classList.contains("is-closing");
+  if (tab === "chats") {
+    if (open) hideOverlay(settingsOverlay);
+    else chatListEl.parentElement.scrollTo({ top: 0, behavior: "smooth" });
+  } else if (tab === "settings") {
+    if (!open) openSettings();
+    else if (currentTab !== "settings") showSettingsMenu(true);
+  } else if (tab === "profile") {
+    if (!open) openSettings();
+    if (currentTab !== "profile") showSettingsSection("profile");
+  }
+  selectTab(tab);
+});
+requestAnimationFrame(() => selectTab("chats", false));
+window.addEventListener("resize", debounce(() => selectTab(currentTab, false), 150));
 
 // ---------- Settings search ----------
 

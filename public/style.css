@@ -8628,3 +8628,141 @@ html.privacy-veil .settings-panel {
   box-shadow: 0 0 0 1.5px rgba(22, 17, 14, 0.95);
   pointer-events: none;
 }
+
+/* =====================================================================
+   Bottom tab bar (Telegram-style floating pill)
+   ===================================================================== */
+
+#tabbar {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  width: 326px;
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 30px;
+  background: var(--glass-tint), rgba(26, 20, 17, 0.9);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--glass-shadow), 0 20px 40px -18px rgba(0, 0, 0, 0.8);
+  transition: transform 0.5s var(--ease-bouncy), opacity 0.3s;
+}
+
+#app.hidden ~ #tabbar,
+#app.hidden #tabbar {
+  display: none;
+}
+
+.tab-glider {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 0;
+  width: 0;
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--accent) 18%, rgba(255, 255, 255, 0.04));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.tab {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px 5px;
+  border: none;
+  border-radius: 24px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 750;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.3s;
+}
+
+.tab.active {
+  color: var(--accent-text);
+}
+
+.tab-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 28px;
+}
+
+.tab-avatar .avatar {
+  width: 27px;
+  height: 27px;
+  font-size: 10px;
+  box-shadow: none;
+}
+
+.tab.active .tab-avatar .avatar {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.tab-badge {
+  position: absolute;
+  top: -5px;
+  left: 60%;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--on-accent);
+  background: var(--accent-grad);
+  box-shadow: 0 0 0 2px rgba(26, 20, 17, 0.95);
+}
+
+/* Room for the bar under the chat list and the new-chat button. */
+#chat-list-scroll {
+  padding-bottom: 150px;
+}
+
+#fab-new-chat {
+  bottom: 96px;
+}
+
+.fx-lite #tabbar {
+  background: var(--glass-tint), rgba(26, 20, 17, 0.97);
+}
+
+@media (max-width: 720px) {
+  #tabbar {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+
+  #tabbar.away {
+    transform: translateY(140%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #fab-new-chat {
+    bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+
+  /* Settings sheets stop above the bar, like Telegram's tabs. */
+  #settings-overlay {
+    padding-bottom: calc(86px + env(safe-area-inset-bottom)) !important;
+  }
+}
