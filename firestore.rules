@@ -54,7 +54,6 @@ service cloud.firestore {
         && request.resource.data.hiddenFor.removeAll(resource.data.get('hiddenFor', [])).hasOnly([request.auth.uid]);
     }
 
-    // Poll votes: a member may only change their own entry in `votes`.
     // Another device of the same account adds its wrapped key to an E2E
     // message (history on every device); ciphertext itself can't change.
     function isKeyShare() {
@@ -69,6 +68,7 @@ service cloud.firestore {
         && request.resource.data.get('checks', {}).diff(resource.data.get('checks', {})).affectedKeys().size() == 1;
     }
 
+    // Poll votes: a member may only change their own entry in `votes`.
     function isPollVote() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes'])
         && request.resource.data.get('votes', {}).diff(resource.data.get('votes', {})).affectedKeys().hasOnly([request.auth.uid]);
@@ -169,9 +169,10 @@ service cloud.firestore {
     }
 
     // ---------- groups/{groupId} : groups & channels ----------
-    // type == 'group': any member can post. type == 'channel': only members
-    // listed in `admins` can post, everyone else in `members` is read-only.
-    // ---------- group privacy & per-member permissions ----------
+    // type == 'group': members post unless settings.whoCanPost == 'admins' or
+    // perms.<uid>.post == false. type == 'channel': only `admins` post.
+    // Privacy: settings.isPublic / settings.inviteCode (join links),
+    // settings.whoCanAdd; per-member perms.<uid>.{post,media,add}.
     function gSettings(g) { return g.get('settings', {}); }
     function gPerm(g, what) { return g.get('perms', {}).get(request.auth.uid, {}).get(what, true); }
     function groupMembersChanged() {
