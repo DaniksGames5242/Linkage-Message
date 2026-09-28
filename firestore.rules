@@ -138,8 +138,7 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // ---------- stories/{id} : 24h ephemeral posts, visible to any signed-in user ----------
-    // Visible only to the owner and their contacts (`audience`).
+    // ---------- stories/{id} : 24h posts, visible only to the owner and their contacts (`audience`) ----------
     match /stories/{storyId} {
       allow read: if isSignedIn()
         && (resource.data.ownerId == request.auth.uid
