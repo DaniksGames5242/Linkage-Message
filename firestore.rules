@@ -37,6 +37,13 @@ service cloud.firestore {
       return uid in get(/databases/$(database)/documents/users/$(blocker)).data.get('blocked', []);
     }
 
+    // Settings → Privacy → "Who can call me": everyone / contacts / nobody.
+    function callsAllowed(callee) {
+      let setting = get(/databases/$(database)/documents/users/$(callee)).data.get('privacy', {}).get('calls', 'everyone');
+      return setting == 'everyone'
+        || (setting == 'contacts' && exists(/databases/$(database)/documents/users/$(callee)/contacts/$(request.auth.uid)));
+    }
+
     function isMessageReactionEdit() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']);
     }
@@ -176,7 +183,8 @@ service cloud.firestore {
         && request.resource.data.calleeId != request.auth.uid
         && request.resource.data.kind in ['audio', 'video']
         && request.resource.data.status == 'ringing'
-        && !hasBlocked(request.resource.data.calleeId, request.auth.uid);
+        && !hasBlocked(request.resource.data.calleeId, request.auth.uid)
+        && callsAllowed(request.resource.data.calleeId);
       allow update: if isSignedIn()
         && (resource.data.callerId == request.auth.uid || resource.data.calleeId == request.auth.uid)
         && request.resource.data.callerId == resource.data.callerId

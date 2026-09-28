@@ -75,7 +75,7 @@
   --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.3),
     0 24px 60px -24px rgba(0, 0, 0, 0.75), 0 2px 10px -4px rgba(0, 0, 0, 0.4);
 
-  transition: --accent 0.9s var(--ease-out), --accent-2 0.9s var(--ease-out);
+  transition: --accent 0.9s var(--ease-out), --accent-2 0.9s var(--ease-out), --call-dock 0.5s var(--ease-bouncy);
 }
 
 * {
@@ -92,7 +92,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Manrope", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--app-font, "Manrope"), "Manrope", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
@@ -1752,7 +1752,7 @@ button.is-success::after {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)), rgba(34, 27, 22, 0.82);
   border: 1px solid var(--stroke);
   padding: 10px 14px;
-  border-radius: 22px 22px 22px 8px;
+  border-radius: var(--bubble-r, 22px) var(--bubble-r, 22px) var(--bubble-r, 22px) var(--bubble-tail, 8px);
   font-size: 14.5px;
   line-height: 1.45;
   word-wrap: break-word;
@@ -1765,7 +1765,7 @@ button.is-success::after {
   background: var(--accent-grad);
   color: var(--on-accent);
   border-color: transparent;
-  border-radius: 22px 22px 8px 22px;
+  border-radius: var(--bubble-r, 22px) var(--bubble-r, 22px) var(--bubble-tail, 8px) var(--bubble-r, 22px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -4px 10px rgba(120, 40, 0, 0.12), 0 14px 30px -16px var(--accent-glow);
   font-weight: 520;
 }
@@ -2984,7 +2984,8 @@ input.switch:checked:active::before {
 .cp-bubble {
   max-width: 78%;
   padding: 9px 13px;
-  border-radius: 20px 20px 20px 7px;
+  border-radius: var(--bubble-r, 20px) var(--bubble-r, 20px) var(--bubble-r, 20px) var(--bubble-tail, 7px);
+  transition: font-size 0.45s var(--ease-bouncy), padding 0.45s var(--ease-out), background 0.8s, box-shadow 0.8s, border-radius 0.45s var(--ease-bouncy);
   font-size: 14.5px;
   line-height: 1.4;
   background: rgba(34, 27, 22, 0.9);
@@ -2994,7 +2995,7 @@ input.switch:checked:active::before {
 
 .cp-row.me .cp-bubble {
   border: none;
-  border-radius: 20px 20px 7px 20px;
+  border-radius: var(--bubble-r, 20px) var(--bubble-r, 20px) var(--bubble-tail, 7px) var(--bubble-r, 20px);
   color: var(--pv-on-accent, var(--on-accent));
   background: linear-gradient(135deg, color-mix(in srgb, var(--pv-accent, var(--accent)) 62%, #fff4c9), var(--pv-accent, var(--accent)) 45%, var(--pv-accent-2, var(--accent-2)));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 12px 26px -14px var(--pv-accent, var(--accent));
@@ -3912,7 +3913,7 @@ mark.search-mark {
 @media (max-width: 720px) {
   #chat-search-bar,
   #pinned-bar {
-    top: calc(74px + env(safe-area-inset-top));
+    top: calc(74px + env(safe-area-inset-top) + var(--call-dock));
   }
 
   #pinned-bar {
@@ -3921,7 +3922,7 @@ mark.search-mark {
   }
 
   #chat.has-pinned {
-    --header-space: calc(130px + env(safe-area-inset-top));
+    --header-space: calc(130px + env(safe-area-inset-top) + var(--call-dock));
   }
 }
 
@@ -7495,4 +7496,739 @@ mark.search-mark {
 
 .media-spoiler-label {
   white-space: nowrap;
+}
+
+/* =====================================================================
+   Triangles: record button morph, recorder, bubble, kaleidoscope.
+   ===================================================================== */
+
+#rec-btn .rec-icon-tri {
+  opacity: 0;
+  transform: scale(0.2) rotate(-120deg);
+}
+
+#rec-btn[data-mode="triangle"] .rec-icon-video {
+  opacity: 0;
+  transform: scale(0.2) rotate(120deg);
+}
+
+#rec-btn[data-mode="triangle"] .rec-icon-voice {
+  opacity: 0;
+}
+
+#rec-btn[data-mode="triangle"] .rec-icon-tri {
+  opacity: 1;
+  transform: none;
+  color: var(--accent-text);
+}
+
+#rec-btn[data-mode="triangle"] {
+  animation: triPulse 0.42s var(--ease-jelly);
+}
+
+@keyframes triPulse {
+  40% {
+    scale: 1.25;
+  }
+}
+
+.circle-rec.shape-triangle .circle-rec-frame {
+  border-radius: 0;
+  filter: drop-shadow(0 24px 50px var(--accent-glow));
+}
+
+.circle-rec.shape-triangle .circle-rec-lens {
+  border-radius: 0;
+  box-shadow: none;
+  clip-path: url(#tri-clip);
+}
+
+.circle-rec-ring.tri,
+.vnote-ring.tri {
+  transform: none;
+}
+
+.circle-rec-ring path,
+.vnote-ring path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke-dashoffset 0.25s linear;
+}
+
+.vnote.vnote-tri {
+  border-radius: 0;
+}
+
+.vnote.vnote-tri video {
+  border-radius: 0;
+  clip-path: url(#tri-clip);
+}
+
+.vnote.vnote-tri .vnote-meta {
+  bottom: 22%;
+}
+
+/* A slow shimmer runs along the triangle's edge. */
+.vnote.vnote-tri::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  clip-path: url(#tri-clip);
+  background: conic-gradient(from var(--rim-angle, 0deg) at 50% 58%, transparent 0 70%, rgba(255, 226, 150, 0.35) 80%, transparent 90%);
+  animation: triShine 5s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes triShine {
+  to {
+    --rim-angle: 360deg;
+  }
+}
+
+.fx-lite .vnote.vnote-tri::after {
+  animation: none;
+  opacity: 0;
+}
+
+.vnote-kaleido {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  background: rgba(20, 14, 10, 0.72);
+  color: var(--accent-text);
+  cursor: pointer;
+  transition: transform 0.5s var(--ease-jelly);
+}
+
+.vnote-kaleido:hover {
+  transform: rotate(60deg) scale(1.12);
+}
+
+.msg-row:not(.me) .vnote-kaleido {
+  right: auto;
+  left: 4px;
+}
+
+.kaleido {
+  position: fixed;
+  inset: 0;
+  z-index: 195;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: calc(20px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+  background: radial-gradient(60% 50% at 50% 45%, color-mix(in srgb, var(--accent) 14%, rgba(6, 4, 3, 0.94)), rgba(4, 3, 2, 0.98));
+}
+
+.kaleido-canvas {
+  touch-action: none;
+  cursor: grab;
+  border-radius: 50%;
+  filter: drop-shadow(0 30px 80px var(--accent-glow));
+}
+
+.kaleido-canvas:active {
+  cursor: grabbing;
+}
+
+.kaleido-bar {
+  width: min(260px, 70vw);
+  height: 3px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.kaleido-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-grad);
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.kaleido-hint {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.kaleido-close {
+  position: absolute;
+  top: calc(16px + env(safe-area-inset-top));
+  right: 16px;
+}
+
+/* =====================================================================
+   Minimised call: docked bar that pushes the app down instead of
+   covering the headers.
+   ===================================================================== */
+
+@property --call-dock {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+:root {
+  --call-dock: 0px;
+}
+
+html.call-docked {
+  --call-dock: 62px;
+}
+
+#app {
+  padding-top: calc(12px + var(--call-dock));
+}
+
+#call-overlay.minimized {
+  top: 8px;
+}
+
+@media (max-width: 720px) {
+  html.call-docked {
+    --call-dock: 60px;
+  }
+
+  #sidebar {
+    padding-top: calc(env(safe-area-inset-top) + var(--call-dock));
+  }
+
+  #chat {
+    --header-space: calc(76px + env(safe-area-inset-top) + var(--call-dock));
+  }
+
+  #chat-header {
+    top: calc(8px + env(safe-area-inset-top) + var(--call-dock));
+  }
+
+  #call-overlay.minimized {
+    top: calc(6px + env(safe-area-inset-top));
+    left: 8px;
+    right: 8px;
+    translate: none;
+  }
+
+  #call-overlay.minimized .call-pill {
+    width: 100%;
+  }
+}
+
+/* =====================================================================
+   Settings: search, chips, appearance, notifications, security, data.
+   ===================================================================== */
+
+.settings-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 0 14px;
+  border-radius: 16px;
+  background: var(--field-bg);
+  border: 1px solid var(--stroke);
+  color: var(--text-dim);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.settings-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+#settings-menu.searching .settings-menu-item {
+  display: none;
+}
+
+#settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ssr-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.ssr-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ssr-item mark {
+  background: none;
+  color: var(--accent-text);
+}
+
+.ssr-section {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.ssr-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.search-flash {
+  animation: searchFlash 1.6s var(--ease-out);
+  border-radius: 14px;
+}
+
+@keyframes searchFlash {
+  0%,
+  35% {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 6px var(--accent-soft);
+  }
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 8px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.25s, color 0.25s, border-color 0.25s, box-shadow 0.25s;
+}
+
+.chip:hover {
+  color: var(--text);
+}
+
+.chip.selected {
+  background: var(--accent-grad);
+  border-color: transparent;
+  color: var(--on-accent);
+  box-shadow: 0 8px 20px -10px var(--accent-glow);
+}
+
+input.range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.look-preview {
+  margin-bottom: 16px;
+}
+
+/* My bubbles: glass / outline styles */
+
+html[data-bubble="glass"] .msg-row.me .bubble,
+html[data-bubble="glass"] .cp-row.me .cp-bubble {
+  --on-accent: var(--text);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)), color-mix(in srgb, var(--accent) 24%, rgba(28, 21, 17, 0.9));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 12px 26px -16px var(--accent-glow);
+}
+
+html[data-bubble="outline"] .msg-row.me .bubble,
+html[data-bubble="outline"] .cp-row.me .cp-bubble {
+  --on-accent: var(--text);
+  background: rgba(12, 9, 7, 0.35);
+  border: 1.5px solid var(--accent);
+  color: var(--text);
+  box-shadow: none;
+}
+
+html[data-bubble="glass"] .msg-row.me .bubble.emoji-bubble,
+html[data-bubble="outline"] .msg-row.me .bubble.emoji-bubble,
+html[data-bubble="glass"] .msg-row.me .bubble.circle-bubble,
+html[data-bubble="outline"] .msg-row.me .bubble.circle-bubble,
+html[data-bubble="glass"] .msg-row.me .bubble.game-bubble,
+html[data-bubble="outline"] .msg-row.me .bubble.game-bubble {
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+/* Animations off */
+
+html.motion-off *,
+html.motion-off *::before,
+html.motion-off *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Blur in the task switcher */
+
+html.privacy-veil #app,
+html.privacy-veil #call-overlay,
+html.privacy-veil .settings-panel {
+  filter: blur(26px) saturate(0.6);
+}
+
+/* Notifications: quiet hours */
+
+.quiet-times {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 2px 0 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--stroke);
+  transition: opacity 0.3s, filter 0.3s;
+}
+
+.quiet-times.off {
+  opacity: 0.35;
+  filter: grayscale(1);
+  pointer-events: none;
+}
+
+.quiet-times label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.quiet-times input {
+  padding: 7px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  background: var(--field-bg);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  color-scheme: dark;
+}
+
+.quiet-moon {
+  font-size: 20px;
+  animation: moonFloat 3s ease-in-out infinite;
+}
+
+@keyframes moonFloat {
+  50% {
+    transform: translateY(-4px) rotate(-10deg);
+  }
+}
+
+/* Security */
+
+.lock-options {
+  margin: 4px 0 8px;
+}
+
+.lock-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.security-e2e {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.security-e2e-icon {
+  font-size: 24px;
+}
+
+/* Data & storage */
+
+.storage-card {
+  margin-bottom: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--stroke);
+}
+
+.storage-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.storage-total span {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.storage-total small {
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.storage-bar {
+  display: flex;
+  gap: 3px;
+  height: 12px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.storage-bar span {
+  min-width: 4px;
+  border-radius: 999px;
+  transform-origin: left center;
+}
+
+.storage-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.storage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.storage-row i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.storage-row b {
+  margin-left: auto;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.small-btn.danger {
+  color: var(--danger);
+}
+
+/* Paused video note (data saver): a play glyph */
+
+.vnote.paused:not(.with-sound)::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fff'%3E%3Cpath d='M9 6.5v11l9-5.5z'/%3E%3C/svg%3E") center / 24px no-repeat;
+  pointer-events: none;
+}
+
+/* =====================================================================
+   App lock screen
+   ===================================================================== */
+
+#lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: radial-gradient(70% 60% at 50% 30%, color-mix(in srgb, var(--accent) 14%, #0b0806), #060403);
+}
+
+.lock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: min(320px, 100%);
+}
+
+.lock-mark {
+  color: var(--accent-text);
+  filter: drop-shadow(0 8px 20px var(--accent-glow));
+}
+
+.lock-shackle {
+  transition: transform 0.35s var(--ease-bouncy);
+  transform-origin: 16px 10.5px;
+}
+
+#lock-screen.unlocking .lock-shackle {
+  transform: translateY(-3px) rotate(-18deg);
+}
+
+.lock-title {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.lock-dots {
+  display: flex;
+  gap: 16px;
+  height: 18px;
+  align-items: center;
+}
+
+.lock-dots i {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--stroke-strong);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.lock-dots i.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.lock-dots.ok i {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.lock-sub {
+  min-height: 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.lock-sub.error {
+  color: var(--danger);
+}
+
+.lock-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 72px);
+  gap: 14px 22px;
+}
+
+.lock-key {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+  font-size: 26px;
+  font-weight: 650;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s, transform 0.3s var(--ease-jelly);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lock-key:active {
+  background: var(--accent-soft);
+  transform: scale(0.9);
+  transition-duration: 0.05s;
+}
+
+.lock-key.blank {
+  visibility: hidden;
+}
+
+.lock-key.del {
+  border: none;
+  background: none;
+}
+
+.lock-foot {
+  display: flex;
+  gap: 18px;
+}
+
+/* The docked call strip hides whatever scrolls underneath it. */
+#call-overlay.minimized::before {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: -1;
+  height: calc(env(safe-area-inset-top) + var(--call-dock) + 4px);
+  background: linear-gradient(180deg, #0b0806 70%, rgba(11, 8, 6, 0));
+  pointer-events: none;
+}
+
+#call-overlay.minimized .call-pill {
+  background: linear-gradient(135deg, rgba(47, 207, 127, 0.32), rgba(20, 15, 12, 0.96) 70%), #140f0c !important;
+}
+
+@media (min-width: 721px) {
+  #call-overlay.minimized::before {
+    display: none;
+  }
 }

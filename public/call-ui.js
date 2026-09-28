@@ -90,7 +90,7 @@ export async function startCall({ chatId, otherUid, profile, kind }) {
   } catch (err) {
     console.error(err);
     toast(
-      err?.code === "permission-denied" ? "Звонок недоступен: пользователь ограничил контакт или не обновлены правила Firestore" : "Не удалось начать звонок",
+      err?.code === "permission-denied" ? "Звонок недоступен: пользователь ограничил звонки или контакт" : "Не удалось начать звонок",
       { tone: "error", duration: 4500 }
     );
     teardown(false);
@@ -333,6 +333,7 @@ function teardown(animated) {
   }
   stopVoiceMeter();
   disconnectGain();
+  document.documentElement.classList.remove("call-docked");
   out.broken = false;
   el.remoteVideo.muted = false;
   if (navigator.vibrate && navigator.userActivation?.hasBeenActive) navigator.vibrate(0);
@@ -894,6 +895,8 @@ function showScreen(state) {
 
 function setMinimized(min, instant = false) {
   el.overlay.classList.toggle("minimized", min);
+  // The app slides down to make room for the call bar instead of hiding under it.
+  document.documentElement.classList.toggle("call-docked", min);
   if (instant) return;
   const target = min ? el.pill : el.stage;
   animate(

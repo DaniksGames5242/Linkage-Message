@@ -113,6 +113,7 @@ import {
   toast,
   progressToast,
   probeFps,
+  setMotionScale,
 } from "./ui.js";
 
 const ADMIN_USERNAME = "danik";
@@ -403,6 +404,111 @@ settingsAvatarInput.addEventListener("change", async () => {
 settingsAvatarRemoveBtn.addEventListener("click", () => {
   selectedSettingsAvatarImage = null;
   renderSettingsAvatarPreview();
+});
+
+// ---------- Appearance (Settings → Оформление, stored on this device) ----------
+
+const LOOK_DEFAULTS = { font: "manrope", radius: 22, bubble: "gradient", motion: "normal", liveBg: true, dataSaver: false, privacyBlur: false };
+const LOOK_FONTS = {
+  manrope: { label: "Manrope", css: '"Manrope"' },
+  system: { label: "Системный", css: "system-ui" },
+  nunito: { label: "Nunito", css: '"Nunito"', href: "https://fonts.googleapis.com/css2?family=Nunito:wght@400..800&display=swap" },
+  lora: { label: "Lora", css: '"Lora"', href: "https://fonts.googleapis.com/css2?family=Lora:wght@400..700&display=swap" },
+  mono: { label: "JetBrains Mono", css: '"JetBrains Mono"', href: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400..800&display=swap" },
+};
+const LOOK_BUBBLES = { gradient: "Градиент", glass: "Стекло", outline: "Контур" };
+const LOOK_MOTION = { slow: ["Плавно", 1.5], normal: ["Обычно", 1], fast: ["Быстро", 0.65], off: ["Без анимаций", 0] };
+
+let look = { ...LOOK_DEFAULTS };
+try {
+  look = { ...LOOK_DEFAULTS, ...JSON.parse(readStore("lm-look") || "{}") };
+} catch (_) {}
+
+function applyLook() {
+  const root = document.documentElement;
+  const font = LOOK_FONTS[look.font] || LOOK_FONTS.manrope;
+  if (font.href && !document.querySelector(`link[data-font="${look.font}"]`)) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = font.href;
+    link.dataset.font = look.font;
+    document.head.appendChild(link);
+  }
+  const radius = Math.min(28, Math.max(4, Number(look.radius) || 22));
+  root.style.setProperty("--app-font", font.css);
+  root.style.setProperty("--bubble-r", radius + "px");
+  root.style.setProperty("--bubble-tail", Math.max(3, Math.round(radius * 0.36)) + "px");
+  root.dataset.bubble = LOOK_BUBBLES[look.bubble] ? look.bubble : "gradient";
+  setMotionScale((LOOK_MOTION[look.motion] || LOOK_MOTION.normal)[1]);
+  root.classList.toggle("motion-off", look.motion === "off");
+  root.classList.toggle("bg-still", !look.liveBg);
+  root.classList.toggle("data-saver", !!look.dataSaver);
+}
+applyLook();
+
+function saveLook(patch) {
+  look = { ...look, ...patch };
+  try {
+    localStorage.setItem("lm-look", JSON.stringify(look));
+  } catch (_) {}
+  applyLook();
+}
+
+// A row of pill buttons; the selected one gets a liquid highlight.
+function chipRow(container, options, current, onPick, styleFor) {
+  container.innerHTML = "";
+  Object.entries(options).forEach(([value, label]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip" + (value === current ? " selected" : "");
+    b.dataset.value = value;
+    b.textContent = Array.isArray(label) ? label[0] : label;
+    if (styleFor) Object.assign(b.style, styleFor(value));
+    b.addEventListener("click", () => {
+      container.querySelectorAll(".chip").forEach((c) => c.classList.toggle("selected", c === b));
+      animate(b, [{ transform: "scale(.85)" }, { transform: "none" }], { spring: "jelly" });
+      onPick(value);
+    });
+    container.appendChild(b);
+  });
+}
+
+const lookRadius = document.getElementById("look-radius");
+const lookRadiusValue = document.getElementById("look-radius-value");
+const lookPreview = document.getElementById("look-preview");
+
+function bounceLookPreview() {
+  stagger(lookPreview.querySelectorAll(".cp-bubble"), { y: 8, blur: 0, scale: 0.94, step: 50, spring: "jelly" });
+}
+
+function renderAppearance() {
+  chipRow(document.getElementById("look-font"), Object.fromEntries(Object.entries(LOOK_FONTS).map(([k, f]) => [k, f.label])), look.font, (v) => {
+    saveLook({ font: v });
+    bounceLookPreview();
+  }, (v) => ({ fontFamily: LOOK_FONTS[v].css }));
+  chipRow(document.getElementById("look-bubble"), LOOK_BUBBLES, look.bubble, (v) => {
+    saveLook({ bubble: v });
+    bounceLookPreview();
+  });
+  chipRow(document.getElementById("look-motion"), LOOK_MOTION, look.motion, (v) => {
+    saveLook({ motion: v });
+    bounceLookPreview();
+  });
+  lookRadius.value = String(look.radius);
+  lookRadiusValue.textContent = `${look.radius} px`;
+  document.getElementById("look-livebg").checked = !!look.liveBg;
+}
+
+lookRadius.addEventListener("input", () => {
+  lookRadiusValue.textContent = `${lookRadius.value} px`;
+  saveLook({ radius: Number(lookRadius.value) });
+});
+document.getElementById("look-livebg").addEventListener("change", (e) => saveLook({ liveBg: e.target.checked }));
+document.getElementById("look-reset").addEventListener("click", () => {
+  saveLook({ font: LOOK_DEFAULTS.font, radius: LOOK_DEFAULTS.radius, bubble: LOOK_DEFAULTS.bubble, motion: LOOK_DEFAULTS.motion, liveBg: true });
+  renderAppearance();
+  bounceLookPreview();
+  toast("Оформление сброшено", { icon: "🎨" });
 });
 
 // ---------- Profile links (/?u=username) ----------
@@ -2295,11 +2401,11 @@ function maybeMarkRead() {
   const lastMsgMs = data.lastMessageAt?.toMillis?.() || 0;
   const fromOther = data.lastMessageSenderId && data.lastMessageSenderId !== me;
   const lastReadMs = data.lastRead?.[me]?.toMillis?.() || 0;
-  const needsReceipt = fromOther && lastMsgMs > lastReadMs && (markedReadAt.get(currentChatId) || 0) < lastMsgMs;
+  const needsReceipt = readReceiptsOn() && fromOther && lastMsgMs > lastReadMs && (markedReadAt.get(currentChatId) || 0) < lastMsgMs;
   if (unread <= 0 && !needsReceipt) return;
   markingRead = true;
   markedReadAt.set(currentChatId, lastMsgMs);
-  (isContact ? markChatRead : markGroupRead)(currentChatId, me)
+  (isContact ? markChatRead : markGroupRead)(currentChatId, me, readReceiptsOn())
     .catch((err) => console.warn("markRead failed:", err))
     .finally(() => {
       markingRead = false;
@@ -2314,11 +2420,14 @@ const TICK_CLOCK =
   '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><polyline points="8 5 8 8 10 9.5"/></svg>';
 
 // ✓ sent · ✓✓ read (accent) · clock while the write is pending.
+const readReceiptsOn = () => myProfile?.privacy?.readReceipts !== false;
+
 function refreshReceipts() {
   const data = currentChatData();
   const me = currentUser.uid;
   let readUpTo = 0;
-  if (data?.lastRead) {
+  // Receipts work both ways: switched off, you don't see others' either.
+  if (data?.lastRead && readReceiptsOn()) {
     Object.entries(data.lastRead).forEach(([uid, ts]) => {
       if (uid !== me) readUpTo = Math.max(readUpTo, ts?.toMillis?.() || 0);
     });
@@ -2943,7 +3052,7 @@ function messageOps() {
   return { edit: null, del: null, react: null };
 }
 
-const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤", "⭕"];
+const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤", "⭕", "🔺"];
 
 // ---------- Reply-to-message ----------
 
@@ -2958,7 +3067,7 @@ function replySenderLabel(msg) {
 function replyPreviewText(msg) {
   if (msg.poll) return "📊 " + msg.poll.q;
   if (msg.location) return "📍 Геопозиция";
-  if (msg.videoNoteUrl) return "⭕ Видеосообщение";
+  if (msg.videoNoteUrl) return msg.videoShape === "triangle" ? "🔺 Видеотреугольник" : "⭕ Видеосообщение";
   if (msg.imageUrl) return "📷 Фото";
   if (msg.voiceUrl) return "🎤 Голосовое сообщение";
   if (msg.fileUrl) {
@@ -3028,7 +3137,7 @@ function renderBubbleContent(bubble, msg) {
   }
   if (msg.videoNoteUrl) {
     bubble.classList.add("circle-bubble");
-    bubble.appendChild(buildVideoNote(msg.videoNoteUrl, msg.duration, fmtDuration));
+    bubble.appendChild(buildVideoNote(msg.videoNoteUrl, msg.duration, fmtDuration, msg.videoShape === "triangle" ? "triangle" : "circle"));
     return;
   }
   const hasMedia = !!(msg.imageUrl || msg.voiceUrl || msg.fileUrl);
@@ -4629,6 +4738,8 @@ const MAX_VOICE_SECONDS = 300;
 let recMode = readStore("lm-rec-mode") === "video" && circlesSupported ? "video" : "voice";
 let rec = null; // the recording in progress
 let press = null; // the finger/mouse currently on the button
+let pendingModeTap = null; // camera mode: a single tap waits to see if a second one follows
+const DOUBLE_TAP_MS = 300;
 
 function syncRecButton() {
   recBtn.dataset.mode = recMode;
@@ -4665,32 +4776,48 @@ function toggleRecMode() {
   } catch (_) {}
   syncRecButton();
   animate(recBtn, [{ transform: "scale(.7) rotate(-25deg)" }, { transform: "none" }], { spring: "jelly" });
-  showRecTip(recMode === "voice" ? "🎤 Голосовое — удерживайте, чтобы записать" : "⭕ Кружок — удерживайте, чтобы записать");
+  showRecTip(recMode === "voice" ? "🎤 Голосовое — удерживайте, чтобы записать" : "⭕ Кружок — удерживайте · 🔺 двойное нажатие — треугольник");
 }
 
 function recTarget() {
   return { type: currentChatType, id: currentChatId };
 }
 
+// Double tap on the camera button: the circle morphs into a triangle and a
+// hands-free triangle recording starts.
+function startTriangle() {
+  if (!currentChatId || composer.classList.contains("hidden")) return;
+  if (!uploadsConfigured) {
+    toast("Отправка видео ещё не настроена (Cloudinary, см. README)", { tone: "error", duration: 5000 });
+    return;
+  }
+  recBtn.dataset.mode = "triangle";
+  if (navigator.vibrate) navigator.vibrate([12, 60, 12]);
+  setTimeout(() => {
+    if (!rec && recBtn.dataset.mode === "triangle") beginRecording("triangle");
+  }, reducedMotion ? 0 : 420);
+}
+
 // Starts a recording in the current mode; returns false if it can't.
-function beginRecording() {
+function beginRecording(shape = "circle") {
   if (!currentChatId || composer.classList.contains("hidden")) return false;
   if (!uploadsConfigured) {
     toast("Отправка голосовых и кружков ещё не настроена (Cloudinary, см. README)", { tone: "error", duration: 5000 });
     return false;
   }
   if (navigator.vibrate) navigator.vibrate(12);
-  rec = { mode: recMode, locked: false, target: recTarget(), startedAt: 0, ended: false };
+  const triangle = shape === "triangle";
+  rec = { mode: triangle ? "video" : recMode, shape, locked: triangle, target: recTarget(), startedAt: 0, ended: false };
   recBtn.classList.add("recording");
   if (rec.mode === "video") {
     const session = rec;
-    session.circle = recordCircle({ hold: true });
+    session.circle = recordCircle({ hold: !triangle, shape });
     session.circle.done.then((result) => {
       if (rec === session) {
         rec = null;
         resetRecUI();
       }
-      if (result) sendCircle(result, session.target);
+      if (result) sendCircle(result, session.target, shape);
     });
     return true;
   }
@@ -4706,6 +4833,7 @@ function beginRecording() {
 
 function resetRecUI() {
   recBtn.classList.remove("recording", "locked");
+  if (recBtn.dataset.mode !== recMode) syncRecButton(); // triangle morphs back into the circle
   composer.classList.remove("rec-active");
   recPanel.classList.remove("locked", "cancelling");
   recLock.style.removeProperty("--lock");
@@ -4789,7 +4917,18 @@ function releaseRecButton(e) {
   const p = press;
   press = null;
   if (!p.started) {
-    if (e.type === "pointerup") toggleRecMode();
+    if (e.type !== "pointerup") return;
+    if (recMode !== "video") return toggleRecMode();
+    if (pendingModeTap) {
+      clearTimeout(pendingModeTap);
+      pendingModeTap = null;
+      startTriangle();
+    } else {
+      pendingModeTap = setTimeout(() => {
+        pendingModeTap = null;
+        toggleRecMode();
+      }, DOUBLE_TAP_MS);
+    }
     return;
   }
   if (!rec || rec.locked) return;
@@ -4968,7 +5107,7 @@ async function sendVoice(blob, duration, wave, target) {
 
 // ----- round video -----
 
-async function sendCircle(result, target) {
+async function sendCircle(result, target, shape = "circle") {
   const ext = result.mime.includes("mp4") ? "mp4" : "webm";
   const file = new File([result.blob], `circle.${ext}`, { type: result.mime.split(";")[0] });
   const progress = uploadToast("Отправка видеосообщения");
@@ -4980,9 +5119,9 @@ async function sendCircle(result, target) {
     await deliver({
       ...target,
       attachment: {
-        fields: { videoNoteUrl: playable, duration: result.duration },
-        previewText: "⭕ Видеосообщение",
-        defaultCaption: "⭕",
+        fields: { videoNoteUrl: playable, duration: result.duration, ...(shape === "triangle" ? { videoShape: "triangle" } : {}) },
+        previewText: shape === "triangle" ? "🔺 Видеотреугольник" : "⭕ Видеосообщение",
+        defaultCaption: shape === "triangle" ? "🔺" : "⭕",
       },
     });
   } catch (err) {
@@ -5231,26 +5370,71 @@ function audio() {
 }
 ["pointerdown", "keydown"].forEach((type) => window.addEventListener(type, () => audio(), { once: true, capture: true }));
 
-// A soft two-note chime.
-function chime() {
+// Notification sounds, synthesised (no audio files).
+const NOTIF_SOUNDS = {
+  chime: "Колокольчик",
+  drop: "Капля",
+  pop: "Поп",
+  harp: "Арфа",
+  crystal: "Кристалл",
+};
+
+function tone(ctx, { freq, to = freq, at = 0, dur = 0.3, type = "sine", vol = 0.09, attack = 0.012 }) {
+  const t0 = ctx.currentTime + at;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (to !== freq) osc.frequency.exponentialRampToValueAtTime(to, t0 + dur * 0.8);
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(vol, t0 + attack);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.05);
+}
+
+function playNotifSound(name = "chime") {
   const ctx = audio();
   if (!ctx || ctx.state !== "running") return;
-  const t0 = ctx.currentTime;
-  [
-    [880, 0],
-    [1318.5, 0.11],
-  ].forEach(([freq, delay]) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.0001, t0 + delay);
-    gain.gain.exponentialRampToValueAtTime(0.09, t0 + delay + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.42);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(t0 + delay);
-    osc.stop(t0 + delay + 0.45);
-  });
+  switch (name) {
+    case "drop":
+      tone(ctx, { freq: 1400, to: 380, dur: 0.22, vol: 0.12 });
+      tone(ctx, { freq: 900, to: 700, at: 0.16, dur: 0.16, vol: 0.05 });
+      break;
+    case "pop":
+      tone(ctx, { freq: 520, to: 880, dur: 0.09, type: "triangle", vol: 0.14, attack: 0.004 });
+      tone(ctx, { freq: 1040, at: 0.07, dur: 0.12, type: "triangle", vol: 0.06, attack: 0.004 });
+      break;
+    case "harp":
+      [1046.5, 1318.5, 1568, 2093].forEach((f, i) => tone(ctx, { freq: f, at: i * 0.07, dur: 0.7, type: "triangle", vol: 0.06 }));
+      break;
+    case "crystal":
+      tone(ctx, { freq: 2093, dur: 0.9, vol: 0.05 });
+      tone(ctx, { freq: 2637, at: 0.05, dur: 0.8, vol: 0.04 });
+      tone(ctx, { freq: 3136, at: 0.1, dur: 0.6, vol: 0.03 });
+      break;
+    default:
+      tone(ctx, { freq: 880, dur: 0.42, vol: 0.09, attack: 0.015 });
+      tone(ctx, { freq: 1318.5, at: 0.11, dur: 0.42, vol: 0.09, attack: 0.015 });
+  }
+}
+
+const chime = () => playNotifSound(myProfile?.notifications?.soundName);
+
+const minutesOf = (hhmm) => {
+  const [h, m] = String(hhmm || "").split(":").map(Number);
+  return Number.isFinite(h) ? h * 60 + (m || 0) : null;
+};
+function isQuietNow(prefs) {
+  const q = prefs?.quiet;
+  if (!q?.on) return false;
+  const from = minutesOf(q.from);
+  const to = minutesOf(q.to);
+  if (from === null || to === null || from === to) return false;
+  const d = new Date();
+  const now = d.getHours() * 60 + d.getMinutes();
+  return from < to ? now >= from && now < to : now >= from || now < to; // may wrap past midnight
 }
 
 // Service worker: mobile Chrome only shows notifications through it, and it
@@ -5377,9 +5561,10 @@ function showMessageBanner({ title, body, avatar, onOpen }) {
 // Sound + banner while the app is visible, system notification otherwise.
 function announce({ title, body, silent, chatId, kind, avatar }) {
   const prefs = myProfile?.notifications || {};
+  if (isQuietNow(prefs)) silent = true;
   if (prefs.sound !== false && !silent) chime();
   if (!document.hidden) {
-    if (touchOnly && !silent && navigator.vibrate) navigator.vibrate(30);
+    if (touchOnly && !silent && prefs.vibrate !== false && navigator.vibrate) navigator.vibrate(30);
     showMessageBanner({ title, body, avatar, onOpen: () => openChatById(chatId, kind) });
     return;
   }
@@ -5617,6 +5802,9 @@ settingsOverlay.addEventListener("click", (e) => {
 
 function SETTINGS_SECTION_TITLES(section) {
   return {
+    appearance: "Оформление",
+    security: "Безопасность",
+    data: "Данные и память",
     profile: t("menu_profile"),
     privacy: t("menu_privacy"),
     notifications: t("menu_notifications"),
@@ -5651,6 +5839,9 @@ function showSettingsMenu(animated = false) {
 }
 
 function showSettingsSection(section) {
+  if (section === "appearance") renderAppearance();
+  if (section === "security") renderSecurity();
+  if (section === "data") renderStorage();
   const outgoing = visibleSettingsView();
   const panel = document.querySelector(`.settings-tab-panel[data-spanel="${section}"]`);
   const mutate = () => {
@@ -5760,12 +5951,15 @@ function openSettings() {
   privacyBio.value = myProfile.privacy?.bioVisibility || "everyone";
   privacyBirthday.value = myProfile.privacy?.birthdayVisibility || "everyone";
   privacyTyping.checked = myProfile.privacy?.typingVisibility !== false;
+  document.getElementById("privacy-receipts").checked = myProfile.privacy?.readReceipts !== false;
+  document.getElementById("privacy-calls").value = myProfile.privacy?.calls || "everyone";
 
   notifMuteAll.checked = !!myProfile.notifications?.muteAll;
   notifSound.checked = myProfile.notifications?.sound !== false;
   notifDesktop.checked = myProfile.notifications?.desktop !== false && "Notification" in window && Notification.permission === "granted";
   notifPreview.checked = myProfile.notifications?.preview !== false;
   notifGroups.checked = myProfile.notifications?.groups !== false;
+  fillNotificationExtras();
 
   const chatPrefs = myProfile.chatPrefs || {};
   chatsSendOnEnter.checked = chatPrefs.sendOnEnter !== false;
@@ -5778,6 +5972,7 @@ function openSettings() {
   });
 
   settingsLanguage.value = myProfile.language || "ru";
+  resetSettingsSearch();
   selectedQuickReaction = quickReactionEmoji();
   renderQuickReactionPicker();
 
@@ -5844,10 +6039,13 @@ settingsPrivacySave.addEventListener("click", async () => {
       bioVisibility: privacyBio.value,
       birthdayVisibility: privacyBirthday.value,
       typingVisibility: privacyTyping.checked,
+      readReceipts: document.getElementById("privacy-receipts").checked,
+      calls: document.getElementById("privacy-calls").value,
     };
     await updatePrivacy(currentUser.uid, privacy);
     myProfile.privacy = privacy;
     renderChats();
+    refreshReceipts();
     await successPulse(settingsPrivacySave);
     hideOverlay(settingsOverlay);
   } catch (err) {
@@ -5857,6 +6055,34 @@ settingsPrivacySave.addEventListener("click", async () => {
     settingsPrivacySave.disabled = false;
   }
 });
+
+const notifVibrate = document.getElementById("notif-vibrate");
+const notifQuiet = document.getElementById("notif-quiet");
+const notifQuietFrom = document.getElementById("notif-quiet-from");
+const notifQuietTo = document.getElementById("notif-quiet-to");
+const notifQuietTimes = document.getElementById("notif-quiet-times");
+let selectedNotifSound = "chime";
+
+function syncQuietTimes() {
+  notifQuietTimes.classList.toggle("off", !notifQuiet.checked);
+}
+
+function fillNotificationExtras() {
+  const prefs = myProfile.notifications || {};
+  selectedNotifSound = NOTIF_SOUNDS[prefs.soundName] ? prefs.soundName : "chime";
+  chipRow(document.getElementById("notif-sound-pick"), NOTIF_SOUNDS, selectedNotifSound, (v) => {
+    selectedNotifSound = v;
+    audio();
+    playNotifSound(v);
+  });
+  notifVibrate.checked = prefs.vibrate !== false;
+  notifQuiet.checked = !!prefs.quiet?.on;
+  notifQuietFrom.value = prefs.quiet?.from || "23:00";
+  notifQuietTo.value = prefs.quiet?.to || "08:00";
+  syncQuietTimes();
+}
+notifQuiet.addEventListener("change", syncQuietTimes);
+notifVibrate.addEventListener("change", () => notifVibrate.checked && navigator.vibrate?.(40));
 
 settingsNotifSave.addEventListener("click", async () => {
   settingsNotifError.textContent = "";
@@ -5872,6 +6098,9 @@ settingsNotifSave.addEventListener("click", async () => {
       desktop: desktopEnabled,
       preview: notifPreview.checked,
       groups: notifGroups.checked,
+      soundName: selectedNotifSound,
+      vibrate: notifVibrate.checked,
+      quiet: { on: notifQuiet.checked, from: notifQuietFrom.value || "23:00", to: notifQuietTo.value || "08:00" },
     };
     await updateNotifications(currentUser.uid, notifications);
     myProfile.notifications = notifications;
@@ -6361,12 +6590,488 @@ document.getElementById("chat-search-next").addEventListener("click", () => {
 });
 document.getElementById("chat-search-close").addEventListener("click", () => closeChatSearch());
 
+// ---------- Settings search ----------
+
+const settingsSearch = document.getElementById("settings-search");
+const settingsSearchResults = document.getElementById("settings-search-results");
+
+function settingsIndex() {
+  const items = [];
+  document.querySelectorAll(".settings-tab-panel[data-spanel]").forEach((panel) => {
+    const section = panel.dataset.spanel;
+    const sectionTitle = SETTINGS_SECTION_TITLES(section) || section;
+    panel.querySelectorAll(".setting-row, .field").forEach((row) => {
+      const titleEl = row.querySelector(".setting-title") || row.querySelector(":scope > label");
+      const title = (titleEl?.firstChild?.textContent || titleEl?.textContent || "").trim();
+      if (!title) return;
+      items.push({ section, sectionTitle, title, desc: row.querySelector(".setting-desc")?.textContent || "", row });
+    });
+    items.push({ section, sectionTitle, title: sectionTitle, desc: "", row: null });
+  });
+  return items;
+}
+
+function resetSettingsSearch() {
+  settingsSearch.value = "";
+  settingsMenu.classList.remove("searching");
+  settingsSearchResults.classList.add("hidden");
+}
+
+function highlightInto(el, text, q) {
+  const i = text.toLowerCase().indexOf(q);
+  if (i < 0) {
+    el.textContent = text;
+    return;
+  }
+  const mark = document.createElement("mark");
+  mark.textContent = text.slice(i, i + q.length);
+  el.append(text.slice(0, i), mark, text.slice(i + q.length));
+}
+
+settingsSearch.addEventListener("input", () => {
+  const q = settingsSearch.value.trim().toLowerCase();
+  if (!q) return resetSettingsSearch();
+  settingsMenu.classList.add("searching");
+  settingsSearchResults.classList.remove("hidden");
+  settingsSearchResults.innerHTML = "";
+  const hits = settingsIndex()
+    .filter((it) => `${it.title} ${it.desc} ${it.sectionTitle}`.toLowerCase().includes(q))
+    .slice(0, 14);
+  if (!hits.length) {
+    settingsSearchResults.innerHTML = '<div class="ssr-empty">Ничего не нашлось 🤷</div>';
+    return;
+  }
+  hits.forEach((it) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ssr-item";
+    b.innerHTML = '<span class="ssr-title"></span><span class="ssr-section"></span>';
+    highlightInto(b.querySelector(".ssr-title"), it.title, q);
+    b.querySelector(".ssr-section").textContent = it.row ? it.sectionTitle : "Раздел";
+    b.addEventListener("click", () => {
+      resetSettingsSearch();
+      showSettingsSection(it.section);
+      if (!it.row) return;
+      setTimeout(() => {
+        it.row.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+        it.row.classList.remove("search-flash");
+        void it.row.offsetWidth;
+        it.row.classList.add("search-flash");
+      }, 520);
+    });
+    settingsSearchResults.appendChild(b);
+  });
+  stagger(settingsSearchResults.children, { y: 8, blur: 0, step: 22, spring: "smooth" });
+});
+
+// ---------- Code password (app lock on this device) ----------
+
+const LOCK_KEY = "lm-lock";
+const LOCK_AFTER = { 0: "Сразу", 60: "Через 1 мин", 300: "Через 5 мин", 3600: "Через час" };
+let lockCfg = null;
+try {
+  lockCfg = JSON.parse(readStore(LOCK_KEY) || "null");
+} catch (_) {}
+const lockScreen = document.getElementById("lock-screen");
+const lockTitle = document.getElementById("lock-title");
+const lockSub = document.getElementById("lock-sub");
+const lockDots = document.getElementById("lock-dots");
+const lockPad = document.getElementById("lock-pad");
+const lockCancel = document.getElementById("lock-cancel");
+const lockForgot = document.getElementById("lock-forgot");
+let lockState = null;
+let lockHideTimer = 0;
+
+const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+async function hashPin(pin, saltB64) {
+  const salt = Uint8Array.from(atob(saltB64), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" }, key, 256);
+  return toB64(bits);
+}
+const checkPin = async (pin) => !!lockCfg && (await hashPin(pin, lockCfg.salt)) === lockCfg.hash;
+
+function saveLockCfg() {
+  try {
+    if (lockCfg) localStorage.setItem(LOCK_KEY, JSON.stringify(lockCfg));
+    else localStorage.removeItem(LOCK_KEY);
+  } catch (_) {}
+}
+
+["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "del"].forEach((d) => {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "lock-key" + (d === "" ? " blank" : d === "del" ? " del" : "");
+  if (d === "del") b.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><line x1="17" y1="9.5" x2="12" y2="14.5"/><line x1="12" y1="9.5" x2="17" y2="14.5"/></svg>';
+  else b.textContent = d;
+  if (d !== "") b.addEventListener("click", () => pinKey(d));
+  lockPad.appendChild(b);
+});
+
+function renderLockDots(pop = false) {
+  const n = lockState?.entered.length || 0;
+  lockDots.querySelectorAll("i").forEach((dot, i) => {
+    const on = i < n;
+    if (on && !dot.classList.contains("on") && pop) animate(dot, [{ transform: "scale(.3)" }, { transform: "none" }], { spring: "jelly" });
+    dot.classList.toggle("on", on);
+  });
+}
+
+let lockHideAnim = null;
+function showLockScreen() {
+  clearTimeout(lockHideTimer);
+  if (lockHideAnim) {
+    // A new prompt right after the previous one: stay on screen.
+    lockHideAnim.cancel();
+    lockHideAnim = null;
+    lockScreen.classList.remove("unlocking");
+  }
+  if (!lockScreen.classList.contains("hidden")) return;
+  lockScreen.classList.remove("hidden");
+  animate(lockScreen, [{ opacity: 0 }, { opacity: 1 }], { duration: 220 });
+  animate(lockScreen.querySelector(".lock-card"), [{ opacity: 0, transform: "translateY(24px) scale(.94)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  stagger(lockPad.children, { y: 12, blur: 0, scale: 0.8, step: 16, delay: 60, spring: "jelly" });
+}
+
+function hideLockScreen(unlocked) {
+  lockHideTimer = setTimeout(() => {
+    if (unlocked) lockScreen.classList.add("unlocking");
+    const anim = lockScreen.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: unlocked ? "scale(1.06)" : "none" }], {
+      duration: reducedMotion ? 60 : 320,
+      delay: unlocked ? 180 : 0,
+      easing: "ease-in",
+      fill: "forwards",
+    });
+    lockHideAnim = anim;
+    anim.finished.then(
+      () => {
+        if (lockHideAnim !== anim) return;
+        lockHideAnim = null;
+        lockScreen.classList.add("hidden");
+        lockScreen.classList.remove("unlocking");
+        anim.cancel();
+      },
+      () => {}
+    );
+  }, 30);
+}
+
+// Asks for 4 digits. validate(pin) → true, or false / an error message.
+function pinPrompt({ title, sub = "", cancellable = true, validate = null }) {
+  return new Promise((resolve) => {
+    lockState = { entered: "", validate, resolve, busy: false, fails: 0, blockedUntil: 0 };
+    morphText(lockTitle, title, 1);
+    lockSub.textContent = sub;
+    lockSub.classList.remove("error");
+    lockCancel.classList.toggle("hidden", !cancellable);
+    lockForgot.classList.toggle("hidden", cancellable);
+    renderLockDots();
+    showLockScreen();
+  });
+}
+
+function finishPin(value, unlocked = false) {
+  const st = lockState;
+  lockState = null;
+  hideLockScreen(unlocked && value !== null);
+  st?.resolve(value);
+}
+
+async function pinKey(d) {
+  const st = lockState;
+  if (!st || st.busy) return;
+  if (Date.now() < st.blockedUntil) return;
+  if (d === "del") st.entered = st.entered.slice(0, -1);
+  else if (st.entered.length < 4) st.entered += d;
+  renderLockDots(true);
+  if (st.entered.length < 4) return;
+  st.busy = true;
+  const pin = st.entered;
+  const verdict = st.validate ? await st.validate(pin) : true;
+  if (lockState !== st) return;
+  if (verdict === true) {
+    lockDots.classList.add("ok");
+    setTimeout(() => {
+      lockDots.classList.remove("ok");
+      finishPin(pin, true);
+    }, 160);
+    return;
+  }
+  st.fails++;
+  st.entered = "";
+  lockSub.textContent = typeof verdict === "string" ? verdict : "Неверный код";
+  lockSub.classList.add("error");
+  if (navigator.vibrate) navigator.vibrate([40, 50, 40]);
+  lockDots.animate(
+    [{ transform: "none" }, { transform: "translateX(-14px)" }, { transform: "translateX(12px)" }, { transform: "translateX(-8px)" }, { transform: "translateX(5px)" }, { transform: "none" }],
+    { duration: 420, easing: "ease-out" }
+  );
+  if (st.fails >= 5) {
+    st.fails = 0;
+    st.blockedUntil = Date.now() + 30000;
+    const tick = setInterval(() => {
+      const left = Math.ceil((st.blockedUntil - Date.now()) / 1000);
+      if (left <= 0 || lockState !== st) {
+        clearInterval(tick);
+        if (lockState === st) lockSub.textContent = "";
+        return;
+      }
+      lockSub.textContent = `Слишком много попыток. Подождите ${left} с`;
+    }, 250);
+  }
+  setTimeout(() => {
+    st.busy = false;
+    renderLockDots();
+  }, 430);
+}
+
+lockCancel.addEventListener("click", () => finishPin(null));
+lockForgot.addEventListener("click", async () => {
+  if (!confirm("Сбросить код-пароль? Вы выйдете из аккаунта на этом устройстве и сможете войти заново.")) return;
+  lockCfg = null;
+  saveLockCfg();
+  try {
+    await logout();
+  } catch (_) {}
+  location.href = "/login";
+});
+document.addEventListener("keydown", (e) => {
+  if (!lockState) return;
+  if (/^[0-9]$/.test(e.key)) pinKey(e.key);
+  else if (e.key === "Backspace") pinKey("del");
+  else if (e.key === "Escape" && !lockCancel.classList.contains("hidden")) finishPin(null);
+  else return;
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
+
+async function lockApp() {
+  if (!lockCfg || lockState) return;
+  await pinPrompt({ title: "Введите код-пароль", cancellable: false, validate: checkPin });
+}
+
+async function setNewPin() {
+  const first = await pinPrompt({ title: "Придумайте код-пароль", sub: "4 цифры" });
+  if (first === null) return false;
+  const second = await pinPrompt({ title: "Повторите код-пароль", validate: (p) => p === first || "Коды не совпадают — попробуйте ещё раз" });
+  if (second === null) return false;
+  const salt = toB64(crypto.getRandomValues(new Uint8Array(16)));
+  lockCfg = { salt, hash: await hashPin(first, salt), after: lockCfg?.after ?? 60 };
+  saveLockCfg();
+  return true;
+}
+
+const verifyCurrentPin = () => pinPrompt({ title: "Введите текущий код", validate: checkPin }).then((p) => p !== null);
+
+// Locks again after being in the background; can also blur the app in the
+// task switcher.
+let hiddenAt = Date.now();
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    hiddenAt = Date.now();
+    if (look.privacyBlur) document.documentElement.classList.add("privacy-veil");
+    return;
+  }
+  if (lockCfg && Date.now() - hiddenAt >= (lockCfg.after ?? 60) * 1000) lockApp();
+  requestAnimationFrame(() => document.documentElement.classList.remove("privacy-veil"));
+});
+if (lockCfg) lockApp();
+
+const lockEnabled = document.getElementById("lock-enabled");
+const lockOptions = document.getElementById("lock-options");
+
+function renderSecurity() {
+  lockEnabled.checked = !!lockCfg;
+  lockOptions.classList.toggle("hidden", !lockCfg);
+  chipRow(document.getElementById("lock-after"), LOCK_AFTER, String(lockCfg?.after ?? 60), (v) => {
+    if (!lockCfg) return;
+    lockCfg.after = Number(v);
+    saveLockCfg();
+  });
+  document.getElementById("privacy-blur").checked = !!look.privacyBlur;
+  document.getElementById("security-e2e-status").textContent = hasDevice()
+    ? "Ключ этого устройства создан — личные чаты шифруются автоматически"
+    : "В этом браузере шифрование недоступно";
+}
+
+lockEnabled.addEventListener("change", async () => {
+  if (lockEnabled.checked) {
+    const ok = await setNewPin();
+    lockEnabled.checked = ok;
+    if (ok) toast("Код-пароль включён", { icon: "🔒" });
+  } else {
+    const ok = await verifyCurrentPin();
+    if (ok) {
+      lockCfg = null;
+      saveLockCfg();
+      toast("Код-пароль выключен", { icon: "🔓" });
+    }
+    lockEnabled.checked = !ok;
+  }
+  renderSecurity();
+  if (!lockOptions.classList.contains("hidden")) animate(lockOptions, [{ opacity: 0, transform: "translateY(-8px)" }, { opacity: 1, transform: "none" }], { spring: "smooth" });
+});
+document.getElementById("lock-change").addEventListener("click", async () => {
+  if (!(await verifyCurrentPin())) return;
+  if (await setNewPin()) toast("Код-пароль изменён", { icon: "🔒" });
+});
+document.getElementById("lock-now").addEventListener("click", () => {
+  hideOverlay(settingsOverlay);
+  lockApp();
+});
+document.getElementById("privacy-blur").addEventListener("change", (e) => saveLook({ privacyBlur: e.target.checked }));
+
+// ---------- Data & storage ----------
+
+function storageGroups() {
+  const g = { drafts: 0, walls: 0, settings: 0, other: 0 };
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      const size = (k.length + (localStorage.getItem(k) || "").length) * 2;
+      if (k.startsWith("lm-draft:")) g.drafts += size;
+      else if (k.startsWith("lm-wall:")) g.walls += size;
+      else if (k.startsWith("lm-")) g.settings += size;
+      else g.other += size;
+    }
+  } catch (_) {}
+  return g;
+}
+
+async function renderStorage() {
+  const g = storageGroups();
+  let total = g.drafts + g.walls + g.settings + g.other;
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est?.usage > total) {
+      g.other += est.usage - total;
+      total = est.usage;
+    }
+  } catch (_) {}
+  const parts = [
+    ["Черновики", g.drafts, "#ffd84a"],
+    ["Обои", g.walls, "#ff6a1a"],
+    ["Настройки", g.settings, "#5b8cff"],
+    ["Ключи шифрования и кэш", g.other, "#8b5cf6"],
+  ];
+  document.getElementById("storage-total").textContent = fmtFileSize(total);
+  const bar = document.getElementById("storage-bar");
+  const legend = document.getElementById("storage-legend");
+  bar.innerHTML = "";
+  legend.innerHTML = "";
+  parts.forEach(([label, size, color], i) => {
+    const seg = document.createElement("span");
+    seg.style.background = color;
+    seg.style.flexGrow = String(Math.max(size, total * 0.015));
+    bar.appendChild(seg);
+    animate(seg, [{ transform: "scaleX(0)" }, { transform: "none" }], { spring: "smooth", delay: 80 + i * 70 });
+    const row = document.createElement("div");
+    row.className = "storage-row";
+    row.innerHTML = `<i style="background:${color}"></i><span></span><b></b>`;
+    row.querySelector("span").textContent = label;
+    row.querySelector("b").textContent = fmtFileSize(size);
+    legend.appendChild(row);
+  });
+  document.getElementById("data-saver").checked = !!look.dataSaver;
+}
+
+function removeStoreKeys(test) {
+  try {
+    Object.keys(localStorage)
+      .filter(test)
+      .forEach((k) => localStorage.removeItem(k));
+  } catch (_) {}
+}
+
+document.getElementById("data-saver").addEventListener("change", (e) => {
+  saveLook({ dataSaver: e.target.checked });
+  toast(e.target.checked ? "Экономия трафика включена" : "Экономия трафика выключена", { icon: "📶" });
+});
+document.getElementById("data-clear-drafts").addEventListener("click", () => {
+  removeStoreKeys((k) => k.startsWith("lm-draft:"));
+  renderChats();
+  renderStorage();
+  toast("Черновики удалены", { icon: "🧹" });
+});
+document.getElementById("data-clear-walls").addEventListener("click", () => {
+  removeStoreKeys((k) => k.startsWith("lm-wall:"));
+  applyWallpaper();
+  renderStorage();
+  toast("Обои сброшены", { icon: "🧹" });
+});
+document.getElementById("data-reset-device").addEventListener("click", () => {
+  if (!confirm("Сбросить оформление, обои, папки и другие настройки этого устройства? Черновики, код-пароль и ключи шифрования останутся.")) return;
+  removeStoreKeys((k) => k.startsWith("lm-") && !k.startsWith("lm-draft:") && k !== LOCK_KEY);
+  look = { ...LOOK_DEFAULTS };
+  applyLook();
+  applyWallpaper();
+  renderStorage();
+  toast("Настройки устройства сброшены", { icon: "♻️" });
+});
+
+// ---------- Export a chat to a text file ----------
+
+// Some browsers drop non-Latin download names, so file names are transliterated.
+const TRANSLIT = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya" };
+function translit(text) {
+  const out = [...text]
+    .map((ch) => {
+      const low = ch.toLowerCase();
+      const t = TRANSLIT[low];
+      if (t === undefined) return ch;
+      return ch === low ? t : t.charAt(0).toUpperCase() + t.slice(1);
+    })
+    .join("")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return out.slice(0, 60) || "chat";
+}
+
+function exportCurrentChat() {
+  const rows = [...messagesEl.querySelectorAll(".msg-row")].filter((r) => r._ctx);
+  if (!rows.length) {
+    toast("В этом чате пока нечего сохранять", { icon: "💾" });
+    return;
+  }
+  const title = chatTitle.textContent.trim() || "Чат";
+  const groupish = currentChatType === "group" || currentChatType === "channel";
+  const lines = [`Linkage Message — ${title}`, `Экспорт от ${new Date().toLocaleString("ru-RU")}`, ""];
+  rows.forEach((r) => {
+    const { msg, isMine } = r._ctx;
+    const when = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleString("ru-RU") : "";
+    const who = isMine ? myProfile.displayName || "Вы" : groupish ? groupSenderCache.get(msg.senderId)?.displayName || "Участник" : title;
+    let text = msg.poll ? `📊 ${msg.poll.q} — ${msg.poll.options.join(" / ")}` : stripRich(msg.text || "");
+    if (msg.location) text += ` https://www.openstreetmap.org/?mlat=${msg.location.lat}&mlon=${msg.location.lng}`;
+    const media = msg.imageUrl || msg.fileUrl || msg.voiceUrl || msg.videoNoteUrl;
+    if (media) text += ` ${media}`;
+    lines.push(`[${when}] ${who}: ${text}`);
+  });
+  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `Linkage-${translit(title)}-${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast(`Сохранено сообщений: ${rows.length}`, { icon: "💾" });
+}
+
+document.getElementById("chat-menu-export-btn").addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  exportCurrentChat();
+});
+
 // ---------- Calls ----------
 
 function callCurrentContact(kind) {
   if (currentChatType !== "contact" || !currentOtherUid) return;
   if (isBlocked(currentOtherUid)) {
     toast("Сначала разблокируйте пользователя", { tone: "error" });
+    return;
+  }
+  if (currentOtherProfile?.privacy?.calls === "nobody") {
+    toast("Пользователь не принимает звонки", { tone: "error", icon: "📵" });
     return;
   }
   startCall({ chatId: currentChatId, otherUid: currentOtherUid, profile: currentOtherProfile, kind });

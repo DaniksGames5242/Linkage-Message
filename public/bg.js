@@ -219,7 +219,7 @@
   // The field drifts slowly, so 15 fps looks continuous and halves the work
   // of every blurred surface above it.
   const frameMs = () => (window.LinkageFX.level() === "max" ? 1000 / 30 : 1000 / 15);
-  const animated = () => !reduced && window.LinkageFX.level() !== "lite";
+  const animated = () => !reduced && window.LinkageFX.level() !== "lite" && !document.documentElement.classList.contains("bg-still");
 
   function draw(now) {
     const k = 0.06;

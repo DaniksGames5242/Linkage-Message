@@ -62,6 +62,12 @@ export const SPRINGS = {
 
 export const fxLevel = () => window.LinkageFX?.level?.() || "balanced";
 
+// Settings → Оформление → animation speed (1 = normal, 0 = off).
+let motionScale = 1;
+export function setMotionScale(k) {
+  motionScale = Math.max(0, Number(k) || 0);
+}
+
 export function animate(el, keyframes, opts = {}) {
   if (!el || !el.animate) return null;
   // Economy mode: animating blur is the expensive part, drop it.
@@ -83,6 +89,10 @@ export function animate(el, keyframes, opts = {}) {
     ...rest,
   };
   if (reducedMotion) options.duration = Math.min(options.duration, 120);
+  if (motionScale !== 1) {
+    options.duration = motionScale ? options.duration * motionScale : 1;
+    options.delay = motionScale ? (options.delay || 0) * motionScale : 0;
+  }
   return el.animate(keyframes, options);
 }
 

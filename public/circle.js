@@ -31,6 +31,36 @@ const ICON = {
 };
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// ---------- Triangles ----------
+// A rounded equilateral triangle (apex up) in a 0..1 box, shared by the
+// recorder preview, the chat bubble and the kaleidoscope.
+export const TRI = { apexY: 0.04, baseY: 0.84, half: 0.46 };
+const TRI_PATH_01 =
+  "M0.5,0.04 Q0.528,0.04 0.542,0.065 L0.945,0.79 Q0.968,0.84 0.915,0.84 L0.085,0.84 Q0.032,0.84 0.055,0.79 L0.458,0.065 Q0.472,0.04 0.5,0.04Z";
+const TRI_PATH_100 =
+  "M50,4 Q52.8,4 54.2,6.5 L94.5,79 Q96.8,84 91.5,84 L8.5,84 Q3.2,84 5.5,79 L45.8,6.5 Q47.2,4 50,4Z";
+
+// One <clipPath> in the document; elements use `clip-path: url(#tri-clip)`.
+function ensureTriangleClip() {
+  if (document.getElementById("tri-clip")) return;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", "0");
+  svg.setAttribute("height", "0");
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.position = "absolute";
+  svg.innerHTML = `<defs><clipPath id="tri-clip" clipPathUnits="objectBoundingBox"><path d="${TRI_PATH_01}"/></clipPath></defs>`;
+  document.body.appendChild(svg);
+}
+
+function ringSVG(cls, triangle) {
+  if (triangle) {
+    return `<svg class="${cls} tri" viewBox="0 0 100 100"><path pathLength="100" d="${TRI_PATH_100}" style="stroke-dasharray:100;stroke-dashoffset:100"/></svg>`;
+  }
+  const C = 2 * Math.PI * 48.5;
+  return `<svg class="${cls}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48.5" style="stroke-dasharray:${C};stroke-dashoffset:${C}"/></svg>`;
+}
+const ringLength = (triangle) => (triangle ? 100 : 2 * Math.PI * 48.5);
 export const MAX_ZOOM = 4;
 
 // Opens the recorder and returns a controller:
@@ -40,22 +70,24 @@ export const MAX_ZOOM = 4;
 // finger): no buttons, just hints, until lock() makes it hands-free.
 // Zoom: pinch, mouse wheel, the slider, double tap, or sliding further up
 // after locking.
-export function recordCircle({ hold = false } = {}) {
+export function recordCircle({ hold = false, shape = "circle" } = {}) {
   let resolveDone;
   const done = new Promise((r) => (resolveDone = r));
+  const triangle = shape === "triangle";
+  if (triangle) ensureTriangleClip();
 
   const root = document.createElement("div");
-  root.className = "circle-rec" + (hold ? " hold" : "");
-  const C = 2 * Math.PI * 48.5;
+  root.className = "circle-rec" + (hold ? " hold" : "") + (triangle ? " shape-triangle" : "");
+  const C = ringLength(triangle);
   root.innerHTML = `
     <div class="circle-rec-stage">
       <div class="circle-rec-frame">
         <div class="circle-rec-lens"><video playsinline muted autoplay></video></div>
-        <svg class="circle-rec-ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48.5" style="stroke-dasharray:${C};stroke-dashoffset:${C}"/></svg>
+        ${ringSVG("circle-rec-ring", triangle)}
         <span class="circle-rec-zoom">1.0×</span>
       </div>
       <div class="circle-rec-time"><span class="circle-rec-dot"></span><span class="circle-rec-clock">0:00</span></div>
-      <div class="circle-rec-hint">Идёт запись · до ${MAX_SECONDS} секунд · двойной тап или щипок — зум</div>
+      <div class="circle-rec-hint">${triangle ? "🔺 Треугольник · " : ""}Идёт запись · до ${MAX_SECONDS} секунд · двойной тап или щипок — зум</div>
       <div class="circle-rec-hold-hints">
         <span class="crh-cancel">‹ Влево — отмена</span>
         <span class="crh-lock"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>Вверх — без рук и зум</span>
@@ -73,7 +105,7 @@ export function recordCircle({ hold = false } = {}) {
 
   const video = root.querySelector("video");
   const frame = root.querySelector(".circle-rec-frame");
-  const ring = root.querySelector(".circle-rec-ring circle");
+  const ring = root.querySelector(".circle-rec-ring circle, .circle-rec-ring path");
   const clock = root.querySelector(".circle-rec-clock");
   const zoomBadge = root.querySelector(".circle-rec-zoom");
   const zoomSlider = root.querySelector(".circle-rec-zoom-slider input");
@@ -295,7 +327,8 @@ function watch(el) {
         entries.forEach((e) => {
           const v = e.target.querySelector("video");
           if (!v || e.target === active) return;
-          if (e.isIntersecting) v.play().catch(() => {});
+          // Data saver: nothing plays until it's tapped.
+          if (e.isIntersecting && !document.documentElement.classList.contains("data-saver")) v.play().catch(() => {});
           else v.pause();
         });
       },
@@ -318,16 +351,34 @@ function stopActive() {
 
 // Muted looping preview; tap plays from the start with sound (bigger, with a
 // progress ring), tap again pauses.
-export function buildVideoNote(url, duration, fmt) {
-  const C = 2 * Math.PI * 48.5;
+export function buildVideoNote(url, duration, fmt, shape = "circle") {
+  const triangle = shape === "triangle";
+  if (triangle) ensureTriangleClip();
+  const C = ringLength(triangle);
   const el = document.createElement("div");
-  el.className = "vnote";
+  el.className = "vnote" + (triangle ? " vnote-tri" : "");
   el.innerHTML = `
     <video playsinline muted loop preload="metadata"></video>
-    <svg class="vnote-ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48.5" style="stroke-dasharray:${C};stroke-dashoffset:${C}"/></svg>
-    <span class="vnote-meta"><span class="vnote-dur"></span><span class="vnote-mute">🔇</span></span>`;
+    ${ringSVG("vnote-ring", triangle)}
+    <span class="vnote-meta"><span class="vnote-dur"></span><span class="vnote-mute">🔇</span></span>
+    ${
+      triangle
+        ? `<button type="button" class="vnote-kaleido" title="Калейдоскоп"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.5l8.2 4.75v9.5L12 21.5l-8.2-4.75v-9.5z"/><path d="M12 2.5v19M3.8 7.25l16.4 9.5M20.2 7.25l-16.4 9.5"/></svg></button>`
+        : ""
+    }`;
   const v = el.querySelector("video");
-  const ring = el.querySelector(".vnote-ring circle");
+  const ring = el.querySelector(".vnote-ring circle, .vnote-ring path");
+  if (document.documentElement.classList.contains("data-saver")) {
+    v.preload = "none";
+    if (/res\.cloudinary\.com/.test(url)) v.poster = url.replace(/\.mp4$/i, ".jpg"); // Cloudinary thumbnail
+    el.classList.add("paused");
+  }
+  el.querySelector(".vnote-kaleido")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const from = active === el ? v.currentTime : 0;
+    stopActive();
+    openKaleidoscope(url, from, el);
+  });
   v.src = url;
   el.querySelector(".vnote-dur").textContent = fmt(duration || 0);
   v.addEventListener("timeupdate", () => {
@@ -356,4 +407,158 @@ export function buildVideoNote(url, duration, fmt) {
   });
   watch(el);
   return el;
+}
+
+// ---------- Kaleidoscope (the triangle's party trick) ----------
+// The triangle video is mirrored into six wedges of a hexagon and slowly
+// spins; drag to spin it yourself (with inertia), tap the centre to switch
+// between a calm and a "prism" mode, ✕ or Esc to close.
+
+export function openKaleidoscope(url, startAt = 0, sourceEl = null) {
+  const root = document.createElement("div");
+  root.className = "kaleido";
+  root.innerHTML = `
+    <canvas class="kaleido-canvas"></canvas>
+    <div class="kaleido-bar"><span class="kaleido-fill"></span></div>
+    <div class="kaleido-hint">Крутите пальцем · нажмите в центр — сменить узор</div>
+    <button type="button" class="call-round kaleido-close" title="Закрыть">${ICON.close}</button>`;
+  document.body.appendChild(root);
+  pauseBackdrop(true);
+  const canvas = root.querySelector("canvas");
+  const g = canvas.getContext("2d");
+  const fill = root.querySelector(".kaleido-fill");
+  const video = document.createElement("video");
+  video.playsInline = true;
+  video.src = url;
+  video.currentTime = startAt;
+  video.play().catch(() => {
+    video.muted = true;
+    video.play().catch(() => {});
+  });
+
+  let size = 0;
+  const resize = () => {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    size = Math.min(innerWidth, innerHeight) * 0.92;
+    canvas.width = canvas.height = Math.round(size * dpr);
+    canvas.style.width = canvas.style.height = size + "px";
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  resize();
+  window.addEventListener("resize", resize);
+
+  let angle = 0;
+  let spin = 0.0035; // radians per frame
+  let prism = false;
+  let raf = 0;
+  let dragging = false;
+  const draw = () => {
+    raf = requestAnimationFrame(draw);
+    angle += spin;
+    if (!dragging) spin += (0.0035 - spin) * 0.01; // settle back to a slow spin
+    const R = size / 2;
+    const h = R * Math.cos(Math.PI / 6);
+    g.clearRect(0, 0, size, size);
+    if (video.readyState < 2) return;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const side = Math.min(vw, vh);
+    const sx = (vw - side) / 2;
+    const sy = (vh - side) / 2;
+    // Video units: the triangle spans y 4..84 of 100 → scale so it fills a wedge.
+    const s = h / ((TRI.baseY - TRI.apexY) * 100);
+    const breathe = prism ? 1 + Math.sin(performance.now() / 700) * 0.04 : 1;
+    g.save();
+    g.translate(R, R);
+    g.rotate(angle);
+    g.scale(breathe, breathe);
+    for (let k = 0; k < 6; k++) {
+      g.save();
+      g.rotate((k * Math.PI) / 3);
+      if (k % 2) g.scale(-1, 1);
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(-R / 2, h);
+      g.lineTo(R / 2, h);
+      g.closePath();
+      g.clip();
+      if (prism) g.filter = `hue-rotate(${k * 60}deg) saturate(1.4)`;
+      g.drawImage(video, sx, sy, side, side, -50 * s, -TRI.apexY * 100 * s, 100 * s, 100 * s);
+      g.restore();
+    }
+    g.restore();
+    fill.style.transform = `scaleX(${video.duration ? video.currentTime / video.duration : 0})`;
+  };
+  draw();
+
+  // Drag to spin, with inertia.
+  let lastA = 0;
+  let lastT = 0;
+  const center = () => {
+    const r = canvas.getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  };
+  let downAt = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    const [cx, cy] = center();
+    dragging = true;
+    lastA = Math.atan2(e.clientY - cy, e.clientX - cx);
+    lastT = performance.now();
+    downAt = { x: e.clientX, y: e.clientY, t: lastT };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const [cx, cy] = center();
+    const a = Math.atan2(e.clientY - cy, e.clientX - cx);
+    let d = a - lastA;
+    if (d > Math.PI) d -= 2 * Math.PI;
+    if (d < -Math.PI) d += 2 * Math.PI;
+    angle += d;
+    const now = performance.now();
+    spin = clamp(d / Math.max(1, (now - lastT) / 16.7), -0.25, 0.25);
+    lastA = a;
+    lastT = now;
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    dragging = false;
+    const [cx, cy] = center();
+    const tap = downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 8 && performance.now() - downAt.t < 300;
+    if (tap && Math.hypot(e.clientX - cx, e.clientY - cy) < size * 0.18) {
+      prism = !prism;
+      animate(canvas, [{ transform: "scale(.9) rotate(-8deg)" }, { transform: "none" }], { spring: "jelly" });
+    }
+  });
+
+  const close = () => {
+    cancelAnimationFrame(raf);
+    window.removeEventListener("resize", resize);
+    document.removeEventListener("keydown", onKey);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    pauseBackdrop(false);
+    root
+      .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(.85) rotate(20deg)" }], { duration: reducedMotion ? 50 : 280, easing: "ease-in", fill: "forwards" })
+      .finished.then(() => root.remove(), () => root.remove());
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+  root.querySelector(".kaleido-close").addEventListener("click", close);
+  video.addEventListener("ended", () => {
+    video.currentTime = 0;
+    video.play().catch(() => {});
+  });
+
+  // Unfolds out of the bubble it was opened from.
+  const from = sourceEl?.getBoundingClientRect();
+  animate(root, [{ opacity: 0 }, { opacity: 1 }], { duration: 260 });
+  if (from && !reducedMotion) {
+    const dx = from.left + from.width / 2 - innerWidth / 2;
+    const dy = from.top + from.height / 2 - innerHeight / 2;
+    animate(canvas, [{ transform: `translate(${dx}px, ${dy}px) scale(${from.width / size}) rotate(-120deg)` }, { transform: "none" }], { spring: "bouncy" });
+  }
+  return close;
 }

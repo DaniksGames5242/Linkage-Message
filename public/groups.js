@@ -174,10 +174,10 @@ export async function editEncryptedGroupMessage(groupId, messageId, enc) {
   });
 }
 
-export async function markGroupRead(groupId, uid) {
+export async function markGroupRead(groupId, uid, receipt = true) {
   await updateDoc(doc(db, "groups", groupId), {
     [`unread.${uid}`]: 0,
-    [`lastRead.${uid}`]: serverTimestamp(),
+    ...(receipt ? { [`lastRead.${uid}`]: serverTimestamp() } : {}),
   });
 }
 

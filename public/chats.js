@@ -176,10 +176,12 @@ export async function editEncryptedMessage(chatId, messageId, enc) {
 
 // Clears my unread counter and moves my read marker (drives ✓✓ for the
 // other side).
-export async function markChatRead(chatId, uid) {
+// receipt=false (read receipts turned off) clears the counter without
+// telling the other side when the chat was read.
+export async function markChatRead(chatId, uid, receipt = true) {
   await updateDoc(doc(db, "chats", chatId), {
     [`unread.${uid}`]: 0,
-    [`lastRead.${uid}`]: serverTimestamp(),
+    ...(receipt ? { [`lastRead.${uid}`]: serverTimestamp() } : {}),
   });
 }
 
