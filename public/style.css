@@ -8889,3 +8889,78 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 .is-scrolling .room-item, .is-scrolling .msg-row { pointer-events: none; }
 .fx-lite .bubble, .fx-lite .room-item, .fx-lite .glass { box-shadow: none; }
 .fx-lite #chat[data-wall]::before { will-change: auto; }
+
+/* =====================================================================
+   Settings as a page (a tab like the chat list), not a modal window
+   ===================================================================== */
+#settings-overlay.as-page {
+  inset: calc(12px + var(--call-dock, 0px)) auto 12px 12px;
+  width: 350px;
+  padding: 0 !important;
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  align-items: stretch;
+  justify-content: stretch;
+  z-index: 55;
+}
+#settings-overlay.as-page .settings-panel {
+  max-width: none;
+  max-height: none;
+  height: 100%;
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01)), rgba(18, 13, 11, 0.9);
+}
+#settings-overlay.as-page .settings-body { flex: 1; min-height: 0; padding-bottom: 120px; }
+#settings-overlay.as-page #settings-close-btn { display: none; }
+/* The ✓ replaces the big "Сохранить" buttons at the bottom of each section. */
+#settings-profile-save,
+#settings-privacy-save,
+#settings-notif-save,
+#settings-chats-save,
+#settings-language-save { display: none !important; }
+.settings-save-check {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--on-accent, #1a120c);
+  background: var(--accent-grad, var(--accent));
+  box-shadow: 0 6px 18px -6px color-mix(in srgb, var(--accent) 70%, transparent);
+  display: grid;
+  place-items: center;
+}
+.settings-save-check.busy { opacity: 0.55; pointer-events: none; animation: saveBusy 0.9s ease-in-out infinite alternate; }
+@keyframes saveBusy { to { transform: scale(0.88); } }
+.avatar-menu-trigger { cursor: default; pointer-events: none; }
+
+@media (max-width: 720px) {
+  #settings-overlay.as-page {
+    inset: 0;
+    width: auto;
+  }
+  #settings-overlay.as-page .settings-panel {
+    border-radius: 0;
+    border: none;
+    padding-top: env(safe-area-inset-top);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 30%), rgba(12, 9, 8, 0.9);
+  }
+  #settings-overlay.as-page .settings-panel::before { display: none; }
+  #settings-overlay.as-page .settings-body { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+
+  /* Compact floating tab bar, centred — not edge to edge. */
+  #tabbar {
+    left: 50%;
+    right: auto;
+    width: 250px;
+    margin-left: -125px;
+  }
+  .tab { font-size: 10.5px; padding: 5px 2px 4px; }
+  .tab-icon { height: 25px; }
+  .tab-icon svg { width: 22px; height: 22px; }
+}
+
+/* Bubbles keep whitespace for message text; structural cards must not, or
+   the newlines in their markup turn into tall empty lines. */
+.msg-file-card, .contact-card, .poll, .location-card, .call-card, .file-chip, .voice-player { white-space: normal; }
+#sidebar.under-page > * { visibility: hidden; }
+#sidebar.under-page > #fab-new-chat { opacity: 0; }

@@ -17,8 +17,9 @@ export const STORY_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
 // A story is either an inline (downscaled) image or a video hosted on
 // Cloudinary: addStory(uid, { image }) / addStory(uid, { videoUrl, duration }).
-export async function addStory(uid, media) {
-  const payload = { ownerId: uid, createdAt: serverTimestamp() };
+// audience: who may see it — the owner plus their contacts at posting time.
+export async function addStory(uid, media, audience = []) {
+  const payload = { ownerId: uid, audience: [...new Set([uid, ...audience])].slice(0, 2000), createdAt: serverTimestamp() };
   if (typeof media === "string") payload.image = media;
   else if (media?.videoUrl) {
     payload.videoUrl = media.videoUrl;
@@ -32,12 +33,17 @@ export async function deleteStory(storyId) {
   await deleteDoc(doc(db, "stories", storyId));
 }
 
-// Everyone signed in can see everyone's stories (this app has no follower
-// graph - "contacts" here are just per-user aliases, not an access list),
-// mirroring how profiles/usernames are already fully visible to any user.
-export function listenRecentStories(onChange, onError) {
+// Stories are shown only to the owner's contacts (listed in `audience`,
+// enforced by the Firestore rules).
+export function listenRecentStories(uid, onChange, onError) {
   const since = Timestamp.fromMillis(Date.now() - STORY_LIFETIME_MS);
-  const q = query(collection(db, "stories"), where("createdAt", ">", since), orderBy("createdAt", "desc"), limit(300));
+  const q = query(
+    collection(db, "stories"),
+    where("audience", "array-contains", uid),
+    where("createdAt", ">", since),
+    orderBy("createdAt", "desc"),
+    limit(300)
+  );
   return onSnapshot(
     q,
     (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),

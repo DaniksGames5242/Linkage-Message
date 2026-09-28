@@ -247,6 +247,12 @@ export function showOverlay(overlay, { origin } = {}) {
   if (!wasHidden) return;
 
   const panel = overlay.firstElementChild;
+  // Full-screen pages (settings) slide in like a tab switch instead of popping.
+  if (overlay.classList.contains("as-page")) {
+    if (panel)
+      animate(panel, [{ opacity: 0, transform: "translateY(14px) scale(.985)" }, { opacity: 1, transform: "none" }], { spring: "smooth" });
+    return;
+  }
   animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: "ease-out" });
   if (!panel) return;
   const r = panel.getBoundingClientRect();
@@ -275,6 +281,25 @@ export function hideOverlay(overlay) {
   if (idx >= 0) openOverlays.splice(idx, 1);
   const panel = overlay.firstElementChild;
   const duration = reducedMotion ? 80 : 260;
+  if (overlay.classList.contains("as-page")) {
+    const a = (panel || overlay).animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(10px) scale(.985)" }], {
+      duration: reducedMotion ? 60 : 180,
+      easing: "ease-in",
+      fill: "forwards",
+    });
+    overlay._closeAnims = [a];
+    a.finished.then(
+      () => {
+        if (!overlay.classList.contains("is-closing")) return;
+        overlay.classList.add("hidden");
+        overlay.classList.remove("is-closing");
+        a.cancel();
+        overlay._closeAnims = null;
+      },
+      () => {}
+    );
+    return;
+  }
   const anims = [
     overlay.animate([{ opacity: 1 }, { opacity: 0 }], { duration, easing: "ease-in", fill: "forwards" }),
   ];

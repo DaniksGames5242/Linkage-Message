@@ -852,7 +852,7 @@ profileViewOverlay?.addEventListener("click", (e) => {
 
 // ---------- Avatar click -> settings ----------
 
-menuTriggerBtn.addEventListener("click", () => openSettings());
+// Settings live in the bottom tab bar; the avatar is just your picture.
 
 // ---------- Search ----------
 
@@ -1362,6 +1362,7 @@ function listenGroupsList() {
 
 function listenStoriesList() {
   unsubStories = listenRecentStories(
+    currentUser.uid,
     (list) => {
       stories = list;
       renderStoriesStrip();
@@ -1428,12 +1429,12 @@ storyAddInput.addEventListener("change", async () => {
       const progress = uploadToast("Публикуем видео в историю");
       const { url } = await uploadToCloudinary(file, "video", progress.update);
       progress.done();
-      await addStory(currentUser.uid, { videoUrl: url, duration: meta.duration });
+      await addStory(currentUser.uid, { videoUrl: url, duration: meta.duration }, [...contactsMap.keys()]);
     } else {
       const dataUrl = await imageFileToDataUrl(file, 1080, 0.7);
-      await addStory(currentUser.uid, dataUrl);
+      await addStory(currentUser.uid, dataUrl, [...contactsMap.keys()]);
     }
-    toast("История опубликована", { icon: "✨" });
+    toast("История опубликована — её видят ваши контакты", { icon: "✨" });
   } catch (err) {
     console.error(err);
     toast(err.message || "Не удалось опубликовать историю", { tone: "error", duration: 5000 });
@@ -7056,6 +7057,52 @@ settingsMenuItems.forEach((btn) => {
   btn.addEventListener("click", () => showSettingsSection(btn.dataset.section));
 });
 
+// ---------- ✓ in the header saves the open section ----------
+const settingsSaveCheck = document.getElementById("settings-save-check");
+const SECTION_SAVE_IDS = {
+  profile: "settings-profile-save",
+  privacy: "settings-privacy-save",
+  notifications: "settings-notif-save",
+  chats: "settings-chats-save",
+  appearance: "settings-chats-save",
+  language: "settings-language-save",
+};
+function openSettingsSection() {
+  const panel = [...document.querySelectorAll(".settings-tab-panel")].find((p) => !p.classList.contains("hidden"));
+  return settingsMenu.classList.contains("hidden") ? panel?.dataset.spanel || null : null;
+}
+function syncSaveCheck() {
+  const id = SECTION_SAVE_IDS[openSettingsSection()];
+  const show = !!id;
+  if (show === !settingsSaveCheck.classList.contains("hidden")) return;
+  settingsSaveCheck.classList.toggle("hidden", !show);
+  if (show) animate(settingsSaveCheck, [{ transform: "scale(0) rotate(-90deg)", opacity: 0 }, { transform: "none", opacity: 1 }], { spring: "jelly" });
+}
+document.querySelectorAll(".settings-tab-panel, #settings-menu").forEach((el) =>
+  new MutationObserver(() => requestAnimationFrame(syncSaveCheck)).observe(el, { attributes: true, attributeFilter: ["class"] })
+);
+settingsSaveCheck.addEventListener("click", () => {
+  const btn = document.getElementById(SECTION_SAVE_IDS[openSettingsSection()]);
+  if (!btn || btn.disabled) return;
+  animate(settingsSaveCheck, [{ transform: "scale(.75)" }, { transform: "none" }], { spring: "jelly" });
+  btn.click();
+});
+// Keep the check's busy state in step with the (hidden) section button.
+Object.values(SECTION_SAVE_IDS).forEach((id) => {
+  const btn = document.getElementById(id);
+  if (btn)
+    new MutationObserver(() => {
+      if (SECTION_SAVE_IDS[openSettingsSection()] === id) settingsSaveCheck.classList.toggle("busy", btn.disabled);
+    }).observe(btn, { attributes: true, attributeFilter: ["disabled"] });
+});
+
+// After a save: a little confirmation, then back to the list (the Profile tab stays put).
+function settingsSaved() {
+  settingsSaveCheck.classList.remove("busy");
+  toast("Сохранено", { icon: "✓" });
+  if (currentTab !== "profile" && !settingsOverlay.classList.contains("hidden")) showSettingsMenu(true);
+}
+
 settingsBackBtn.addEventListener("click", () => showSettingsMenu(true));
 
 function updateProfileCounters() {
@@ -7212,7 +7259,7 @@ settingsProfileSave.addEventListener("click", async () => {
     renderMe();
     renderChats();
     await successPulse(settingsProfileSave);
-    hideOverlay(settingsOverlay);
+    settingsSaved();
   } catch (err) {
     console.error(err);
     settingsProfileError.textContent = err.message || "Не удалось сохранить";
@@ -7239,7 +7286,7 @@ settingsPrivacySave.addEventListener("click", async () => {
     renderChats();
     refreshReceipts();
     await successPulse(settingsPrivacySave);
-    hideOverlay(settingsOverlay);
+    settingsSaved();
   } catch (err) {
     console.error(err);
     settingsPrivacyError.textContent = err.message || "Не удалось сохранить";
@@ -7298,7 +7345,7 @@ settingsNotifSave.addEventListener("click", async () => {
     myProfile.notifications = notifications;
     notifDesktop.checked = desktopEnabled;
     await successPulse(settingsNotifSave);
-    hideOverlay(settingsOverlay);
+    settingsSaved();
   } catch (err) {
     console.error(err);
     settingsNotifError.textContent = err.message || "Не удалось сохранить";
@@ -7356,10 +7403,10 @@ settingsChatsSave.addEventListener("click", async () => {
       const swatch = Array.from(chatsAccentSwatches).find((b) => b.dataset.color === chatPrefs.accentColor);
       const [x, y] = swatch ? centerOf(swatch) : centerOf(settingsChatsSave);
       accentWave(() => applyChatPrefs(chatPrefs), { x, y });
-      setTimeout(() => hideOverlay(settingsOverlay), reducedMotion ? 0 : 650);
+      setTimeout(settingsSaved, reducedMotion ? 0 : 650);
     } else {
       applyChatPrefs(chatPrefs);
-      hideOverlay(settingsOverlay);
+      settingsSaved();
     }
   } catch (err) {
     console.error(err);
@@ -7377,7 +7424,7 @@ settingsLanguageSave.addEventListener("click", async () => {
     await updateProfileFields(currentUser.uid, { language });
     myProfile.language = language;
     await successPulse(settingsLanguageSave);
-    hideOverlay(settingsOverlay);
+    settingsSaved();
     applyLanguage(language, true);
   } catch (err) {
     console.error(err);
@@ -7908,6 +7955,8 @@ function selectTab(tab, animated = true) {
 
 // Which tab is "on" follows the settings overlay, however it was opened.
 function syncTabs() {
+  // Settings is a page in place of the chat list: hide the list under it.
+  sidebar.classList.toggle("under-page", !settingsOverlay.classList.contains("hidden") && !settingsOverlay.classList.contains("is-closing"));
   if (settingsOverlay.classList.contains("hidden") || settingsOverlay.classList.contains("is-closing")) selectTab("chats");
   else {
     const profileOpen = !document.querySelector('.settings-tab-panel[data-spanel="profile"]').classList.contains("hidden");

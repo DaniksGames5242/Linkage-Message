@@ -3,6 +3,8 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Сохранено": "Saved",
+  "История опубликована — её видят ваши контакты": "Story posted — your contacts can see it",
   "Далее": "Next",
   "Введите имя пользователя": "Enter your username",
   "Придумайте имя пользователя": "Choose a username",

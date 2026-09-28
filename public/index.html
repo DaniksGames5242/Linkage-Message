@@ -59,7 +59,7 @@
     <div id="sidebar-backdrop" class="hidden"></div>
     <aside id="sidebar">
       <div id="sidebar-header">
-        <button class="avatar-menu-trigger" id="menu-trigger-btn" title="Настройки профиля">
+        <button class="avatar-menu-trigger" id="menu-trigger-btn" tabindex="-1" aria-hidden="true">
           <div class="avatar" id="me-avatar">?</div>
         </button>
         <div class="me-text">
@@ -536,13 +536,16 @@
   </div>
 
   <!-- Settings overlay -->
-  <div id="settings-overlay" class="hidden">
+  <div id="settings-overlay" class="hidden as-page">
     <div class="settings-panel">
       <div class="settings-header">
         <button class="icon-btn hidden" id="settings-back-btn" title="Назад">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <h2 id="settings-header-title" data-i18n="settings_title">Настройки</h2>
+        <button class="icon-btn settings-save-check hidden" id="settings-save-check" title="Сохранить" aria-label="Сохранить">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5L19.5 7"/></svg>
+        </button>
         <button class="icon-btn" id="settings-close-btn">✕</button>
       </div>
 
