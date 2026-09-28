@@ -53,6 +53,7 @@ export async function startCall({ chatId, otherUid, profile, kind }) {
     toast("Этот браузер не поддерживает звонки", { tone: "error" });
     return;
   }
+  callAudioCtx();
   call = newCallState({ role: "caller", kind, otherUid, profile, chatId });
   showScreen("outgoing");
   setStatus("Подключаем микрофон");
@@ -141,6 +142,7 @@ async function onIncomingList(list) {
 async function acceptIncoming() {
   if (!call || call.role !== "callee" || call.accepting) return;
   call.accepting = true;
+  callAudioCtx();
   tones.stop();
   showScreen("connecting");
   setStatus("Соединение");
@@ -330,6 +332,9 @@ function teardown(animated) {
     /* ignore */
   }
   stopVoiceMeter();
+  disconnectGain();
+  out.broken = false;
+  el.remoteVideo.muted = false;
   if (navigator.vibrate && navigator.userActivation?.hasBeenActive) navigator.vibrate(0);
   const close = () => {
     if (call) return; // a new call started meanwhile
@@ -414,40 +419,170 @@ async function toggleCam() {
 }
 
 // ---------- Loudspeaker ----------
-// Browsers only let a page pick the output device (setSinkId, mostly
-// desktop Chrome/Edge). Where a "speaker"/"earpiece" device is exposed we
-// route to it; otherwise "off" means a quiet, hold-to-ear volume.
+// Three ways to honour the "Динамик" button, best first:
+//  1. route: pick a real output device (setSinkId) — computers, and Android
+//     Chrome where it lists "Speakerphone" / "Earpiece".
+//  2. gain (Safari / iPhone): the media element's volume is read-only there
+//     and the page can't choose the earpiece, so the remote audio is played
+//     through Web Audio — loud (boosted, with a limiter) or quiet "to the ear".
+//     Safari's echo cancellation covers any output, so this is safe there.
+//  3. volume: element volume (Chrome without a device choice; Web Audio output
+//     would bypass Chrome's echo canceller).
+
+const SPEAKER_RE = /speakerphone|loudspeaker|speaker|динамик|громкоговор/i;
+const EAR_RE = /earpiece|receiver|handset|headset|headphone|наушник|гарнитур|телефон/i;
+const isWebKitOnly = /iphone|ipad|ipod/i.test(navigator.userAgent) || (/safari/i.test(navigator.userAgent) && !/chrome|chromium|crios|android|edg|fxios|firefox/i.test(navigator.userAgent));
+const SPEAKER_GAIN = 1.9;
+const EAR_GAIN = 0.4;
+
+// One AudioContext for the call (meter + output), unlocked by the tap that
+// started or answered it — Safari keeps contexts made later silent.
+const out = { ctx: null, src: null, srcStream: null, gain: null, comp: null, broken: false, probe: 0 };
+function callAudioCtx() {
+  if (!out.ctx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try {
+      out.ctx = new Ctx();
+    } catch (_) {
+      return null;
+    }
+  }
+  if (out.ctx.state === "suspended") out.ctx.resume().catch(() => {});
+  return out.ctx;
+}
+
+async function pickOutputDevice(speaker) {
+  if (typeof HTMLMediaElement.prototype.setSinkId !== "function" || !navigator.mediaDevices?.enumerateDevices) return null;
+  const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput" && d.deviceId && d.label);
+  if (outs.length < 2) return null; // nothing to choose between
+  const ear = outs.find((d) => EAR_RE.test(d.label) && !/speakerphone|loudspeaker/i.test(d.label));
+  const spk = outs.find((d) => SPEAKER_RE.test(d.label) && !EAR_RE.test(d.label));
+  if (speaker) return spk ? spk.deviceId : null;
+  return ear ? ear.deviceId : null;
+}
+
+function disconnectGain() {
+  clearInterval(out.probe);
+  try {
+    out.src?.disconnect();
+  } catch (_) {}
+  out.src = null;
+  out.srcStream = null;
+}
+
+// Builds (or reuses) stream → gain → limiter → speakers. False if it can't run.
+function connectGain() {
+  const stream = call?.remoteStream;
+  const ctx = callAudioCtx();
+  if (!stream?.getAudioTracks().length || !ctx || ctx.state !== "running" || out.broken) return false;
+  if (!out.gain) {
+    out.gain = ctx.createGain();
+    out.comp = ctx.createDynamicsCompressor();
+    out.comp.threshold.value = -16;
+    out.comp.knee.value = 10;
+    out.comp.ratio.value = 8;
+    out.comp.attack.value = 0.003;
+    out.comp.release.value = 0.25;
+    out.gain.connect(out.comp).connect(ctx.destination);
+  }
+  if (out.srcStream !== stream || !out.src) {
+    disconnectGain();
+    out.src = ctx.createMediaStreamSource(stream);
+    out.srcStream = stream;
+    out.src.connect(out.gain);
+    watchGainOutput();
+  }
+  return true;
+}
+
+// Safety net: if Web Audio gives pure digital silence for several seconds
+// while the element would have sound, fall back to the element.
+function watchGainOutput() {
+  const ctx = out.ctx;
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 512;
+  out.src.connect(analyser);
+  const buf = new Float32Array(analyser.fftSize);
+  let checks = 0;
+  out.probe = setInterval(() => {
+    analyser.getFloatTimeDomainData(buf);
+    if (buf.some((v) => v !== 0)) {
+      clearInterval(out.probe);
+      return;
+    }
+    if (++checks >= 12) {
+      clearInterval(out.probe);
+      out.broken = true;
+      if (call?.speakerMode === "gain") applySpeaker();
+    }
+  }, 500);
+}
+
 async function applySpeaker() {
   if (!call) return;
   const v = el.remoteVideo;
-  let routed = false;
-  if (typeof v.setSinkId === "function" && navigator.mediaDevices?.enumerateDevices) {
+  const speaker = !!call.speaker;
+  let sink = null;
+  try {
+    sink = await pickOutputDevice(speaker);
+  } catch (_) {
+    sink = null;
+  }
+  if (!call) return;
+  if (sink !== null) {
     try {
-      const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
-      const pick = call.speaker
-        ? outs.find((d) => /speaker|динамик|громк/i.test(d.label))
-        : outs.find((d) => /earpiece|receiver|handset|headset|headphone|наушник|телефон/i.test(d.label));
-      if (pick) {
-        await v.setSinkId(pick.deviceId);
-        routed = true;
-      } else if (call.speaker && v.sinkId) {
-        await v.setSinkId("");
-      }
+      await v.setSinkId(sink);
+      disconnectGain();
+      v.muted = false;
+      v.volume = 1;
+      call.speakerMode = "route";
+      return;
     } catch (_) {
-      /* output selection not permitted */
+      /* not permitted — fall through */
     }
   }
-  v.volume = call.speaker || routed ? 1 : 0.3;
+  if (isWebKitOnly && connectGain()) {
+    const g = out.gain.gain;
+    const now = out.ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(speaker ? SPEAKER_GAIN : EAR_GAIN, now + 0.25);
+    v.muted = true; // heard through Web Audio instead
+    call.speakerMode = "gain";
+    return;
+  }
+  disconnectGain();
+  v.muted = false;
+  v.volume = speaker ? 1 : 0.35;
+  call.speakerMode = "volume";
 }
 
 function toggleSpeaker() {
   if (!call) return;
+  callAudioCtx(); // this tap unlocks audio on iPhone
   call.speaker = !call.speaker;
   call.speakerTouched = true;
-  applySpeaker();
+  applySpeaker().then(() => {
+    if (!call) return;
+    const msg =
+      call.speakerMode === "route"
+        ? call.speaker
+          ? "Звук через громкий динамик"
+          : "Звук через разговорный динамик / наушники"
+        : call.speaker
+        ? "Громкая связь включена"
+        : "Тихий режим — поднесите телефон к уху";
+    toast(msg, { icon: call.speaker ? "🔊" : "🔈" });
+  });
   updateToggles();
-  toast(call.speaker ? "Громкая связь включена" : "Громкая связь выключена", { icon: call.speaker ? "🔊" : "🔈" });
+  if (navigator.vibrate) navigator.vibrate(10);
 }
+
+// Headphones plugged in / Bluetooth connected mid-call.
+navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+  if (call) applySpeaker();
+});
 
 function refreshVideoMode() {
   if (!call) return;
@@ -503,7 +638,8 @@ function startVoiceMeter(stream) {
   stopVoiceMeter();
   if (reducedMotion || !stream.getAudioTracks().length) return;
   try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const ac = callAudioCtx();
+    if (!ac) return;
     const src = ac.createMediaStreamSource(stream);
     const analyser = ac.createAnalyser();
     analyser.fftSize = 256;
@@ -520,7 +656,7 @@ function startVoiceMeter(stream) {
       el.overlay.style.setProperty("--voice", level.toFixed(3));
       meter.raf = requestAnimationFrame(tick);
     };
-    meter = { ac, raf: requestAnimationFrame(tick) };
+    meter = { src, raf: requestAnimationFrame(tick) };
   } catch (_) {
     meter = null;
   }
@@ -529,7 +665,9 @@ function startVoiceMeter(stream) {
 function stopVoiceMeter() {
   if (!meter) return;
   cancelAnimationFrame(meter.raf);
-  meter.ac.close().catch(() => {});
+  try {
+    meter.src.disconnect();
+  } catch (_) {}
   meter = null;
   el.overlay?.style.setProperty("--voice", "0");
 }
