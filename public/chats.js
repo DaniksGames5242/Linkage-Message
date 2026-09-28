@@ -90,6 +90,8 @@ export async function sendMessage(chatId, senderId, text, attachment, replyTo, e
   if (attachment) Object.assign(payload, attachment.fields);
   if (replyTo) payload.replyTo = replyTo;
   if (extra) Object.assign(payload, extra);
+  // Fields that must stay readable/updatable outside the ciphertext (poll votes).
+  if (opts.plain) Object.assign(payload, opts.plain);
 
   const preview = opts.preview ?? (attachment?.previewText || trimmed);
   const ref = doc(collection(db, "chats", chatId, "messages"));
@@ -97,7 +99,7 @@ export async function sendMessage(chatId, senderId, text, attachment, replyTo, e
     const at = Timestamp.fromMillis(opts.scheduleAt);
     payload.scheduledAt = at;
     await setDoc(ref, payload);
-    const entry = { at, senderId, preview };
+    const entry = { at, senderId, preview, silent: !!opts.silent };
     if (opts.previewEnc) entry.previewEnc = opts.previewEnc;
     await setDoc(doc(db, "chats", chatId), { scheduled: { [ref.id]: entry } }, { merge: true });
     return ref.id;
@@ -112,6 +114,7 @@ export async function sendMessage(chatId, senderId, text, attachment, replyTo, e
       lastEnc: opts.previewEnc || deleteField(),
       lastMessageAt: serverTimestamp(),
       lastMessageSenderId: senderId,
+      lastSilent: !!opts.silent,
       typing: { [senderId]: deleteField() },
       hiddenFor: [],
       unread: Object.fromEntries(others.map((uid) => [uid, increment(1)])),
@@ -143,9 +146,17 @@ export async function publishScheduled(chatId, msgId) {
       patch.lastEnc = entry.previewEnc || deleteField();
       patch.lastMessageAt = entry.at;
       patch.lastMessageSenderId = entry.senderId;
+      patch.lastSilent = !!entry.silent;
     }
     tx.update(ref, patch);
     return true;
+  });
+}
+
+// Poll votes: votes.{uid} = [option indexes]; an empty list removes the vote.
+export async function votePoll(chatId, messageId, uid, choices) {
+  await updateDoc(doc(db, "chats", chatId, "messages", messageId), {
+    [`votes.${uid}`]: choices.length ? choices : deleteField(),
   });
 }
 

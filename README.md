@@ -49,6 +49,19 @@ Firebase Authentication из коробки не умеет «просто ло�
 
 Удерживайте кнопку отправки (или нажмите на неё правой кнопкой мыши) → выберите время. Сообщение сохраняется сразу, но собеседник увидит его только в назначенное время; превью, счётчик и уведомление обновит первое открытое в этот момент приложение любого участника чата. Отправитель видит запланированные сообщения в чате (с пометкой 📅) и может отправить их сразу или отменить.
 
+### Эффекты, игры, опросы и другие фишки
+
+- **Эффекты сообщений** — удерживайте кнопку отправки (или правый клик) и выберите 🎉 ❤️ 🔥 ❄️ 🎆 💸: у всех участников по экрану пролетит конфетти, сердца, огонь, снег, салют или деньги. Повторить — значок эффекта у времени сообщения. Там же: «Отправить без звука» (собеседник получит сообщение без звукового сигнала) и «Отправить позже».
+- **Мини-игры** — отправьте 🎲 🎯 🏀 или 🎰 отдельным сообщением (или выберите в меню скрепки): результат выпадает случайно на стороне отправителя, все видят анимированный бросок, при выигрыше — конфетти.
+- **Опросы** — скрепка → «Опрос»: до 10 вариантов, анонимный или публичный (видно, кто голосовал), один или несколько ответов, голос можно отменить. Голоса хранятся в поле `votes` сообщения (каждый может менять только свой голос — правило `isPollVote`).
+- **Геопозиция** — скрепка → «Геопозиция»: карта OpenStreetMap с меткой, по нажатию открывается полная карта.
+- **Форматирование** — `**жирный**`, `__курсив__`, `~~зачёркнутый~~`, `` `код` ``, `||спойлер||` (скрыт, пока не нажмёшь). Горячие клавиши: Ctrl+B, Ctrl+I, Ctrl+Shift+X, Ctrl+Shift+M (код), Ctrl+Shift+P (спойлер).
+- **Жесты** — двойной тап/двойной клик по сообщению ставит ❤️, свайп сообщения влево на телефоне — ответ.
+- **Папки чатов** — «Все / Личные / Группы / Непрочитанные» над списком, со счётчиками.
+- **Эмодзи-статус** — «Настройки → Профиль»: эмодзи рядом с вашим именем у всех (в шапке чата и профиле — анимированный).
+- **Обои чата** — меню чата → «Обои чата»: 9 анимированных фонов, для одного чата или для всех (хранится на устройстве).
+- **Ссылка на профиль** — «Настройки → Профиль»: ссылка вида `https://ваш-сайт/?u=username`; кто по ней перейдёт, сразу попадёт в чат с вами (после входа, если он ещё не вошёл).
+
 ### Кружочки
 
 Кнопка ▶ в строке ввода записывает круглое видеосообщение до 60 секунд (камеру можно переворачивать во время записи). В чате кружочек проигрывается без звука, по нажатию — со звуком. Нужна настроенная загрузка файлов (Cloudinary).
@@ -148,7 +161,7 @@ python3 -m http.server 8000 --directory public
 
 ## Структура данных Firestore
 
-- `users/{uid}` — профиль: `username`, `displayName`, `avatarColor`, `avatarImage` (data URL или `null`), `bio`, `birthday`, `lastSeenAt`, `createdAt`
+- `users/{uid}` — профиль: `username`, `displayName`, `avatarColor`, `avatarImage` (data URL или `null`), `bio`, `birthday`, `emojiStatus`, `lastSeenAt`, `createdAt`
   - `privacy`: `lastSeenVisibility`, `avatarVisibility`, `bioVisibility`, `birthdayVisibility` (каждое `"everyone"`/`"contacts"`/`"nobody"`), `typingVisibility` (bool)
   - `notifications`: `muteAll`, `sound`, `desktop`, `preview`, `groups` (все bool)
   - `chatPrefs`: `sendOnEnter` (bool), `fontSize` (`"small"`/`"medium"`/`"large"`), `compact` (bool), `accentColor` (один из 7 пресетов)
@@ -161,7 +174,7 @@ python3 -m http.server 8000 --directory public
 - `broadcasts/{id}` — объявления от `danik`, читают все: `text`, `senderId`, `createdAt`
 - `stories/{id}` — `ownerId`, `image` (data URL), `createdAt` (клиент фильтрует по 24ч)
 - `chats/{chatId}` — `participants`, `lastMessage`, `lastMessageAt`, `lastMessageSenderId`, `typing` (карта `uid -> timestamp`), `hiddenFor` (массив uid, «удалено у себя»), `clearedFor` (карта `uid -> timestamp`, «очищено у себя»)
-  - `chats/{chatId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions` (карта `emoji -> [uid]`), `imageUrl`/`fileUrl`/`voiceUrl` (ссылки на Cloudinary, опционально), `fileName`/`fileType`/`fileSize` (для `fileUrl`), `replyTo` (снимок `{ id, senderName, text }` цитируемого сообщения, опционально)
+  - `chats/{chatId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions` (карта `emoji -> [uid]`), `imageUrl`/`fileUrl`/`voiceUrl` (ссылки на Cloudinary, опционально), `fileName`/`fileType`/`fileSize` (для `fileUrl`), `replyTo` (снимок `{ id, senderName, text }` цитируемого сообщения, опционально), `effect`, `game` (`{ kind, value }`), `poll` (`{ q, options, multi, anon }`) + `votes` (карта `uid -> [индексы]`), `location` (`{ lat, lng }`)
 - `groups/{groupId}` — `type` (`group`/`channel`), `name`, `avatarColor`, `avatarImage`, `ownerId`, `admins`, `members`, `lastMessage`, `lastMessageAt`, `lastMessageSenderId`, `hiddenFor`, `clearedFor`
   - `groups/{groupId}/messages/{id}` — `text`, `senderId`, `createdAt`, `edited`, `editedAt`, `reactions`, вложения (как в чатах)
 
@@ -180,6 +193,9 @@ python3 -m http.server 8000 --directory public
 - `public/groups.js` — группы и каналы
 - `public/stories.js` — истории (создание/удаление/лента за 24ч)
 - `public/settings.js` — обновление профиля/юзернейма/приватности/уведомлений
+- `public/effects.js` — полноэкранные эффекты сообщений (canvas)
+- `public/games.js` — мини-игры 🎲 🎯 🏀 🎰
+- `public/richtext.js` — форматирование текста сообщений
 - `public/utils.js` — общие хелперы (аватары, форматирование, валидация, глазик пароля)
 - `public/upload.js` — загрузка вложений в Cloudinary (unsigned upload)
 - `public/cloudinary-config.js` — `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_UPLOAD_PRESET` (заполняется вручную, см. раздел настройки)

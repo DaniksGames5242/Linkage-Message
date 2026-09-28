@@ -31,6 +31,7 @@ import {
   publishScheduled,
   cancelScheduled,
   editEncryptedMessage,
+  votePoll,
 } from "./chats.js";
 import { listenSavedMessages, addSavedMessage, editSavedMessage, deleteSavedMessage } from "./saved.js";
 import { listenNotificationsFeed, addBroadcast } from "./notify.js";
@@ -50,11 +51,15 @@ import {
   leaveGroup,
   publishScheduledGroup,
   cancelScheduledGroup,
+  voteGroupPoll,
 } from "./groups.js";
 import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
 import { initCalls, startCall, fmtDuration } from "./call-ui.js";
 import { emojiOnly, animatedEmoji, emojiEffect } from "./emoji-anim.js";
+import { EFFECTS, playEffect } from "./effects.js";
+import { GAMES, gameForText, rollGame, renderGame, isWin } from "./games.js";
+import { appendRich, stripRich, wrapSelection } from "./richtext.js";
 import {
   colorForUid,
   initials,
@@ -143,6 +148,7 @@ const chatMenuDeleteBtn = document.getElementById("chat-menu-delete-btn");
 const messagesEl = document.getElementById("messages");
 const composer = document.getElementById("composer");
 const chatSection = document.getElementById("chat");
+const chatTitleStatus = document.getElementById("chat-title-status");
 const chatDock = document.getElementById("chat-dock");
 const callAudioBtn = document.getElementById("call-audio-btn");
 const callVideoBtn = document.getElementById("call-video-btn");
@@ -402,6 +408,42 @@ settingsAvatarRemoveBtn.addEventListener("click", () => {
   renderSettingsAvatarPreview();
 });
 
+// ---------- Profile links (/?u=username) ----------
+
+const linkedUsername = new URLSearchParams(location.search).get("u");
+if (linkedUsername) {
+  try {
+    sessionStorage.setItem("lm-open-u", linkedUsername);
+  } catch (_) {}
+  history.replaceState(null, "", location.pathname + location.hash);
+}
+
+async function openLinkedProfile() {
+  let username = null;
+  try {
+    username = sessionStorage.getItem("lm-open-u");
+    sessionStorage.removeItem("lm-open-u");
+  } catch (_) {}
+  if (!username) return;
+  try {
+    const result = await searchUser(username, currentUser.uid);
+    if (!result) {
+      toast(`Пользователь @${username} не найден`, { tone: "error" });
+      return;
+    }
+    if (result.self) {
+      toast("Это ссылка на ваш профиль 🙂", { icon: "🔗" });
+      return;
+    }
+    await addContact(currentUser.uid, result.uid, contactsMap.has(result.uid));
+    const chatId = await ensureChat(currentUser.uid, result.uid);
+    openContactChat(chatId, result.uid, result.profile);
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось открыть профиль по ссылке", { tone: "error" });
+  }
+}
+
 // ---------- Auth state ----------
 // This page assumes an authenticated user with a completed profile.
 // Anything else redirects to /login, which owns the username/password/registration flow.
@@ -462,6 +504,7 @@ function enterApp() {
   touchPresence(currentUser.uid);
   presenceInterval = setInterval(() => touchPresence(currentUser.uid), 45000);
   document.addEventListener("visibilitychange", onVisibilityChange);
+  setTimeout(openLinkedProfile, 700);
 }
 
 const isMobileLayout = () => window.matchMedia("(max-width: 720px)").matches;
@@ -525,6 +568,36 @@ function onVisibilityChange() {
 function renderMe() {
   menuTriggerBtn.innerHTML = avatarHTML(myProfile, currentUser.uid);
   meName.textContent = myProfile.displayName;
+  const badge = statusBadge(myProfile.emojiStatus);
+  if (badge) meName.append(" ", badge);
+}
+
+// ---------- Emoji status (shown next to the name) ----------
+
+const EMOJI_STATUSES = ["⭐", "🔥", "❤️", "😎", "🚀", "🎮", "🎧", "💼", "🌙", "☕", "🏖️", "🎉", "👑", "💎", "🌸", "⚡", "🍀", "🐱", "🤖", "📚", "🏋️", "✈️", "🎨", "💤"];
+
+function validStatus(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 16 ? value : null;
+}
+
+// Static in lists; `size` gives an animated one (header, profile card).
+function statusBadge(value, size = 0) {
+  const emoji = validStatus(value);
+  if (!emoji) return null;
+  if (size) {
+    const el = animatedEmoji(emoji, size, { loop: false });
+    el.classList.add("emoji-status");
+    el.title = "Эмодзи-статус";
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      el.replay();
+    });
+    return el;
+  }
+  const el = document.createElement("span");
+  el.className = "emoji-status";
+  el.textContent = emoji;
+  return el;
 }
 
 // ---------- Privacy-aware profile field visibility ----------
@@ -564,6 +637,8 @@ function openContactProfile(uid, profile) {
 
   const contact = contactsMap.get(uid);
   profileViewName.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
+  const statusEl = statusBadge(profile.emojiStatus, 26);
+  if (statusEl) profileViewName.append(statusEl);
   profileViewUsername.textContent = "@" + profile.username;
 
   const canSeeLastSeen =
@@ -1333,7 +1408,7 @@ const ICON_PIN =
   '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M16 3a1 1 0 0 1 .7 1.7L15.4 6l2.6 5.2 1.3-1.3a1 1 0 1 1 1.4 1.4L17.4 14.6l3.3 3.3a1 1 0 0 1-1.4 1.4L16 16l-3.3 3.3a1 1 0 0 1-1.4-1.4l3.3-3.3-.7-.7-5.2-2.6-1.3 1.3A1 1 0 1 1 6 11.2L10.9 6.3A1 1 0 0 1 16 3z" transform="rotate(0)"/></svg>';
 
 // Builds one chat-list row: avatar, name + flags, last line, time + unread.
-function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false }) {
+function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, muted = false, pinned = false, onClick, typing = false, status = null }) {
   const item = document.createElement("div");
   item.className =
     "room-item" +
@@ -1356,6 +1431,8 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
     </div>
   `;
   item.querySelector(".room-name").textContent = name;
+  const badge = statusBadge(status);
+  if (badge) item.querySelector(".room-name").after(badge);
   const lastEl = item.querySelector(".room-last");
   const draft = chatId && chatId !== currentChatId ? readDraft(chatId) : "";
   if (typing) {
@@ -1386,6 +1463,12 @@ const MI = {
   block: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>',
   phone: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
   video: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><polyline points="12 6.5 12 12 15.5 14"/></svg>',
+  poll: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="5" y1="20" x2="5" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="19" y1="20" x2="19" y2="9"/></svg>',
+  location: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-6.1 7-12a7 7 0 0 0-14 0c0 5.9 7 12 7 12z"/><circle cx="12" cy="10" r="2.6"/></svg>',
+  file: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
+  sparkle: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/></svg>',
+  image: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>',
   leave: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
 };
 
@@ -1628,6 +1711,69 @@ function loadProfile(uid) {
 let renderChatsToken = 0;
 let chatListRendered = false;
 
+// ---------- Chat folders ----------
+
+const FOLDERS = ["all", "personal", "groups", "unread"];
+const folderTabs = document.getElementById("folder-tabs");
+const folderGlider = folderTabs.querySelector(".folder-glider");
+let chatFolder = "all";
+try {
+  if (FOLDERS.includes(localStorage.getItem("lm-folder"))) chatFolder = localStorage.getItem("lm-folder");
+} catch (_) {}
+let folderSwitched = false;
+let folderDirection = 1;
+
+function moveFolderGlider(animated = true) {
+  const tab = folderTabs.querySelector(`[data-folder="${chatFolder}"]`);
+  folderTabs.querySelectorAll(".folder-tab").forEach((t) => {
+    t.classList.toggle("active", t === tab);
+    t.setAttribute("aria-selected", t === tab ? "true" : "false");
+  });
+  if (!tab || !tab.offsetWidth) return;
+  const from = folderGlider.style.transform;
+  const fromW = folderGlider.style.width;
+  const to = `translateX(${tab.offsetLeft}px)`;
+  const toW = tab.offsetWidth + "px";
+  folderGlider.style.transform = to;
+  folderGlider.style.width = toW;
+  if (animated && from && from !== to) {
+    // Stretches like a droplet on the way, then settles.
+    animate(folderGlider, [{ transform: from, width: fromW }, { transform: to, width: toW }], { spring: "bouncy" });
+  }
+  if (animated) tab.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
+}
+
+function updateFolderCounts(countFor) {
+  let changed = !folderGlider.style.width;
+  folderTabs.querySelectorAll(".folder-tab").forEach((tab) => {
+    const badge = tab.querySelector(".folder-count");
+    const n = tab.dataset.folder === "all" ? 0 : countFor(tab.dataset.folder);
+    const text = n ? String(n > 99 ? "99+" : n) : "";
+    if (badge.textContent !== text) {
+      badge.textContent = text;
+      changed = true;
+      if (text) animate(badge, [{ transform: "scale(.2)" }, { transform: "none" }], { spring: "jelly" });
+    }
+  });
+  // Badges change the tab widths, so the glider has to follow.
+  if (changed) moveFolderGlider(false);
+}
+
+folderTabs.addEventListener("click", (e) => {
+  const tab = e.target.closest(".folder-tab");
+  if (!tab || tab.dataset.folder === chatFolder) return;
+  folderDirection = FOLDERS.indexOf(tab.dataset.folder) > FOLDERS.indexOf(chatFolder) ? 1 : -1;
+  chatFolder = tab.dataset.folder;
+  try {
+    localStorage.setItem("lm-folder", chatFolder);
+  } catch (_) {}
+  folderSwitched = true;
+  moveFolderGlider();
+  renderChats();
+});
+requestAnimationFrame(() => moveFolderGlider(false));
+window.addEventListener("resize", debounce(() => moveFolderGlider(false), 150));
+
 async function renderChats() {
 
   const token = ++renderChatsToken;
@@ -1656,6 +1802,17 @@ async function renderChats() {
   });
   const me = currentUser.uid;
   const unreadFor = (data) => (data.id === currentChatId && !document.hidden ? 0 : Math.max(0, data.unread?.[me] || 0));
+  const inFolder = (e, folder) =>
+    folder === "all" ||
+    (folder === "personal" && e.kind === "contact") ||
+    (folder === "groups" && e.kind === "group") ||
+    (folder === "unread" && (unreadFor(e.data) > 0 || e.data.id === currentChatId));
+  const visible = combined.filter((e) => inFolder(e, chatFolder));
+  updateFolderCounts((folder) => combined.filter((e) => inFolder(e, folder) && unreadFor(e.data) > 0 && !isChatMuted(e.data.id)).length);
+  if (chatFolder !== "all") {
+    savedItem.remove();
+    notifItem.remove();
+  }
 
   const neededUids = [
     ...new Set(
@@ -1684,7 +1841,7 @@ async function renderChats() {
   );
   if (token !== renderChatsToken) return; // a newer render superseded this one
 
-  for (const entry of combined) {
+  for (const entry of visible) {
     if (entry.kind === "group") {
       const group = entry.data;
       const lastPrefix = group.lastMessageSenderId === me ? "Вы: " : "";
@@ -1693,7 +1850,7 @@ async function renderChats() {
         chatId: group.id,
         avatar: groupAvatarHTML(group),
         name: group.name,
-        last: group.lastMessage ? lastPrefix + group.lastMessage : group.type === "channel" ? "Канал" : "Группа",
+        last: group.lastMessage ? lastPrefix + stripRich(group.lastMessage) : group.type === "channel" ? "Канал" : "Группа",
         lastAt: group.lastMessageAt,
         unread: unreadFor(group),
         muted: isChatMuted(group.id),
@@ -1720,12 +1877,13 @@ async function renderChats() {
       chatId: chat.id,
       avatar: visibleAvatarHTML(profile, otherUid),
       name,
-      last: chat.lastMessage ? lastPrefix + (previews.get(chat.id) || chat.lastMessage) : "Нет сообщений",
+      last: chat.lastMessage ? lastPrefix + stripRich(previews.get(chat.id) || chat.lastMessage) : "Нет сообщений",
       lastAt: chat.lastMessageAt,
       unread: unreadFor(chat),
       muted: isChatMuted(chat.id),
       pinned: isChatPinned(chat.id),
       typing: Date.now() - typingAt < 6000 && !isBlocked(otherUid),
+      status: profile.emojiStatus,
       onClick: () => openContactChat(chat.id, otherUid, profile),
     });
     attachRoomMenu(item, { id: chat.id, kind: "contact", data: chat, otherUid });
@@ -1738,12 +1896,20 @@ async function renderChats() {
     note.className = "empty-list";
     note.textContent = chatsLoadError;
     frag.appendChild(note);
+  } else if (!visible.length && chatFolder !== "all") {
+    const note = document.createElement("div");
+    note.className = "empty-list folder-empty";
+    note.textContent = chatFolder === "unread" ? "Всё прочитано ✨" : "В этой папке пока пусто";
+    frag.appendChild(note);
   }
   const prevRects = captureRects(chatListEl);
   chatListEl.replaceChildren(frag);
   if (!chatListRendered) {
     chatListRendered = true;
     stagger(chatListEl.children, { x: -28, y: 0, blur: 8, step: 38, delay: 420 });
+  } else if (folderSwitched) {
+    folderSwitched = false;
+    stagger(chatListEl.children, { x: folderDirection * 36, y: 0, blur: 6, step: 22, delay: 0 });
   } else {
     playFlip(chatListEl, prevRects);
   }
@@ -1808,6 +1974,8 @@ function resetChatView() {
   playChatEnter(comingFromEmpty);
   chatSub.textContent = "";
   chatSub.classList.remove("typing");
+  chatTitleStatus.replaceChildren();
+  chatSection.removeAttribute("data-wall");
   editContactBtn.classList.add("hidden");
   chatMenuBtn.classList.add("hidden");
   chatMenuDropdown.classList.add("hidden");
@@ -1843,8 +2011,90 @@ function currentChatData() {
 
 // Header buttons, chat menu labels, the blocked bar and the pinned banner
 // all depend on the open chat + my per-user lists.
+// ---------- Chat wallpapers (per device) ----------
+
+const WALLPAPERS = [
+  ["none", "Без обоев"],
+  ["aurora", "Аврора"],
+  ["sunset", "Закат"],
+  ["ocean", "Океан"],
+  ["forest", "Лес"],
+  ["grape", "Виноград"],
+  ["candy", "Карамель"],
+  ["mesh", "Сетка"],
+  ["stars", "Звёзды"],
+  ["hearts", "Сердечки"],
+];
+const wallOverlay = document.getElementById("wall-overlay");
+const wallGrid = document.getElementById("wall-grid");
+const wallAll = document.getElementById("wall-all");
+
+function readStore(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+function wallpaperFor(chatId) {
+  return readStore("lm-wall:" + chatId) || readStore("lm-wall:*") || "none";
+}
+
+function applyWallpaper() {
+  if (!currentChatId) return;
+  const wall = wallpaperFor(currentChatId);
+  if (wall === "none") chatSection.removeAttribute("data-wall");
+  else if (chatSection.dataset.wall !== wall) chatSection.dataset.wall = wall;
+}
+
+function setWallpaper(wall) {
+  try {
+    if (wallAll.checked) {
+      localStorage.setItem("lm-wall:*", wall);
+      localStorage.removeItem("lm-wall:" + currentChatId);
+    } else {
+      localStorage.setItem("lm-wall:" + currentChatId, wall);
+    }
+  } catch (_) {}
+  applyWallpaper();
+}
+
+function openWallpaperPicker() {
+  wallAll.checked = !readStore("lm-wall:" + currentChatId) && !!readStore("lm-wall:*");
+  const current = wallpaperFor(currentChatId);
+  wallGrid.innerHTML = "";
+  WALLPAPERS.forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "wall-swatch" + (key === current ? " selected" : "");
+    b.dataset.wallPreview = key;
+    b.innerHTML = '<span class="wall-swatch-art"></span><span class="wall-swatch-label"></span>';
+    b.querySelector(".wall-swatch-label").textContent = label;
+    b.addEventListener("click", () => {
+      wallGrid.querySelectorAll(".wall-swatch").forEach((w) => w.classList.toggle("selected", w === b));
+      animate(b, [{ transform: "scale(.9)" }, { transform: "none" }], { spring: "jelly" });
+      setWallpaper(key);
+    });
+    wallGrid.appendChild(b);
+  });
+  showOverlay(wallOverlay);
+  stagger(wallGrid.children, { y: 14, scale: 0.8, step: 28, delay: 80 });
+}
+
+wallAll.addEventListener("change", () => setWallpaper(wallpaperFor(currentChatId)));
+document.getElementById("chat-menu-wall-btn").addEventListener("click", () => {
+  hidePopover(chatMenuDropdown);
+  openWallpaperPicker();
+});
+document.getElementById("wall-close").addEventListener("click", () => hideOverlay(wallOverlay));
+wallOverlay.addEventListener("click", (e) => {
+  if (e.target === wallOverlay) hideOverlay(wallOverlay);
+});
+
 function refreshChatChrome() {
   if (!currentChatId) return;
+  applyWallpaper();
   const isContact = currentChatType === "contact";
   const isGroupish = currentChatType === "group" || currentChatType === "channel";
   const blocked = isContact && isBlocked(currentOtherUid);
@@ -2052,6 +2302,7 @@ function snapshotScroll() {
 }
 
 function finishMessagesRender(snap) {
+  applyWallpaper();
   const rows = Array.from(messagesEl.querySelectorAll(".msg-row"));
   refreshReceipts();
   maybeMarkRead();
@@ -2080,6 +2331,10 @@ function finishMessagesRender(snap) {
 
   const fresh = rows.filter((r) => !msgAnim.seen.has(r.dataset.msgId));
   fresh.forEach((r) => msgAnim.seen.add(r.dataset.msgId));
+  fresh
+    .filter((r) => r.dataset.effect && !r.classList.contains("scheduled"))
+    .slice(-1)
+    .forEach((r) => setTimeout(() => playEffect(r.dataset.effect, centerOfPoint(r.querySelector(".bubble"))), 280));
   if (!snap.nearBottom) {
     unreadWhileAway += fresh.filter((r) => !r.classList.contains("me")).length;
   }
@@ -2212,6 +2467,8 @@ function openContactChat(chatId, otherUid, profile) {
   const contact = contactsMap.get(otherUid);
   chatHeaderAvatar.innerHTML = visibleAvatarHTML(profile, otherUid);
   chatTitle.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
+  const statusEl = statusBadge(profile.emojiStatus, 22);
+  if (statusEl) chatTitleStatus.appendChild(statusEl);
   chatSub.textContent = "@" + profile.username;
   editContactBtn.classList.remove("hidden");
   chatMenuBtn.classList.remove("hidden");
@@ -2470,8 +2727,31 @@ document.getElementById("schedule-cancel").addEventListener("click", () => hideO
 scheduleOverlay.addEventListener("click", (e) => {
   if (e.target === scheduleOverlay) hideOverlay(scheduleOverlay);
 });
-// Long-press (touch) or right-click on the send button.
-onContextGesture(sendBtn, () => openSchedulePicker());
+// Long-press (touch) or right-click on the send button: effects, silent, later.
+onContextGesture(sendBtn, (x, y) => openSendOptions(x, y));
+
+function openSendOptions(x, y) {
+  if (!msgInput.value.trim()) return;
+  const canNotify = ["contact", "group", "channel"].includes(currentChatType);
+  const r = sendBtn.getBoundingClientRect();
+  openContextMenu({
+    x: Math.min(x, r.right) - 200,
+    y: r.top - 8,
+    reactions: {
+      emojis: Object.values(EFFECTS).map((e) => e.emoji),
+      mine: new Set(),
+      onPick: (emoji) => {
+        const kind = Object.keys(EFFECTS).find((k) => EFFECTS[k].emoji === emoji);
+        doSendMessage(null, { effect: kind });
+      },
+    },
+    items: [
+      canNotify && { label: "Отправить без звука", icon: MI.bellOff, onClick: () => doSendMessage(null, { silent: true }) },
+      canNotify && { label: "Отправить позже", icon: MI.clock, onClick: () => openSchedulePicker() },
+    ],
+  });
+  document.querySelector(".ctx-menu")?.classList.add("send-options");
+}
 
 // ---------- Round video messages ----------
 
@@ -2557,6 +2837,7 @@ function messageOps() {
       edit: (id, text) => editGroupMessage(currentChatId, id, text),
       del: (id) => deleteGroupMessage(currentChatId, id),
       react: (id, emoji, add) => toggleGroupReaction(currentChatId, id, emoji, currentUser.uid, add),
+      vote: (id, choices) => voteGroupPoll(currentChatId, id, currentUser.uid, choices),
     };
   }
   if (currentChatType === "contact") {
@@ -2570,6 +2851,7 @@ function messageOps() {
       },
       del: (id) => deleteMessage(currentChatId, id),
       react: (id, emoji, add) => toggleReaction(currentChatId, id, emoji, currentUser.uid, add),
+      vote: (id, choices) => votePoll(currentChatId, id, currentUser.uid, choices),
     };
   }
   return { edit: null, del: null, react: null };
@@ -2588,6 +2870,8 @@ function replySenderLabel(msg) {
 }
 
 function replyPreviewText(msg) {
+  if (msg.poll) return "📊 " + msg.poll.q;
+  if (msg.location) return "📍 Геопозиция";
   if (msg.videoNoteUrl) return "⭕ Видеосообщение";
   if (msg.imageUrl) return "📷 Фото";
   if (msg.voiceUrl) return "🎤 Голосовое сообщение";
@@ -2595,7 +2879,7 @@ function replyPreviewText(msg) {
     if ((msg.fileType || "").startsWith("video/")) return "🎬 Видео";
     return `📎 ${msg.fileName || "Файл"}`;
   }
-  return msg.text || "";
+  return stripRich(msg.text || "");
 }
 
 function startReply(msg) {
@@ -2637,6 +2921,24 @@ function renderBubbleContent(bubble, msg) {
   if (msg.call) {
     renderCallBubble(bubble, msg);
     return;
+  }
+  if (msg.game) {
+    bubble.classList.add("game-bubble");
+    bubble.appendChild(gameNode(msg));
+    return;
+  }
+  if (msg.poll && Array.isArray(msg.poll.options)) {
+    bubble.classList.add("poll-bubble");
+    bubble.appendChild(renderPoll(msg));
+    return;
+  }
+  if (msg.location) {
+    const card = renderLocation(msg.location);
+    if (card) {
+      bubble.classList.add("location-bubble");
+      bubble.appendChild(card);
+      return;
+    }
   }
   if (msg.videoNoteUrl) {
     bubble.classList.add("circle-bubble");
@@ -2714,9 +3016,216 @@ function renderBubbleContent(bubble, msg) {
   if (msg.text && !(hasAttachment && isPlaceholderCaption)) {
     const p = document.createElement("div");
     p.className = "bubble-text";
-    appendLinkified(p, msg.text);
+    appendRich(p, msg.text, appendLinkified);
     bubble.appendChild(p);
   }
+}
+
+// ---------- Mini games ----------
+// The element is kept per message so a roll that is still playing survives
+// the list re-rendering on every snapshot.
+const gameNodes = new Map();
+
+function gameNode(msg) {
+  const key = currentChatId + ":" + msg.id;
+  if (gameNodes.has(key)) return gameNodes.get(key);
+  if (gameNodes.size > 300) gameNodes.clear();
+  const fresh = msgAnim.chatId === currentChatId && !msgAnim.seen.has(msg.id) && !msg._scheduled;
+  const made = renderGame(msg.game, fresh);
+  if (!made) {
+    const el = document.createElement("div");
+    el.className = "bubble-text";
+    el.textContent = msg.text || "";
+    return el;
+  }
+  const holder = document.createElement("div");
+  holder.className = "game-holder";
+  holder.title = "Нажмите, чтобы повторить";
+  holder.appendChild(made.el);
+  const celebrate = (delay) => {
+    if (isWin(msg.game)) setTimeout(() => playEffect("confetti"), delay);
+  };
+  if (fresh) celebrate(made.duration);
+  holder.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const again = renderGame(msg.game, true);
+    holder.replaceChildren(again.el);
+    celebrate(again.duration);
+  });
+  gameNodes.set(key, holder);
+  return holder;
+}
+
+// ---------- Polls ----------
+
+const pollShown = new Map(); // msgId -> percentages last drawn (bars grow from there)
+const pollPending = new Map(); // msgId -> Set of ticked options (multiple choice, not sent yet)
+
+function pluralVotes(n) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return `${n} голос`;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} голоса`;
+  return `${n} голосов`;
+}
+
+function profileForUid(uid) {
+  if (uid === currentUser.uid) return myProfile;
+  return contactsMap.get(uid)?.profile || groupSenderCache.get(uid) || profileCache.get(uid)?.profile || null;
+}
+
+function renderPoll(msg) {
+  const poll = msg.poll;
+  const ops = messageOps();
+  const me = currentUser.uid;
+  const options = poll.options.slice(0, 10).map(String);
+  const votes = msg.votes || {};
+  const counts = options.map(() => 0);
+  const voters = options.map(() => []);
+  let total = 0;
+  Object.entries(votes).forEach(([uid, choices]) => {
+    if (!Array.isArray(choices) || !choices.length) return;
+    total++;
+    choices.forEach((i) => {
+      if (counts[i] === undefined) return;
+      counts[i]++;
+      voters[i].push(uid);
+    });
+  });
+  const mine = Array.isArray(votes[me]) ? votes[me] : [];
+  const voted = mine.length > 0;
+  const canVote = !!ops.vote && !msg._scheduled;
+  const showResults = voted || !canVote;
+  const pct = counts.map((c) => (total ? Math.round((c / total) * 100) : 0));
+  const leader = Math.max(0, ...counts);
+  const prev = pollShown.get(msg.id);
+  pollShown.set(msg.id, showResults ? pct : null);
+  const pending = pollPending.get(msg.id) || new Set();
+  pollPending.set(msg.id, pending);
+
+  const box = document.createElement("div");
+  box.className = "poll" + (showResults ? " show-results" : "") + (poll.multi ? " multi" : "");
+  box.innerHTML = `<div class="poll-q"></div><div class="poll-kind"></div><div class="poll-opts"></div>
+    <div class="poll-foot"><span class="poll-total"></span><button type="button" class="poll-action hidden"></button></div>`;
+  box.querySelector(".poll-q").textContent = poll.q || "Опрос";
+  box.querySelector(".poll-kind").textContent = [poll.anon === false ? "Публичный опрос" : "Анонимный опрос", poll.multi ? "несколько ответов" : ""]
+    .filter(Boolean)
+    .join(" · ");
+  box.querySelector(".poll-total").textContent = total ? pluralVotes(total) : "Пока никто не голосовал";
+  const action = box.querySelector(".poll-action");
+  const list = box.querySelector(".poll-opts");
+
+  const cast = (choices, fromEl) => {
+    pending.clear();
+    if (choices.length && fromEl) burst(...centerOf(fromEl), { count: 10, spread: 46, colors: [...accentColors(), "#fff3c4"] });
+    ops.vote(msg.id, choices).catch((err) => {
+      console.error(err);
+      toast("Не удалось проголосовать", { tone: "error" });
+    });
+  };
+
+  options.forEach((label, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className =
+      "poll-opt" +
+      (mine.includes(i) ? " chosen" : "") +
+      (pending.has(i) ? " pending" : "") +
+      (showResults && leader > 0 && counts[i] === leader ? " leader" : "");
+    b.innerHTML = '<span class="poll-bar"></span><span class="poll-check"></span><span class="poll-label"></span><span class="poll-voters"></span><span class="poll-pct"></span>';
+    b.querySelector(".poll-label").textContent = label;
+    if (showResults) {
+      b.querySelector(".poll-pct").textContent = pct[i] + "%";
+      const bar = b.querySelector(".poll-bar");
+      const to = total ? counts[i] / total : 0;
+      const from = prev ? prev[i] / 100 : 0;
+      bar.style.transform = `scaleX(${to})`;
+      if (Math.abs(from - to) > 0.004) animate(bar, [{ transform: `scaleX(${from})` }, { transform: `scaleX(${to})` }], { spring: "smooth", delay: 40 * i });
+      if (poll.anon === false) {
+        const faces = b.querySelector(".poll-voters");
+        voters[i].slice(0, 3).forEach((uid) => {
+          const p = profileForUid(uid);
+          faces.insertAdjacentHTML("beforeend", p ? visibleAvatarHTML(p, uid) : avatarHTML({ displayName: "?" }, uid));
+        });
+      }
+    }
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!canVote || voted) return;
+      if (poll.multi) {
+        if (pending.has(i)) pending.delete(i);
+        else pending.add(i);
+        b.classList.toggle("pending", pending.has(i));
+        action.disabled = !pending.size;
+        return;
+      }
+      cast([i], b);
+    });
+    list.appendChild(b);
+  });
+
+  if (canVote && voted) {
+    action.textContent = "Отменить голос";
+    action.classList.remove("hidden");
+    action.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cast([]);
+    });
+  } else if (canVote && poll.multi) {
+    action.textContent = "Голосовать";
+    action.classList.remove("hidden");
+    action.disabled = !pending.size;
+    action.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (pending.size) cast([...pending].sort((a, b) => a - b), action);
+    });
+  }
+  return box;
+}
+
+// ---------- Location ----------
+// A small static map stitched from OpenStreetMap tiles, pin in the middle.
+
+function renderLocation(loc) {
+  const lat = Number(loc?.lat);
+  const lng = Number(loc?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 85 || Math.abs(lng) > 180) return null;
+  const W = 260;
+  const H = 150;
+  const Z = 15;
+  const T = 256;
+  const n = 2 ** Z;
+  const rad = (lat * Math.PI) / 180;
+  const px = ((lng + 180) / 360) * n * T;
+  const py = ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n * T;
+  const left = px - W / 2;
+  const top = py - H / 2;
+
+  const card = document.createElement("a");
+  card.className = "loc-card";
+  card.href = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`;
+  card.target = "_blank";
+  card.rel = "noopener noreferrer";
+  const map = document.createElement("div");
+  map.className = "loc-map";
+  for (let tx = Math.floor(left / T); tx <= Math.floor((left + W) / T); tx++) {
+    for (let ty = Math.floor(top / T); ty <= Math.floor((top + H) / T); ty++) {
+      const img = document.createElement("img");
+      img.src = `https://tile.openstreetmap.org/${Z}/${((tx % n) + n) % n}/${ty}.png`;
+      img.alt = "";
+      img.loading = "lazy";
+      img.draggable = false;
+      img.style.left = Math.round(tx * T - left) + "px";
+      img.style.top = Math.round(ty * T - top) + "px";
+      map.appendChild(img);
+    }
+  }
+  map.insertAdjacentHTML("beforeend", '<span class="loc-pulse"></span><span class="loc-pin"></span><span class="loc-attr">© OpenStreetMap</span>');
+  const cap = document.createElement("div");
+  cap.className = "loc-caption";
+  cap.innerHTML = `<b>Геопозиция</b><span>${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`;
+  card.append(map, cap);
+  return card;
 }
 
 function buildReactionsBar(msg, reactFn) {
@@ -2905,6 +3414,20 @@ function renderMessage(msg, isMine, senderName) {
     timeEl.appendChild(tick);
   }
 
+  if (msg.effect && EFFECTS[msg.effect]) {
+    row.dataset.effect = msg.effect;
+    const tag = document.createElement("button");
+    tag.type = "button";
+    tag.className = "msg-effect-tag";
+    tag.title = "Повторить эффект: " + EFFECTS[msg.effect].label;
+    tag.textContent = EFFECTS[msg.effect].emoji;
+    tag.addEventListener("click", (e) => {
+      e.stopPropagation();
+      playEffect(msg.effect, { x: e.clientX, y: e.clientY });
+    });
+    timeEl.prepend(tag);
+  }
+
   if (canReact) {
     row.querySelector(".msg-group").appendChild(buildReactionsBar(msg, ops.react));
   }
@@ -2918,16 +3441,129 @@ function renderMessage(msg, isMine, senderName) {
   });
   const bubbleArea = row.querySelector(".msg-group");
   onContextGesture(bubbleArea, (x, y) => openMessageMenu(menuCtx, x, y));
+  // Double tap / double click = ❤️, like in Telegram and Instagram.
+  const quickReact = (x, y) => {
+    if (!canReact || msg._scheduled) return;
+    const mine = (msg.reactions?.["❤️"] || []).includes(currentUser.uid);
+    if (!mine) emojiEffect("❤️", x, y, 120);
+    ops.react(msg.id, "❤️", !mine);
+  };
+  const interactive = (t) => t.closest("button, a, img, audio, video, textarea, input, .msg-reply-quote, .anim-emoji, .vnote, .poll, .game-holder");
   if (touchOnly) {
-    // Tap a bubble to get its actions (links, media and buttons keep working).
+    // Tap a bubble to get its actions (links, media and buttons keep working);
+    // the menu waits a moment so a second tap can turn into a reaction.
+    // Double taps are detected on touchend: browsers may swallow the second click.
+    let tapTimer = null;
+    let tapStart = null;
+    let lastTap = null;
+    bubbleArea.addEventListener(
+      "touchstart",
+      (e) => {
+        tapStart = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+      },
+      { passive: true }
+    );
+    bubbleArea.addEventListener(
+      "touchend",
+      (e) => {
+        const t = e.changedTouches[0];
+        if (!tapStart || e.touches.length || interactive(e.target) || Math.hypot(t.clientX - tapStart.x, t.clientY - tapStart.y) > 10) {
+          lastTap = null;
+          return;
+        }
+        const now = performance.now();
+        if (lastTap && now - lastTap.at < 320 && Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 30) {
+          e.preventDefault(); // no second click, no zoom
+          lastTap = null;
+          clearTimeout(tapTimer);
+          tapTimer = null;
+          quickReact(t.clientX, t.clientY);
+          return;
+        }
+        lastTap = { at: now, x: t.clientX, y: t.clientY };
+      },
+      { passive: false }
+    );
     bubbleArea.addEventListener("click", (e) => {
-      if (e.target.closest("button, a, img, audio, video, textarea, .msg-reply-quote, .anim-emoji, .vnote")) return;
-      const r = row.querySelector(".bubble").getBoundingClientRect();
-      openMessageMenu(menuCtx, isMine ? r.right - 220 : r.left, r.bottom + 6);
+      if (interactive(e.target)) return;
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(
+        () => {
+          tapTimer = null;
+          const r = row.querySelector(".bubble").getBoundingClientRect();
+          openMessageMenu(menuCtx, isMine ? r.right - 220 : r.left, r.bottom + 6);
+        },
+        canReact && !msg._scheduled ? 300 : 0
+      );
+    });
+    if (canReply && !msg._scheduled) attachSwipeReply(row, msg);
+  } else {
+    bubbleArea.addEventListener("dblclick", (e) => {
+      if (interactive(e.target)) return;
+      window.getSelection()?.removeAllRanges();
+      quickReact(e.clientX, e.clientY);
     });
   }
 
   messagesEl.appendChild(row);
+}
+
+// Swipe a bubble to the left to reply to it.
+function attachSwipeReply(row, msg) {
+  const group = row.querySelector(".msg-group");
+  let sx = 0;
+  let sy = 0;
+  let dx = 0;
+  let state = 0; // 0 idle · 1 undecided · 2 swiping · -1 vertical scroll
+  row.addEventListener(
+    "touchstart",
+    (e) => {
+      state = e.touches.length === 1 ? 1 : 0;
+      sx = e.touches[0].clientX;
+      sy = e.touches[0].clientY;
+      dx = 0;
+    },
+    { passive: true }
+  );
+  row.addEventListener(
+    "touchmove",
+    (e) => {
+      if (state <= 0) return;
+      const mx = e.touches[0].clientX - sx;
+      const my = e.touches[0].clientY - sy;
+      if (state === 1) {
+        if (Math.abs(my) > 10) {
+          state = -1;
+          return;
+        }
+        if (mx > -12) return;
+        state = 2;
+        row.classList.add("swiping");
+      }
+      dx = Math.max(-96, Math.min(0, mx + 12));
+      group.style.transform = `translateX(${dx}px)`;
+      row.style.setProperty("--swipe", Math.min(1, -dx / 64).toFixed(3));
+      const armed = dx <= -64;
+      if (armed !== row.classList.contains("swipe-armed")) {
+        row.classList.toggle("swipe-armed", armed);
+        if (armed && navigator.vibrate) navigator.vibrate(8);
+      }
+    },
+    { passive: true }
+  );
+  const end = () => {
+    if (state === 2) {
+      if (dx <= -64) startReply(msg);
+      const from = dx;
+      group.style.transform = "";
+      row.classList.remove("swiping", "swipe-armed");
+      row.style.removeProperty("--swipe");
+      animate(group, [{ transform: `translateX(${from}px)` }, { transform: "none" }], { spring: "bouncy" });
+    }
+    state = 0;
+  };
+  row.addEventListener("touchend", end, { passive: true });
+  row.addEventListener("touchcancel", end, { passive: true });
 }
 
 function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, canReply }, x, y) {
@@ -2947,7 +3583,7 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
     });
     return;
   }
-  const hasText = !!msg.text && !msg.call && !DEFAULT_CAPTIONS.includes(msg.text);
+  const hasText = !!msg.text && !msg.call && !msg.poll && !msg.game && !msg.location && !DEFAULT_CAPTIONS.includes(msg.text);
   const pinnedId = currentChatData()?.pinned?.id;
   const reactions = canReact
     ? {
@@ -2966,6 +3602,11 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
     reactions,
     items: [
       canReply && { label: "Ответить", icon: MI.reply, onClick: () => startReply(msg) },
+      msg.effect && EFFECTS[msg.effect] && {
+        label: "Повторить эффект",
+        icon: MI.sparkle,
+        onClick: () => playEffect(msg.effect, centerOfPoint(row.querySelector(".bubble"))),
+      },
       hasText && {
         label: "Копировать",
         icon: MI.copy,
@@ -3143,6 +3784,12 @@ lightboxEl.addEventListener("click", (e) => {
 });
 document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
 
+function centerOfPoint(el) {
+  if (!el?.isConnected) return null;
+  const [x, y] = centerOf(el);
+  return { x, y };
+}
+
 // ---------- Links ----------
 
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]|www\.[^\s<>"']+[^\s<>"'.,;:!?)\]])/gi;
@@ -3250,7 +3897,17 @@ composer.addEventListener("submit", async (e) => {
   await doSendMessage();
 });
 
+// Keyed by physical key so the shortcuts also work in the Russian layout.
+const FORMAT_KEYS = { KeyB: "**", KeyI: "__", "shift+KeyX": "~~", "shift+KeyP": "||", "shift+KeyM": "`" };
 msgInput.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const marker = FORMAT_KEYS[(e.shiftKey ? "shift+" : "") + e.code];
+    if (marker) {
+      e.preventDefault();
+      wrapSelection(msgInput, marker);
+      return;
+    }
+  }
   if (e.key !== "Enter" || e.shiftKey) return;
   const sendOnEnter = myProfile?.chatPrefs?.sendOnEnter !== false;
   if (sendOnEnter || e.ctrlKey || e.metaKey) {
@@ -3289,7 +3946,7 @@ msgInput.addEventListener("input", () => {
 let lastTypingPing = 0;
 const saveDraftSoon = debounce(() => writeDraft(currentChatId, msgInput.value), 400);
 
-async function doSendMessage(attachment, { scheduleAt = null } = {}) {
+async function doSendMessage(attachment, { scheduleAt = null, effect = null, silent = false } = {}) {
   const text = msgInput.value.trim();
   if (!text && !attachment) return;
   if (!currentChatId) return;
@@ -3318,8 +3975,22 @@ async function doSendMessage(attachment, { scheduleAt = null } = {}) {
   closeEmojiPicker();
   cancelReply();
   try {
-    await deliver({ type: currentChatType, id: currentChatId, text, attachment, replyTo: replyPayload, scheduleAt });
+    const extra = {};
+    // 🎲 🎯 🏀 🎰 on their own become a mini game with a result rolled here.
+    if (!attachment && gameForText(text) && currentChatType !== "notifications") extra.game = rollGame(text);
+    if (effect) extra.effect = effect;
+    await deliver({
+      type: currentChatType,
+      id: currentChatId,
+      text,
+      attachment,
+      replyTo: replyPayload,
+      scheduleAt,
+      silent,
+      extra: Object.keys(extra).length ? extra : null,
+    });
     if (scheduleAt) toast(`Сообщение будет отправлено ${fmtScheduleTime(scheduleAt)}`, { icon: "📅" });
+    else if (silent) toast("Отправлено без звука", { icon: "🔕" });
   } catch (err) {
     console.error(err);
     if (err?.silent) {
@@ -3457,7 +4128,152 @@ async function sendFiles(files) {
   }
 }
 
-attachBtn.addEventListener("click", () => attachInput.click());
+attachBtn.addEventListener("click", openAttachMenu);
+
+function openAttachMenu() {
+  const r = attachBtn.getBoundingClientRect();
+  const social = ["contact", "group", "channel"].includes(currentChatType);
+  const canPlay = currentChatType !== "notifications";
+  openContextMenu({
+    x: r.left,
+    y: r.top - 8,
+    reactions: canPlay ? { emojis: Object.keys(GAMES), mine: new Set(), onPick: (emoji) => sendGame(emoji) } : null,
+    items: [
+      { label: "Фото, видео или файл", icon: MI.image, onClick: () => attachInput.click() },
+      social && { label: "Опрос", icon: MI.poll, onClick: openPollCreator },
+      canPlay && { label: "Геопозиция", icon: MI.location, onClick: sendLocation },
+    ],
+  });
+  document.querySelector(".ctx-menu")?.classList.add("attach-menu");
+}
+
+async function sendGame(emoji) {
+  if (!currentChatId) return;
+  try {
+    await deliver({ type: currentChatType, id: currentChatId, text: emoji, extra: { game: rollGame(emoji) } });
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось отправить", { tone: "error" });
+  }
+}
+
+function sendLocation() {
+  if (!navigator.geolocation) {
+    toast("Геолокация недоступна в этом браузере", { tone: "error" });
+    return;
+  }
+  const target = { type: currentChatType, id: currentChatId };
+  toast("Определяем местоположение…", { icon: "📍" });
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const location = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5) };
+      try {
+        await deliver({ ...target, text: "📍 Геопозиция", extra: { location } });
+      } catch (err) {
+        console.error(err);
+        toast("Не удалось отправить геопозицию", { tone: "error" });
+      }
+    },
+    (err) => {
+      const reason = err.code === 1 ? "нет доступа к геолокации" : "не удалось определить местоположение";
+      toast("Геопозиция: " + reason, { tone: "error", duration: 4000 });
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+  );
+}
+
+// ---------- Poll creator ----------
+
+const pollOverlay = document.getElementById("poll-overlay");
+const pollQuestion = document.getElementById("poll-question");
+const pollOptionsEl = document.getElementById("poll-options");
+const pollAddBtn = document.getElementById("poll-add-option");
+const pollAnon = document.getElementById("poll-anon");
+const pollMulti = document.getElementById("poll-multi");
+let pollTarget = null;
+
+function syncPollAddBtn() {
+  pollAddBtn.classList.toggle("hidden", pollOptionsEl.children.length >= 10);
+}
+
+function addPollOption(focus = false) {
+  if (pollOptionsEl.children.length >= 10) return null;
+  const row = document.createElement("div");
+  row.className = "poll-edit-row";
+  row.innerHTML = '<span class="poll-edit-dot"></span><input type="text" maxlength="100" placeholder="Вариант ответа" /><button type="button" class="icon-btn" title="Убрать">✕</button>';
+  const input = row.querySelector("input");
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const next = row.nextElementSibling?.querySelector("input") || addPollOption()?.querySelector("input");
+    next?.focus();
+  });
+  row.querySelector("button").addEventListener("click", () => {
+    if (pollOptionsEl.children.length <= 2) {
+      input.value = "";
+      return;
+    }
+    row.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(-20px) scale(.9)" }], { duration: 180, easing: "ease-in" }).finished.then(() => {
+      row.remove();
+      syncPollAddBtn();
+    });
+  });
+  pollOptionsEl.appendChild(row);
+  animate(row, [{ opacity: 0, transform: "translateY(-8px) scale(.94)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  syncPollAddBtn();
+  if (focus) input.focus();
+  return row;
+}
+
+function openPollCreator() {
+  if (!currentChatId) return;
+  pollTarget = { type: currentChatType, id: currentChatId };
+  pollQuestion.value = "";
+  pollOptionsEl.innerHTML = "";
+  pollAnon.checked = true;
+  pollMulti.checked = false;
+  addPollOption();
+  addPollOption();
+  showOverlay(pollOverlay);
+  setTimeout(() => pollQuestion.focus(), 80);
+}
+
+pollAddBtn.addEventListener("click", () => addPollOption(true));
+pollQuestion.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    pollOptionsEl.querySelector("input")?.focus();
+  }
+});
+document.getElementById("poll-cancel").addEventListener("click", () => hideOverlay(pollOverlay));
+pollOverlay.addEventListener("click", (e) => {
+  if (e.target === pollOverlay) hideOverlay(pollOverlay);
+});
+document.getElementById("poll-create").addEventListener("click", async () => {
+  const q = pollQuestion.value.trim().slice(0, 200);
+  const options = [...new Set([...pollOptionsEl.querySelectorAll("input")].map((i) => i.value.trim().slice(0, 100)).filter(Boolean))];
+  if (!q) {
+    toast("Введите вопрос", { tone: "error" });
+    pollQuestion.focus();
+    return;
+  }
+  if (options.length < 2) {
+    toast("Нужно хотя бы два разных варианта", { tone: "error" });
+    return;
+  }
+  hideOverlay(pollOverlay);
+  try {
+    await deliver({
+      ...pollTarget,
+      text: "📊 " + q,
+      extra: { poll: { q, options, multi: pollMulti.checked, anon: pollAnon.checked } },
+      plain: { votes: {} },
+    });
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось создать опрос", { tone: "error" });
+  }
+});
 
 attachInput.addEventListener("change", () => {
   const files = Array.from(attachInput.files || []);
@@ -3719,15 +4535,16 @@ async function maybeNotify(chatData) {
 
   const notifPrefs = myProfile?.notifications || {};
   if (notifPrefs.muteAll) return;
-  if (notifPrefs.sound !== false) beep();
+  const silent = !!chatData.lastSilent;
+  if (notifPrefs.sound !== false && !silent) beep();
 
   if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
     const senderUid = chatData.lastMessageSenderId;
     const senderProfile = contactsMap.get(senderUid)?.profile || (await getProfile(senderUid));
     const title = senderProfile?.displayName || "Новое сообщение";
     const opened = chatData.lastEnc ? await openPreview(chatData.id, chatData.lastEnc, chatData.lastMessageSenderId) : null;
-    const body = notifPrefs.preview !== false ? opened || chatData.lastMessage : "Новое сообщение";
-    new Notification(title, { body });
+    const body = notifPrefs.preview !== false ? stripRich(opened || chatData.lastMessage) : "Новое сообщение";
+    new Notification(title, { body, silent });
   }
 }
 
@@ -3740,11 +4557,12 @@ async function maybeNotifyGroup(groupId, groupData) {
 
   const notifPrefs = myProfile?.notifications || {};
   if (notifPrefs.muteAll || notifPrefs.groups === false) return;
-  if (notifPrefs.sound !== false) beep();
+  const silent = !!groupData.lastSilent;
+  if (notifPrefs.sound !== false && !silent) beep();
 
   if (notifPrefs.desktop && "Notification" in window && Notification.permission === "granted") {
-    const body = notifPrefs.preview !== false ? groupData.lastMessage : "Новое сообщение";
-    new Notification(groupData.name || "Новое сообщение", { body });
+    const body = notifPrefs.preview !== false ? stripRich(groupData.lastMessage) : "Новое сообщение";
+    new Notification(groupData.name || "Новое сообщение", { body, silent });
   }
 }
 
@@ -3929,6 +4747,47 @@ function updateProfileCounters() {
 
 settingsDisplayname.addEventListener("input", updateProfileCounters);
 settingsBio.addEventListener("input", updateProfileCounters);
+const emojiStatusPicker = document.getElementById("settings-emoji-status");
+const settingsProfileLink = document.getElementById("settings-profile-link");
+let selectedEmojiStatus = null;
+
+function renderEmojiStatusPicker() {
+  emojiStatusPicker.innerHTML = "";
+  [null, ...EMOJI_STATUSES].forEach((emoji) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "status-chip" + (emoji === selectedEmojiStatus ? " selected" : "") + (emoji ? "" : " none");
+    b.textContent = emoji || "✕";
+    b.title = emoji ? "Поставить статус" : "Без статуса";
+    b.addEventListener("click", () => {
+      selectedEmojiStatus = emoji;
+      emojiStatusPicker.querySelectorAll(".status-chip").forEach((c) => c.classList.toggle("selected", c === b));
+      animate(b, [{ transform: "scale(.6) rotate(-20deg)" }, { transform: "none" }], { spring: "jelly" });
+      if (emoji) emojiEffect(emoji, ...centerOf(b), 70);
+    });
+    emojiStatusPicker.appendChild(b);
+  });
+}
+
+function profileLink() {
+  return `${location.origin}/?u=${encodeURIComponent(myProfile.username)}`;
+}
+
+document.getElementById("settings-profile-link-copy").addEventListener("click", async (e) => {
+  const url = profileLink();
+  if (touchOnly && navigator.share) {
+    navigator.share({ title: "Linkage Message", text: `Напишите мне в Linkage Message: @${myProfile.username}`, url }).catch(() => {});
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Ссылка скопирована", { icon: "🔗" });
+    successPulse(e.currentTarget);
+  } catch (_) {
+    toast("Не удалось скопировать", { tone: "error" });
+  }
+});
+
 settingsBirthdayClearBtn?.addEventListener("click", () => {
   settingsBirthday.value = "";
 });
@@ -3953,6 +4812,9 @@ function openSettings() {
   settingsUsernameHint.textContent = "";
   settingsBio.value = myProfile.bio || "";
   settingsBirthday.value = myProfile.birthday || "";
+  selectedEmojiStatus = validStatus(myProfile.emojiStatus);
+  renderEmojiStatusPicker();
+  settingsProfileLink.textContent = profileLink();
   updateProfileCounters();
   settingsCreatedAt.textContent = myProfile.createdAt?.toDate
     ? myProfile.createdAt.toDate().toLocaleDateString([], { day: "2-digit", month: "long", year: "numeric" })
@@ -4020,6 +4882,7 @@ settingsProfileSave.addEventListener("click", async () => {
       bio: settingsBio.value.trim().slice(0, 140),
       birthday: settingsBirthday.value || null,
       avatarImage: selectedSettingsAvatarImage,
+      emojiStatus: selectedEmojiStatus || null,
     });
     myProfile = await fetchMyProfile(currentUser.uid);
     renderMe();
@@ -4383,7 +5246,7 @@ async function initE2E() {
 
 // ---------- One way to put a message into any chat ----------
 // Handles encryption for 1:1 chats and scheduling everywhere.
-async function deliver({ type, id, text = "", attachment = null, replyTo = null, extra = null, scheduleAt = null }) {
+async function deliver({ type, id, text = "", attachment = null, replyTo = null, extra = null, scheduleAt = null, silent = false, plain = null }) {
   const me = currentUser.uid;
   if (type === "saved") {
     return addSavedMessage(me, text || attachment?.defaultCaption || "", replyTo, { ...(attachment?.fields || {}), ...(extra || {}) });
@@ -4391,7 +5254,7 @@ async function deliver({ type, id, text = "", attachment = null, replyTo = null,
   if (type === "notifications") return addBroadcast(me, text);
   if (type === "group" || type === "channel") {
     const members = (groups.find((g) => g.id === id) || currentGroupRef)?.members || [];
-    return sendGroupMessage(id, me, text, attachment, replyTo, extra, members, { scheduleAt });
+    return sendGroupMessage(id, me, text, attachment, replyTo, extra, members, { scheduleAt, silent, plain });
   }
   // 1:1 chat — encrypted whenever the other person's app has a device key.
   const otherUid = otherUidOf(id);
@@ -4403,11 +5266,13 @@ async function deliver({ type, id, text = "", attachment = null, replyTo = null,
     const recipients = await recipientsFor(id);
     return sendMessage(id, me, "🔒", null, null, { enc: await sealFor(id, recipients, content) }, {
       scheduleAt,
+      silent,
+      plain,
       preview: "🔒 Сообщение",
       previewEnc: await sealFor(id, recipients, { p: preview }),
     });
   }
-  return sendMessage(id, me, text, attachment, replyTo, extra, { scheduleAt });
+  return sendMessage(id, me, text, attachment, replyTo, extra, { scheduleAt, silent, plain });
 }
 
 // ---------- Search inside the open chat ----------

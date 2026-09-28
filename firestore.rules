@@ -41,6 +41,12 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']);
     }
 
+    // Poll votes: a member may only change their own entry in `votes`.
+    function isPollVote() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes'])
+        && request.resource.data.get('votes', {}).diff(resource.data.get('votes', {})).affectedKeys().hasOnly([request.auth.uid]);
+    }
+
     // ---------- users/{uid} : public-ish profile ----------
     match /users/{uid} {
       allow read: if isSignedIn();
@@ -155,7 +161,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members
-          && (isMessageTextEdit() || isMessageReactionEdit());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }
@@ -219,7 +225,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
-          && (isMessageTextEdit() || isMessageReactionEdit());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }

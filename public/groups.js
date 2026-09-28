@@ -93,6 +93,7 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
   if (attachment) Object.assign(payload, attachment.fields);
   if (replyTo) payload.replyTo = replyTo;
   if (extra) Object.assign(payload, extra);
+  if (opts.plain) Object.assign(payload, opts.plain);
 
   const preview = opts.preview ?? (attachment?.previewText || trimmed);
   const ref = doc(collection(db, "groups", groupId, "messages"));
@@ -100,7 +101,7 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
     const at = Timestamp.fromMillis(opts.scheduleAt);
     payload.scheduledAt = at;
     await setDoc(ref, payload);
-    const entry = { at, senderId, preview };
+    const entry = { at, senderId, preview, silent: !!opts.silent };
     if (opts.previewEnc) entry.previewEnc = opts.previewEnc;
     await setDoc(doc(db, "groups", groupId), { scheduled: { [ref.id]: entry } }, { merge: true });
     return ref.id;
@@ -115,6 +116,7 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
       lastEnc: opts.previewEnc || deleteField(),
       lastMessageAt: serverTimestamp(),
       lastMessageSenderId: senderId,
+      lastSilent: !!opts.silent,
       hiddenFor: [],
       unread: Object.fromEntries(others.map((uid) => [uid, increment(1)])),
     },
@@ -145,9 +147,16 @@ export async function publishScheduledGroup(groupId, msgId) {
       patch.lastEnc = entry.previewEnc || deleteField();
       patch.lastMessageAt = entry.at;
       patch.lastMessageSenderId = entry.senderId;
+      patch.lastSilent = !!entry.silent;
     }
     tx.update(ref, patch);
     return true;
+  });
+}
+
+export async function voteGroupPoll(groupId, messageId, uid, choices) {
+  await updateDoc(doc(db, "groups", groupId, "messages", messageId), {
+    [`votes.${uid}`]: choices.length ? choices : deleteField(),
   });
 }
 

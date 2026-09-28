@@ -58,6 +58,14 @@
       <div id="search-result" class="hidden"></div>
 
 
+      <div id="folder-tabs" role="tablist" aria-label="Папки чатов">
+        <span class="folder-glider" aria-hidden="true"></span>
+        <button type="button" class="folder-tab" role="tab" data-folder="all">Все<span class="folder-count"></span></button>
+        <button type="button" class="folder-tab" role="tab" data-folder="personal">Личные<span class="folder-count"></span></button>
+        <button type="button" class="folder-tab" role="tab" data-folder="groups">Группы<span class="folder-count"></span></button>
+        <button type="button" class="folder-tab" role="tab" data-folder="unread">Непрочитанные<span class="folder-count"></span></button>
+      </div>
+
       <div id="chat-list-scroll">
         <div id="chat-list-indicator"></div>
         <div id="chat-list"></div>
@@ -85,7 +93,7 @@
         <button type="button" id="chat-header-info" title="Информация о контакте">
           <div id="chat-header-avatar"></div>
           <div class="chat-header-meta">
-            <div id="chat-title">—</div>
+            <div class="chat-title-row"><div id="chat-title">—</div><span id="chat-title-status"></span></div>
             <div id="chat-sub">—</div>
           </div>
         </button>
@@ -112,6 +120,7 @@
             <button type="button" class="dropdown-item" id="chat-menu-pin-btn">Закрепить чат</button>
             <button type="button" class="dropdown-item" id="chat-menu-block-btn">Заблокировать</button>
             <button type="button" class="dropdown-item" id="chat-menu-leave-btn">Покинуть группу</button>
+            <button type="button" class="dropdown-item" id="chat-menu-wall-btn">Обои чата</button>
             <button type="button" class="dropdown-item" id="chat-menu-clear-btn">Очистить историю</button>
             <button type="button" class="dropdown-item danger" id="chat-menu-delete-btn">Удалить чат</button>
           </div>
@@ -360,6 +369,41 @@
     </div>
   </div>
 
+  <!-- New poll -->
+  <div id="poll-overlay" class="hidden">
+    <div class="alias-panel poll-panel">
+      <h3>📊 Новый опрос</h3>
+      <div class="field">
+        <label for="poll-question">Вопрос</label>
+        <input id="poll-question" type="text" maxlength="200" placeholder="Задайте вопрос" autocomplete="off" />
+      </div>
+      <label class="poll-section-label">Варианты ответа</label>
+      <div class="poll-edit-list" id="poll-options"></div>
+      <button type="button" class="link-btn poll-add" id="poll-add-option">+ Добавить вариант</button>
+      <div class="poll-switches">
+        <label class="setting-row toggle-row"><span class="setting-title">Анонимное голосование</span><input type="checkbox" id="poll-anon" class="switch" checked /></label>
+        <label class="setting-row toggle-row"><span class="setting-title">Несколько вариантов ответа</span><input type="checkbox" id="poll-multi" class="switch" /></label>
+      </div>
+      <div class="alias-actions">
+        <button type="button" class="small-btn secondary" id="poll-cancel">Отмена</button>
+        <button type="button" class="small-btn" id="poll-create">Создать</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat wallpaper -->
+  <div id="wall-overlay" class="hidden">
+    <div class="alias-panel wall-panel">
+      <h3>🎨 Обои чата</h3>
+      <div class="wall-grid" id="wall-grid"></div>
+      <label class="setting-row toggle-row"><span class="setting-title">Для всех чатов</span><input type="checkbox" id="wall-all" class="switch" /></label>
+      <p class="setting-desc">Обои хранятся на этом устройстве и видны только вам.</p>
+      <div class="alias-actions">
+        <button type="button" class="small-btn" id="wall-close">Готово</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Photo viewer -->
   <div id="lightbox" class="hidden">
     <img id="lightbox-img" alt="" />
@@ -451,6 +495,17 @@
             <label for="settings-username">Имя пользователя</label>
             <input id="settings-username" type="text" maxlength="20" autocomplete="off" />
             <div class="field-hint" id="settings-username-hint"></div>
+          </div>
+          <div class="field">
+            <label>Ссылка на профиль</label>
+            <div class="profile-link-row">
+              <code id="settings-profile-link"></code>
+              <button type="button" class="small-btn secondary" id="settings-profile-link-copy">Поделиться</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Эмодзи-статус</label>
+            <div class="emoji-status-picker" id="settings-emoji-status"></div>
           </div>
           <div class="field">
             <label for="settings-bio">О себе <span class="field-counter" id="settings-bio-counter"></span></label>
