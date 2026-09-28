@@ -2882,9 +2882,13 @@ async function cancelScheduledMessage(msg) {
   else await cancelScheduledGroup(currentChatId, msg.id);
 }
 
+// Everything that describes a message's media; forwarding and "send now"
+// copy exactly these, so shapes, waveforms and spoilers survive.
+const MEDIA_FIELDS = ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "videoShape", "duration", "wave", "mediaSpoiler", "captionAbove"];
+
 function attachmentOf(msg) {
   const fields = {};
-  ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "duration"].forEach((k) => {
+  MEDIA_FIELDS.forEach((k) => {
     if (msg[k] !== undefined && msg[k] !== null) fields[k] = msg[k];
   });
   return Object.keys(fields).length ? { fields, previewText: replyPreviewText(msg), defaultCaption: msg.text } : null;
@@ -3930,11 +3934,7 @@ function renderForwardList() {
         const msg = forwardingMsg;
         if (!msg) return;
         b.disabled = true;
-        const fields = {};
-        ["imageUrl", "voiceUrl", "fileUrl", "fileName", "fileType", "fileSize", "videoNoteUrl", "duration"].forEach((k) => {
-          if (msg[k] !== undefined && msg[k] !== null) fields[k] = msg[k];
-        });
-        const attachment = Object.keys(fields).length ? { fields, previewText: replyPreviewText(msg), defaultCaption: msg.text } : null;
+        const attachment = attachmentOf(msg);
         const extra = { forwardedFrom: { name: msg.forwardedFrom?.name || replySenderLabel(msg) } };
         try {
           await t.send(msg.text || replyPreviewText(msg), attachment, extra);

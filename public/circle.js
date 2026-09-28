@@ -55,7 +55,9 @@ function ensureTriangleClip() {
 
 function ringSVG(cls, triangle) {
   if (triangle) {
-    return `<svg class="${cls} tri" viewBox="0 0 100 100"><path pathLength="100" d="${TRI_PATH_100}" style="stroke-dasharray:100;stroke-dashoffset:100"/></svg>`;
+    // Same box as the clipped video; the outline is grown around the
+    // triangle's incentre (x 50, y 57.3), so it hugs every edge evenly.
+    return `<svg class="${cls} tri" viewBox="0 0 100 100" overflow="visible"><path pathLength="100" transform="translate(50 57.33) scale(1.075) translate(-50 -57.33)" d="${TRI_PATH_100}" style="stroke-dasharray:100;stroke-dashoffset:100"/></svg>`;
   }
   const C = 2 * Math.PI * 48.5;
   return `<svg class="${cls}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48.5" style="stroke-dasharray:${C};stroke-dashoffset:${C}"/></svg>`;

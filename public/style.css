@@ -5419,6 +5419,9 @@ mark.search-mark {
   position: relative;
   width: 220px;
   height: 220px;
+  /* Bubbles keep pre-wrap for text; here the template's line breaks would
+     push the video below its ring. */
+  white-space: normal;
   border-radius: 50%;
   cursor: pointer;
   transform-origin: center;
@@ -7545,6 +7548,10 @@ mark.search-mark {
 
 .circle-rec-ring.tri,
 .vnote-ring.tri {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
   transform: none;
 }
 
