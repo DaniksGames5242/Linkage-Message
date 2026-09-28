@@ -6,6 +6,11 @@ import {
   serverTimestamp,
   collection,
   onSnapshot,
+  query,
+  where,
+  documentId,
+  limit,
+  getDocs,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { normalizeUsername, isValidUsername } from "./utils.js";
 
@@ -27,6 +32,23 @@ export async function searchUser(rawQuery, myUid) {
   if (!profileSnap.exists()) return null;
 
   return { uid: targetUid, profile: profileSnap.data() };
+}
+
+// Real search: every user whose username starts with what was typed
+// ("da" → danik, daria…). Usernames are the document ids of `usernames/`.
+export async function searchUsers(rawQuery, myUid, max = 8) {
+  const q = normalizeUsername((rawQuery || "").trim().replace(/^@/, ""));
+  if (!q || !/^[a-z0-9_]+$/.test(q)) return [];
+  const snap = await getDocs(query(collection(db, "usernames"), where(documentId(), ">=", q), where(documentId(), "<", q + "\uf8ff"), limit(max)));
+  const found = await Promise.all(
+    snap.docs.map(async (d) => {
+      const uid = d.data().uid;
+      if (uid === myUid) return { uid, profile: null, self: true };
+      const p = await getDoc(doc(db, "users", uid));
+      return p.exists() ? { uid, profile: p.data() } : null;
+    })
+  );
+  return found.filter(Boolean);
 }
 
 // Idempotent: merges so it never wipes out an existing firstName/lastName

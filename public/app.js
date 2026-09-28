@@ -13,7 +13,7 @@ import {
 import { e2eSupported, initDevice, forgetDevice, hasDevice, deviceId, devicePublicKey, sealFor, openFrom, NotForThisDevice, fingerprint } from "./e2e.js";
 import { publishDevice } from "./e2e-store.js";
 import { recordCircle, buildVideoNote, circlesSupported, MAX_ZOOM, ensureTriangleClip } from "./circle.js";
-import { searchUser, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName, listenProfile } from "./contacts.js";
+import { searchUser, searchUsers, addContact, listenContacts, getProfile, setContactAlias, contactDisplayName, listenProfile } from "./contacts.js";
 import {
   ensureChat,
   listenMyChats,
@@ -844,71 +844,109 @@ menuTriggerBtn.addEventListener("click", () => openSettings());
 
 // ---------- Search ----------
 
+// People I already know whose name or username matches (instant, local).
+function localPeopleMatches(q) {
+  const needle = q.toLowerCase().replace(/^@/, "");
+  const seen = new Map();
+  const consider = (uid, profile) => {
+    if (!uid || !profile || uid === currentUser.uid || seen.has(uid)) return;
+    const name = (contactsMap.get(uid) ? contactDisplayName(contactsMap.get(uid).alias, profile) : profile.displayName) || "";
+    if (name.toLowerCase().includes(needle) || (profile.username || "").startsWith(needle)) seen.set(uid, profile);
+  };
+  contactsMap.forEach((c, uid) => consider(uid, c.profile));
+  chats.forEach((c) => {
+    const uid = c.participants.find((p) => p !== currentUser.uid);
+    consider(uid, profileCache.get(uid)?.profile);
+  });
+  return [...seen].map(([uid, profile]) => ({ uid, profile }));
+}
+
+async function openChatWith(uid, profile) {
+  await addContact(currentUser.uid, uid, contactsMap.has(uid));
+  const chatId = await ensureChat(currentUser.uid, uid);
+  openContactChat(chatId, uid, profile);
+}
+
+function personRow(uid, profile, { actionLabel = "Написать", onAction, secondary = null }) {
+  const row = document.createElement("div");
+  row.className = "search-result-card person-row";
+  row.innerHTML = `
+    ${visibleAvatarHTML(profile, uid)}
+    <div class="search-result-meta">
+      <div class="search-result-name"></div>
+      <div class="search-result-sub">@${escapeHTML(profile.username || "")}</div>
+    </div>
+    <div class="search-result-actions">
+      ${secondary ? `<button class="small-btn secondary" data-act="secondary">${escapeHTML(secondary.label)}</button>` : ""}
+      <button class="small-btn" data-act="main">${escapeHTML(actionLabel)}</button>
+    </div>`;
+  const contact = contactsMap.get(uid);
+  row.querySelector(".search-result-name").textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
+  const guard = (btn, fn) =>
+    btn?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      btn.disabled = true;
+      try {
+        await fn();
+      } catch (err) {
+        console.error(err);
+        toast(err.message || "Что-то пошло не так", { tone: "error" });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  guard(row.querySelector('[data-act="main"]'), onAction);
+  if (secondary) guard(row.querySelector('[data-act="secondary"]'), secondary.onClick);
+  return row;
+}
+
+let searchToken = 0;
 const runSearch = debounce(async (raw) => {
   const q = raw.trim();
+  const token = ++searchToken;
   if (!q) {
     searchResultEl.classList.add("hidden");
     searchResultEl.innerHTML = "";
     return;
   }
-  const result = await searchUser(q, currentUser.uid);
-  searchResultEl.classList.remove("hidden");
-  if (!result || result.self) {
-    searchResultEl.innerHTML = `<div class="search-empty">${
-      result?.self ? "Это вы 🙂" : "Пользователь не найден"
-    }</div>`;
-    return;
-  }
-  const { uid, profile } = result;
-  const isContact = contactsMap.has(uid);
-  const card = document.createElement("div");
-  card.className = "search-result-card";
-  card.innerHTML = `
-    ${visibleAvatarHTML(profile, uid)}
-    <div class="search-result-meta">
-      <div class="search-result-name"></div>
-      <div class="search-result-sub">@${escapeHTML(profile.username)}</div>
-    </div>
-    <div class="search-result-actions">
-      ${isContact ? "" : '<button class="small-btn secondary" id="sr-add">Добавить</button>'}
-      <button class="small-btn" id="sr-message">Написать</button>
-    </div>
-  `;
-  card.querySelector(".search-result-name").textContent = profile.displayName;
-  searchResultEl.innerHTML = "";
-  searchResultEl.appendChild(card);
-
-  const addBtn = card.querySelector("#sr-add");
-  if (addBtn) {
-    addBtn.addEventListener("click", async () => {
-      addBtn.disabled = true;
-      try {
-        await addContact(currentUser.uid, uid, isContact);
-      } catch (err) {
-        console.error(err);
-        alert(err.message || "Не удалось добавить контакт");
-      } finally {
-        addBtn.disabled = false;
-      }
-    });
-  }
-  const messageBtn = card.querySelector("#sr-message");
-  messageBtn.addEventListener("click", async () => {
-    messageBtn.disabled = true;
-    try {
-      await addContact(currentUser.uid, uid, isContact);
-      const chatId = await ensureChat(currentUser.uid, uid);
-      openContactChat(chatId, uid, profile);
-      searchInput.value = "";
-      searchResultEl.classList.add("hidden");
-    } catch (err) {
-      console.error(err);
-      alert(err.message || "Не удалось открыть чат");
-    } finally {
-      messageBtn.disabled = false;
+  // Known people show up at once; the global username search follows.
+  const local = localPeopleMatches(q);
+  const render = (global) => {
+    if (token !== searchToken) return;
+    const all = [...local];
+    global.forEach((r) => !r.self && !all.some((x) => x.uid === r.uid) && all.push(r));
+    searchResultEl.classList.remove("hidden");
+    searchResultEl.innerHTML = "";
+    if (!all.length) {
+      searchResultEl.innerHTML = `<div class="search-empty">${global.some((r) => r.self) ? "Это вы 🙂" : "Никого не нашлось"}</div>`;
+      return;
     }
-  });
-}, 350);
+    all.slice(0, 10).forEach(({ uid, profile }) => {
+      const isContact = contactsMap.has(uid);
+      searchResultEl.appendChild(
+        personRow(uid, profile, {
+          onAction: async () => {
+            await openChatWith(uid, profile);
+            searchInput.value = "";
+            searchResultEl.classList.add("hidden");
+          },
+          secondary: isContact
+            ? null
+            : {
+                label: "Добавить",
+                onClick: async () => {
+                  await addContact(currentUser.uid, uid, false);
+                  toast("Контакт добавлен", { icon: "👤" });
+                },
+              },
+        })
+      );
+    });
+    stagger(searchResultEl.children, { y: 8, blur: 0, step: 30, spring: "smooth" });
+  };
+  render([]);
+  render(await searchUsers(q, currentUser.uid).catch(() => []));
+}, 250);
 
 searchInput.addEventListener("input", () => runSearch(searchInput.value));
 
