@@ -956,7 +956,7 @@ function staggerProfileView() {
     spring: "jelly",
     delay: 90,
   });
-  stagger([profileViewName, profileViewUsername, ...profileViewRows.map((r) => r.row), ...profileViewActions.children], {
+  stagger([profileViewName, profileViewUsername, ...profileViewRows.map((r) => r.row), ...profileViewActions.children, sharedMediaEl, profileMembers], {
     y: 14,
     step: 45,
     delay: 160,
@@ -1058,10 +1058,25 @@ const runSearch = debounce(async (raw) => {
   const q = raw.trim();
   const token = ++searchToken;
   if (!q) {
+    if (!searchResultEl.classList.contains("hidden") && !reducedMotion) {
+      searchResultEl
+        .animate([{ opacity: 1 }, { opacity: 0, transform: "translateY(-6px)" }], { duration: 160, easing: "ease-in", fill: "forwards" })
+        .finished.then(
+          () => {
+            if (searchToken !== token) return;
+            searchResultEl.getAnimations().forEach((a) => a.cancel());
+            searchResultEl.classList.add("hidden");
+            searchResultEl.innerHTML = "";
+          },
+          () => {}
+        );
+      return;
+    }
     searchResultEl.classList.add("hidden");
     searchResultEl.innerHTML = "";
     return;
   }
+  searchResultEl.getAnimations().forEach((a) => a.cancel());
   // Known people show up at once; the global username search follows.
   const local = localPeopleMatches(q);
   const render = (global) => {
@@ -1968,7 +1983,11 @@ function closeContextMenu(instant = false) {
     backdrop.remove();
     return;
   }
-  backdrop.remove();
+  backdrop.style.pointerEvents = "none";
+  backdrop
+    .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: "ease-in", fill: "forwards" })
+    .finished.then(() => backdrop.remove(), () => backdrop.remove());
+  setTimeout(() => backdrop.remove(), 400);
   menu
     .animate(
       [
@@ -2024,6 +2043,7 @@ function openContextMenu({ x, y, reactions = null, items }) {
     closeContextMenu();
   });
   document.body.append(backdrop, menu);
+  animate(backdrop, [{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: "ease-out" });
 
   const w = menu.offsetWidth;
   const h = menu.offsetHeight;
@@ -2784,7 +2804,12 @@ function resetChatView() {
   cancelRecording();
 
   const comingFromEmpty = !emptyState.classList.contains("hidden");
-  emptyState.classList.add("hidden");
+  if (comingFromEmpty && !reducedMotion) {
+    emptyState
+      .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(.94)" }], { duration: 180, easing: "ease-in" })
+      .finished.then(() => emptyState.getAnimations().forEach((a) => a.cancel()), () => {});
+    setTimeout(() => emptyState.classList.add("hidden"), 170);
+  } else emptyState.classList.add("hidden");
   chatHeader.classList.remove("hidden");
   messagesEl.classList.remove("hidden");
   composer.classList.remove("hidden");
@@ -5140,6 +5165,20 @@ async function deleteMessageRow(row, msg, ops, scope = "all") {
   }
 }
 
+// Small controls that appear/disappear with the chat type (call buttons,
+// menu, send/mic) pop in instead of blinking into place.
+["call-audio-btn", "call-video-btn", "chat-menu-btn", "edit-contact-btn", "chat-search-btn"].forEach((id) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let wasHidden = el.classList.contains("hidden");
+  new MutationObserver(() => {
+    const hidden = el.classList.contains("hidden");
+    if (wasHidden && !hidden && el.getClientRects().length && !reducedMotion)
+      animate(el, [{ opacity: 0, transform: "scale(.5) rotate(-12deg)" }, { opacity: 1, transform: "none" }], { spring: "jelly" });
+    wasHidden = hidden;
+  }).observe(el, { attributes: true, attributeFilter: ["class"] });
+});
+
 // ---------- Selecting several messages (Telegram-style) ----------
 
 const selection = { active: false, ids: new Set() };
@@ -6611,7 +6650,9 @@ function addPollOption(focus = false) {
     });
   });
   pollOptionsEl.appendChild(row);
-  animate(row, [{ opacity: 0, transform: "translateY(-8px) scale(.94)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
+  // Rows added while the sheet is still closed cascade in with it instead.
+  if (!pollOverlay.classList.contains("hidden"))
+    animate(row, [{ opacity: 0, transform: "translateY(-8px) scale(.94)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
   syncPollAddBtn();
   if (focus) input.focus();
   return row;
@@ -6627,6 +6668,7 @@ function openPollCreator() {
   addPollOption();
   addPollOption();
   showOverlay(pollOverlay);
+  stagger(pollOptionsEl.children, { y: -8, blur: 0, scale: 0.94, step: 50, delay: 140, spring: "bouncy" });
   setTimeout(() => pollQuestion.focus(), 80);
 }
 
@@ -8726,7 +8768,17 @@ function openChatSearch() {
 
 function closeChatSearch(silent = false) {
   if (chatSearchBar.classList.contains("hidden")) return;
-  chatSearchBar.classList.add("hidden");
+  if (silent || reducedMotion) chatSearchBar.classList.add("hidden");
+  else {
+    const ghost = chatSearchBar.cloneNode(true);
+    ghost.removeAttribute("id");
+    ghost.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+    chatSearchBar.after(ghost);
+    chatSearchBar.classList.add("hidden");
+    ghost
+      .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-14px) scale(.94)" }], { duration: 200, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" })
+      .finished.then(() => ghost.remove(), () => ghost.remove());
+  }
   chatSection.classList.remove("has-search");
   const had = !!chatSearchQuery;
   chatSearchQuery = "";

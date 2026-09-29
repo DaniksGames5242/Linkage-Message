@@ -288,11 +288,31 @@ export function showOverlay(overlay, { origin } = {}) {
   animate(
     panel,
     [
-      { opacity: 0, filter: "blur(18px) saturate(2)", borderRadius: "60px" },
-      { opacity: 1, filter: "blur(0px) saturate(1)", borderRadius: getComputedStyle(panel).borderRadius },
+      { opacity: 0, filter: "blur(18px) saturate(2)" },
+      { opacity: 1, filter: "blur(0px) saturate(1)" },
     ],
     { duration: 420, easing: "cubic-bezier(.2,.9,.3,1)" }
   );
+}
+
+
+// Finishes a close exactly once: when its animation ends, or — if frames
+// stall (heavy load, background tab) — shortly after it should have ended,
+// so an element can never be left stuck in "is-closing".
+function finishClose(el, anims, ms, done) {
+  let fired = false;
+  const run = () => {
+    if (fired) return;
+    fired = true;
+    if (el._closeAnims !== anims || !el.classList.contains("is-closing")) return;
+    el.classList.add("hidden");
+    el.classList.remove("is-closing");
+    anims.forEach((a) => a.cancel());
+    el._closeAnims = null;
+    done?.();
+  };
+  anims[0].finished.then(run, () => {});
+  setTimeout(run, ms + 300);
 }
 
 export function hideOverlay(overlay) {
@@ -306,33 +326,27 @@ export function hideOverlay(overlay) {
   if (idx >= 0) openOverlays.splice(idx, 1);
   const panel = overlay.firstElementChild;
   const duration = reducedMotion ? 80 : 260;
+  // Closing right after opening continues from the current frame.
+  const panelFrom = (panel && settleRunning(panel)) || { opacity: 1, transform: "none" };
+  const overlayFrom = settleRunning(overlay)?.opacity ?? 1;
   if (overlay.classList.contains("as-page")) {
-    const a = (panel || overlay).animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(10px) scale(.985)" }], {
+    const a = (panel || overlay).animate([panelFrom, { opacity: 0, transform: "translateY(10px) scale(.985)" }], {
       duration: reducedMotion ? 60 : 180,
       easing: "ease-in",
       fill: "forwards",
     });
     overlay._closeAnims = [a];
-    a.finished.then(
-      () => {
-        if (!overlay.classList.contains("is-closing")) return;
-        overlay.classList.add("hidden");
-        overlay.classList.remove("is-closing");
-        a.cancel();
-        overlay._closeAnims = null;
-      },
-      () => {}
-    );
+    finishClose(overlay, overlay._closeAnims, 180);
     return;
   }
   const anims = [
-    overlay.animate([{ opacity: 1 }, { opacity: 0 }], { duration, easing: "ease-in", fill: "forwards" }),
+    overlay.animate([{ opacity: overlayFrom }, { opacity: 0 }], { duration, easing: "ease-in", fill: "forwards" }),
   ];
   if (panel) {
     anims.push(
       panel.animate(
         [
-          { transform: "none", opacity: 1, filter: "blur(0px)" },
+          { ...panelFrom, filter: "blur(0px)" },
           { transform: "translateY(24px) scale(0.86)", opacity: 0, filter: "blur(12px)" },
         ],
         { duration, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" }
@@ -340,16 +354,7 @@ export function hideOverlay(overlay) {
     );
   }
   overlay._closeAnims = anims;
-  anims[0].finished.then(
-    () => {
-      if (!overlay.classList.contains("is-closing")) return;
-      overlay.classList.add("hidden");
-      overlay.classList.remove("is-closing");
-      anims.forEach((a) => a.cancel());
-      overlay._closeAnims = null;
-    },
-    () => {}
-  );
+  finishClose(overlay, anims, duration);
 }
 
 export function topOverlay() {
@@ -362,11 +367,13 @@ export function showPopover(el, { originX = "right" } = {}) {
   if (!el) return;
   (el._closeAnims || []).forEach((a) => a.cancel());
   el.classList.remove("hidden", "is-closing");
+  // transform-origin as a plain style: in keyframes it can't run on the GPU.
+  el.style.transformOrigin = `top ${originX}`;
   animate(
     el,
     [
-      { opacity: 0, transform: "scale(.4, .2)", filter: "blur(10px)", transformOrigin: `top ${originX}` },
-      { opacity: 1, transform: "none", filter: "blur(0px)", transformOrigin: `top ${originX}` },
+      { opacity: 0, transform: "scale(.4, .2)", filter: "blur(10px)" },
+      { opacity: 1, transform: "none", filter: "blur(0px)" },
     ],
     { spring: "bouncy" }
   );
@@ -376,28 +383,32 @@ export function showPopover(el, { originX = "right" } = {}) {
 export function hidePopover(el) {
   if (!el || el.classList.contains("hidden") || el.classList.contains("is-closing")) return;
   el.classList.add("is-closing");
+  const from = settleRunning(el) || { opacity: 1, transform: "none" };
   const a = el.animate(
     [
-      { opacity: 1, transform: "none", filter: "blur(0px)" },
+      { ...from, filter: "blur(0px)" },
       { opacity: 0, transform: "scale(.7, .4)", filter: "blur(8px)" },
     ],
     { duration: reducedMotion ? 60 : 180, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" }
   );
   el._closeAnims = [a];
-  a.finished.then(
-    () => {
-      if (!el.classList.contains("is-closing")) return;
-      el.classList.add("hidden");
-      el.classList.remove("is-closing");
-      a.cancel();
-    },
-    () => {}
-  );
+  finishClose(el, el._closeAnims, 240);
 }
 
 // Reveals / collapses an inline block (reply preview, emoji tray, inline
 // confirmations) by animating its height together with a soft blur.
 const inFlow = (el) => !["absolute", "fixed"].includes(getComputedStyle(el).position);
+
+// Freezes an element's in-flight animations at their current frame, so an
+// exit that interrupts an entrance continues from there instead of jumping.
+function settleRunning(el) {
+  const running = el.getAnimations().filter((a) => a.playState === "running");
+  if (!running.length) return null;
+  const cs = getComputedStyle(el);
+  const frame = { opacity: cs.opacity, transform: cs.transform === "none" ? "none" : cs.transform };
+  running.forEach((a) => a.cancel());
+  return frame;
+}
 
 export function reveal(el) {
   if (!el) return;
@@ -426,29 +437,22 @@ export function conceal(el) {
   if (!el || el.classList.contains("hidden") || el.classList.contains("is-closing")) return;
   el.classList.add("is-closing");
   const h = el.getBoundingClientRect().height;
+  const from = settleRunning(el) || { opacity: 1, transform: "none" };
   const a = !inFlow(el)
-    ? el.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-8px) scale(.97)" }], {
+    ? el.animate([from, { opacity: 0, transform: "translateY(-8px) scale(.97)" }], {
         duration: reducedMotion ? 60 : 200,
         easing: "cubic-bezier(.4,0,.2,1)",
         fill: "forwards",
       })
     : el.animate(
     [
-      { height: h + "px", opacity: 1, filter: "blur(0px)", overflow: "hidden" },
+      { height: h + "px", opacity: from.opacity, filter: "blur(0px)", overflow: "hidden" },
       { height: "0px", opacity: 0, filter: "blur(8px)", overflow: "hidden", paddingTop: "0px", paddingBottom: "0px" },
     ],
     { duration: reducedMotion ? 60 : 220, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" }
   );
   el._closeAnims = [a];
-  a.finished.then(
-    () => {
-      if (!el.classList.contains("is-closing")) return;
-      el.classList.add("hidden");
-      el.classList.remove("is-closing");
-      a.cancel();
-    },
-    () => {}
-  );
+  finishClose(el, el._closeAnims, 240);
 }
 
 // ---------- Panel swaps (settings sections, new-chat steps) ----------
@@ -480,9 +484,11 @@ export function swapPanels({ container, clip, outgoing, incoming, direction = 1,
       zIndex: "70",
       clipPath: `inset(${c.top - r.top}px ${r.right - c.right}px ${r.bottom - c.bottom}px ${c.left - r.left}px)`,
     });
-    document.body.appendChild(ghost);
   }
   mutate();
+  // Attached only after mutate(): the copy shares the panel's classes, and
+  // mutate() hides "every other panel" by class — it would hide the ghost too.
+  if (ghost) document.body.appendChild(ghost);
   const after = container.getBoundingClientRect().height;
   if (Math.abs(after - before) > 1) {
     animate(container, [{ height: before + "px" }, { height: after + "px" }], { spring: "smooth" });

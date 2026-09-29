@@ -9273,3 +9273,5 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
   box-shadow: 0 0 0 2px rgba(20, 15, 12, 0.9);
   animation: mentionPop 0.5s var(--ease-jelly) both;
 }
+/* Search rows cascade in from JS (stagger); the CSS drop would fight it. */
+.search-result-card.person-row { animation: none; }
