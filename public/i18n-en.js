@@ -3,6 +3,13 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Открыть ссылку": "Open link",
+  "Копировать ссылку": "Copy link",
+  "Написать письмо": "Send email",
+  "Позвонить": "Call",
+  "Копировать адрес": "Copy address",
+  "Копировать номер": "Copy number",
+  "Скопировано": "Copied",
   "Автоудаление": "Auto-delete",
   "Выключено": "Off",
   "1 день": "1 day",

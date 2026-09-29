@@ -4141,7 +4141,7 @@ function fetchLinkPreview(url) {
 }
 
 function firstUrl(text) {
-  const m = (text || "").match(URL_RE);
+  const m = (text || "").match(LINK_RE);
   if (!m) return null;
   return m[0].startsWith("http") ? m[0] : "https://" + m[0];
 }
@@ -5478,20 +5478,40 @@ function centerOfPoint(el) {
 // ---------- Links ----------
 
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]|www\.[^\s<>"']+[^\s<>"'.,;:!?)\]])/gi;
-// Links, @usernames and #hashtags, in one pass so they never overlap.
-const TOKEN_RE = new RegExp(URL_RE.source + "|(?<![\\w@])@([a-z0-9_]{3,20})\\b|(?<![\\w#&])#([\\p{L}\\p{N}_]{2,40})", "giu");
+// Bare domains are only links with a real top-level domain ("file.txt" isn't).
+const TLDS =
+  "com|ru|org|net|io|me|app|dev|ai|co|info|biz|рф|su|by|ua|kz|uz|de|uk|fr|it|es|pl|nl|eu|us|ca|jp|cn|in|tv|gg|xyz|site|online|store|tech|pro|link|live|page|so|to|ly|cc|fm|am|gl|sh";
+const BARE_DOMAIN = `(?<![\\w@./-])(?:[a-zа-яё0-9](?:[a-zа-яё0-9-]{0,61}[a-zа-яё0-9])?\\.)+(?:${TLDS})(?![\\wа-яё])(?:[/?#][^\\s<>"']*[^\\s<>"'.,;:!?)\\]])?`;
+const EMAIL = "(?<![\\w.+-])[\\w.+-]+@[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}";
+const PHONE = "(?<![\\w+])\\+\\d[\\d \\-()]{7,16}\\d(?!\\d)";
+// Links, emails, phones, @usernames and #hashtags, in one pass so they never overlap.
+const TOKEN_RE = new RegExp(
+  `${URL_RE.source}|(${EMAIL})|(${BARE_DOMAIN})|(${PHONE})|(?<![\\w@])@([a-z0-9_]{3,20})\\b|(?<![\\w#&])#([\\p{L}\\p{N}_]{2,40})`,
+  "giu"
+);
+const LINK_RE = new RegExp(`${URL_RE.source}|(${BARE_DOMAIN})`, "iu");
+
+function linkNode(href, text) {
+  const a = document.createElement("a");
+  a.href = href;
+  if (!href.startsWith("mailto:") && !href.startsWith("tel:")) {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  }
+  a.textContent = text;
+  attachLinkMenu(a);
+  return a;
+}
+
 function appendLinkified(parent, text) {
   let last = 0;
-  text.replace(TOKEN_RE, (match, url, user, tag, offset) => {
+  text.replace(TOKEN_RE, (match, url, email, bare, phone, user, tag, offset) => {
     if (offset > last) parent.append(text.slice(last, offset));
-    if (url) {
-      const a = document.createElement("a");
-      a.href = match.startsWith("http") ? match : "https://" + match;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = match;
-      parent.append(a);
-    } else if (user) {
+    if (url) parent.append(linkNode(match.startsWith("http") ? match : "https://" + match, match));
+    else if (email) parent.append(linkNode("mailto:" + match, match));
+    else if (bare) parent.append(linkNode("https://" + match, match));
+    else if (phone) parent.append(linkNode("tel:" + match.replace(/[^\d+]/g, ""), match));
+    else if (user) {
       const m = document.createElement("span");
       m.className = "mention" + (user.toLowerCase() === myProfile?.username ? " me" : "");
       m.textContent = match;
@@ -5514,6 +5534,61 @@ function appendLinkified(parent, text) {
     return match;
   });
   if (last < text.length) parent.append(text.slice(last));
+}
+
+// Right-click / long-press on a link: open or copy it (instead of the message menu).
+function attachLinkMenu(a) {
+  const open = (x, y) => {
+    const href = a.href;
+    const shown = href.replace(/^(mailto:|tel:)/, "");
+    openContextMenu({
+      x,
+      y,
+      items: [
+        { label: href.startsWith("mailto:") ? "Написать письмо" : href.startsWith("tel:") ? "Позвонить" : "Открыть ссылку", icon: MI.link, onClick: () => window.open(href, href.startsWith("http") ? "_blank" : "_self", "noopener") },
+        {
+          label: href.startsWith("mailto:") ? "Копировать адрес" : href.startsWith("tel:") ? "Копировать номер" : "Копировать ссылку",
+          icon: MI.copy,
+          onClick: () =>
+            navigator.clipboard
+              ?.writeText(shown)
+              .then(() => toast("Скопировано", { icon: "📋" }))
+              .catch(() => toast("Не удалось скопировать", { tone: "error" })),
+        },
+      ],
+    });
+  };
+  a.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    open(e.clientX, e.clientY);
+  });
+  let timer = 0;
+  let pressed = false;
+  a.addEventListener(
+    "touchstart",
+    (e) => {
+      e.stopPropagation(); // the bubble's own long-press / swipe must not start
+      const t = e.touches[0];
+      pressed = false;
+      timer = setTimeout(() => {
+        pressed = true;
+        navigator.vibrate?.(12);
+        open(t.clientX, t.clientY);
+      }, 480);
+    },
+    { passive: true }
+  );
+  const cancel = () => clearTimeout(timer);
+  a.addEventListener("touchmove", cancel, { passive: true });
+  a.addEventListener("touchend", cancel, { passive: true });
+  a.addEventListener("click", (e) => {
+    e.stopPropagation(); // tapping a link never opens the message menu
+    if (pressed) {
+      e.preventDefault();
+      pressed = false;
+    }
+  });
 }
 
 async function openMention(username) {
