@@ -1,7 +1,7 @@
 // Touch-gesture walk on a phone viewport: taps, long presses and swipes are
 // sent as real touch events (CDP), not mouse clicks.
-const L = require("./lib.cjs");
-const H = require("./helpers.cjs");
+const L = require("../lib.cjs");
+const H = require("../helpers.cjs");
 const path = require("path");
 const OUT = process.env.OUT || "/tmp/shots";
 let n = 0;

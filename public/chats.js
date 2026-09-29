@@ -11,6 +11,7 @@ import {
   where,
   orderBy,
   limit,
+  limitToLast,
   onSnapshot,
   serverTimestamp,
   deleteField,
@@ -61,8 +62,8 @@ export function listenMyChats(myUid, onChange, onError) {
   );
 }
 
-export function listenMessages(chatId, onChange, onError) {
-  const q = query(collection(db, "chats", chatId, "messages"), orderBy("createdAt", "asc"), limit(500));
+export function listenMessages(chatId, onChange, onError, size = 300) {
+  const q = query(collection(db, "chats", chatId, "messages"), orderBy("createdAt", "asc"), limitToLast(size));
   return onSnapshot(
     q,
     (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),

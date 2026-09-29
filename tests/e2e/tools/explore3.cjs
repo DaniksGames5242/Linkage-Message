@@ -1,5 +1,5 @@
-const L = require("./lib.cjs");
-const H = require("./helpers.cjs");
+const L = require("../lib.cjs");
+const H = require("../helpers.cjs");
 const path = require("path");
 const OUT = process.env.OUT || "/tmp/shots";
 const tag = Date.now().toString(36).slice(-5);

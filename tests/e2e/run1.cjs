@@ -30,11 +30,13 @@ const L = require("./lib.cjs");
     await L.until(B, () => [...document.querySelectorAll(".msg-row:not(.me) .bubble-text")].some((b) => b.textContent.includes("Привет, Борис")));
   });
   await L.check("1:1 messages are stored encrypted (no plaintext)", async () => {
-    const msgs = (await L.adminQuery("messages")).filter((m) => m.path.startsWith("chats/"));
+    // Only this run's chat: the emulator may hold data from other scenarios.
+    const uidA = (await L.adminQuery("usernames")).find((r) => r.path === "usernames/" + ua).uid;
+    const chat = (await L.adminQuery("chats")).find((c) => (c.participants || []).includes(uidA));
+    const msgs = (await L.adminQuery("messages")).filter((m) => m.path.startsWith(chat.path + "/"));
     if (!msgs.length) throw new Error("no messages");
     const leak = msgs.filter((m) => !m.enc || /Привет/.test(m.text || ""));
     if (leak.length) throw new Error("plaintext: " + JSON.stringify(leak[0]).slice(0, 200));
-    const chat = (await L.adminQuery("chats"))[0];
     if (/Привет/.test(chat.lastMessage || "")) throw new Error("preview leaks: " + chat.lastMessage);
   });
   await L.check("link in message is highlighted", () => B.evaluate(() => !!document.querySelector('.msg-row:not(.me) .bubble-text a[href="https://linkage.app"]')));

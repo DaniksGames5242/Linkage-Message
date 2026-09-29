@@ -1,5 +1,5 @@
-const L = require("./lib.cjs");
-const H = require("./helpers.cjs");
+const L = require("../lib.cjs");
+const H = require("../helpers.cjs");
 const path = require("path");
 const OUT = process.env.OUT || "/tmp/shots";
 const tag = Date.now().toString(36).slice(-5);
@@ -32,7 +32,7 @@ const step = async (name, fn) => { try { await fn(); } catch (e) { console.log("
   await step("forward", async () => { await H.msgMenu(A, "Третье", "Переслать"); await shot(A, "forward-overlay"); await A.keyboard.press("Escape"); await A.waitForTimeout(500); });
   await step("poll", async () => { await H.attach(A, "Опрос"); await shot(A, "poll-overlay"); await A.keyboard.press("Escape"); await A.waitForTimeout(500); });
   await step("schedule", async () => { await A.fill("#msg-input", "позже"); await A.evaluate(() => document.getElementById("send-btn").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 350, clientY: 800 }))); await shot(A, "send-menu"); await A.keyboard.press("Escape"); await A.fill("#msg-input", ""); });
-  await step("photo", async () => { await A.setInputFiles("#attach-input", path.join(__dirname, "fixtures", "pic.png")); await shot(A, "media-overlay"); await click(A, "#media-send"); await A.waitForTimeout(2500); await shot(A, "photo-sent"); });
+  await step("photo", async () => { await A.setInputFiles("#attach-input", path.join(__dirname, "..", "fixtures", "pic.png")); await shot(A, "media-overlay"); await click(A, "#media-send"); await A.waitForTimeout(2500); await shot(A, "photo-sent"); });
   await step("lightbox", async () => { await A.evaluate(() => [...document.querySelectorAll(".msg-row img.msg-image")].pop().click()); await shot(A, "lightbox"); await A.keyboard.press("Escape"); await A.waitForTimeout(500); });
   await step("voice", async () => {
     const box = await A.locator("#rec-btn").boundingBox();
@@ -62,7 +62,7 @@ const step = async (name, fn) => { try { await fn(); } catch (e) { console.log("
     await H.backToList(A);
   });
   await step("story", async () => {
-    await A.setInputFiles("#story-add-input", path.join(__dirname, "fixtures", "pic.png")); await A.waitForTimeout(2500); await shot(A, "story-posted");
+    await A.setInputFiles("#story-add-input", path.join(__dirname, "..", "fixtures", "pic.png")); await A.waitForTimeout(2500); await shot(A, "story-posted");
     await A.evaluate(() => document.querySelector("#stories-strip .story-bubble .avatar, #stories-strip .story-bubble")?.click()); await shot(A, "story-view"); await A.keyboard.press("Escape"); await A.waitForTimeout(600);
   });
   await shot(A, "list-final");

@@ -8,12 +8,13 @@ import {
   query,
   orderBy,
   limit,
+  limitToLast,
   onSnapshot,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-export function listenSavedMessages(uid, onChange, onError) {
-  const q = query(collection(db, "users", uid, "savedMessages"), orderBy("createdAt", "asc"), limit(500));
+export function listenSavedMessages(uid, onChange, onError, size = 300) {
+  const q = query(collection(db, "users", uid, "savedMessages"), orderBy("createdAt", "asc"), limitToLast(size));
   return onSnapshot(
     q,
     (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),

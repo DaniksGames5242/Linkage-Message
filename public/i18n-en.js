@@ -482,6 +482,7 @@ export const EN = {
   "Отменённый звонок": "Cancelled call",
   "Отменённый видеозвонок": "Cancelled video call",
   "Фото": "Photo",
+  "Ожидание сети…": "Waiting for network…",
   "Профиль": "Profile",
   "Публикуем видео в историю": "Posting video to your story",
   "Публичный опрос": "Public poll",
@@ -695,6 +696,8 @@ export const EN_PATTERNS = [
   [/^Сообщение будет отправлено (.+)$/, "The message will be sent $1"],
   [/^Слишком много попыток\. Подождите (\d+) с$/, "Too many attempts. Wait $1 s"],
   [/^Звонок завершён · (.+)$/, "Call ended · $1"],
+  [/^(.+): не удалось отправить$/, (m, what) => `${trEN(what)}: couldn't send`],
+  [/^(Баскетбол|Дартс|Кубик|Слоты) — отправьте отдельно, чтобы сыграть$/, (m, g) => `${{ Баскетбол: "Basketball", Дартс: "Darts", Кубик: "Dice", Слоты: "Slots" }[g]} — send on its own to play`],
   // Previews like "📷 Фото" or "📞 Пропущенный звонок": keep the emoji.
   [/^(\p{Extended_Pictographic}\uFE0F?) (.+)$/su, (m, e, rest) => `${e} ${trEN(rest)}`],
 ];

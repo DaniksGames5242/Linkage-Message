@@ -11,6 +11,7 @@ import {
   where,
   orderBy,
   limit,
+  limitToLast,
   onSnapshot,
   serverTimestamp,
   arrayUnion,
@@ -65,8 +66,8 @@ export function listenMyGroups(uid, onChange, onError) {
   );
 }
 
-export function listenGroupMessages(groupId, onChange, onError) {
-  const q = query(collection(db, "groups", groupId, "messages"), orderBy("createdAt", "asc"), limit(500));
+export function listenGroupMessages(groupId, onChange, onError, size = 300) {
+  const q = query(collection(db, "groups", groupId, "messages"), orderBy("createdAt", "asc"), limitToLast(size));
   return onSnapshot(
     q,
     (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),

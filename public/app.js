@@ -652,6 +652,8 @@ function cleanupSubscriptions() {
   if (unsubGroups) unsubGroups();
   if (unsubMessages) unsubMessages();
   if (unsubChatDoc) unsubChatDoc();
+  historyResub = null;
+  loadingOlder = null;
   unsubPresence?.();
   unsubPresence = null;
   if (unsubContacts) unsubContacts();
@@ -3268,6 +3270,33 @@ let userScrollAt = 0;
 // content that grows afterwards — photos loading, uploads turning into
 // messages, polls — keeps you pinned there. Scrolling up yourself releases it.
 let stickBottom = true;
+// History comes in pages: the newest HISTORY_PAGE messages first, more when
+// you scroll to the top (the listener is re-opened with a bigger window).
+const HISTORY_PAGE = 300;
+let historySize = HISTORY_PAGE;
+let historyResub = null; // (size) => re-listen with that window
+let historyCount = 0; // messages in the current window
+let loadingOlder = null; // { h, top } while older ones are on the way
+function listenHistory(listen) {
+  historySize = HISTORY_PAGE;
+  historyCount = 0;
+  loadingOlder = null;
+  historyResub = (size) => {
+    unsubMessages?.();
+    unsubMessages = listen(size, (n) => (historyCount = n));
+  };
+  historyResub(historySize);
+}
+function maybeLoadOlder() {
+  if (!historyResub || loadingOlder || messagesEl.scrollTop > 400 || historyCount < historySize) return;
+  // Remember which message is at the top of the screen, to keep it there.
+  const box = messagesEl.getBoundingClientRect();
+  const rows = messagesEl.querySelectorAll(".msg-row:not(.pending-upload)");
+  const anchor = [...rows].find((r) => r.getBoundingClientRect().bottom > box.top);
+  loadingOlder = { id: anchor?.dataset.msgId, off: anchor ? anchor.getBoundingClientRect().top - box.top : 0, n: rows.length, at: Date.now() };
+  historySize += HISTORY_PAGE;
+  historyResub(historySize);
+}
 const distanceFromBottom = () => messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
 function pinToBottom() {
   if (stickBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -3284,6 +3313,7 @@ messagesEl.addEventListener("scroll", () => {
       scrollBtnFrame = 0;
       updateScrollBottomBtn();
       if (performance.now() - userScrollAt < 250) stickBottom = distanceFromBottom() < 80;
+      maybeLoadOlder();
     });
   if (activeCtx && performance.now() - userScrollAt < 200) closeContextMenu();
 }, { passive: true });
@@ -3333,7 +3363,32 @@ const msgAnim = { chatId: null, seen: new Set(), reactions: new Map() };
 
 function snapshotScroll() {
   const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 160;
-  return { top: messagesEl.scrollTop, nearBottom };
+  // The message at the top of the screen: rows are rebuilt on every update and
+  // off-screen ones start from an estimated height, so a bare scrollTop would
+  // land somewhere else — keeping this message in place doesn't.
+  let anchor = null;
+  if (!nearBottom) {
+    const box = messagesEl.getBoundingClientRect();
+    const row = [...messagesEl.querySelectorAll(".msg-row[data-msg-id]")].find((r) => r.getBoundingClientRect().bottom > box.top + 1);
+    if (row) anchor = { id: row.dataset.msgId, off: row.getBoundingClientRect().top - box.top };
+  }
+  return { top: messagesEl.scrollTop, nearBottom, anchor };
+}
+
+function keepAnchor(id, off) {
+  const row = id && messagesEl.querySelector(`.msg-row[data-msg-id="${CSS.escape(id)}"]`);
+  if (!row) return false;
+  const keep = () => row.isConnected && (messagesEl.scrollTop += row.getBoundingClientRect().top - messagesEl.getBoundingClientRect().top - off);
+  keep();
+  // Rows off screen settle their real height a frame later: re-anchor.
+  requestAnimationFrame(() => {
+    keep();
+    requestAnimationFrame(() => {
+      keep();
+      updateScrollBottomBtn();
+    });
+  });
+  return true;
 }
 
 // Who has read a group message: members whose read marker is past it.
@@ -3393,6 +3448,17 @@ function finishMessagesRender(snap) {
     return;
   }
 
+  if (loadingOlder && Date.now() - loadingOlder.at > 10000) loadingOlder = null;
+  // (The first answer may come from the cache with nothing older in it yet.)
+  if (loadingOlder && rows.length > loadingOlder.n) {
+    // Older messages were added above: keep what you were reading in place,
+    // and they aren't "new" (no entrance animation, no unread count).
+    const { id, off } = loadingOlder;
+    loadingOlder = null;
+    rows.forEach((r) => msgAnim.seen.add(r.dataset.msgId));
+    keepAnchor(id, off);
+    return;
+  }
   const fresh = rows.filter((r) => !msgAnim.seen.has(r.dataset.msgId));
   fresh.forEach((r) => msgAnim.seen.add(r.dataset.msgId));
   fresh
@@ -3410,7 +3476,7 @@ function finishMessagesRender(snap) {
     msgAnim.reactions.set(row.dataset.msgId, row.dataset.rx);
   });
 
-  messagesEl.scrollTop = snap.top;
+  if (!snap.anchor || !keepAnchor(snap.anchor.id, snap.anchor.off)) messagesEl.scrollTop = snap.top;
   if (snap.nearBottom || fresh.some((r) => r.classList.contains("me"))) {
     stickBottom = true;
     messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
@@ -3495,7 +3561,12 @@ function openSavedChat() {
   renderChats();
   restoreDraft();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка…</div>';
-  unsubMessages = listenSavedMessages(currentUser.uid, (msgs) => renderPlainMessages(msgs, () => true));
+  listenHistory((size, count) =>
+    listenSavedMessages(currentUser.uid, (msgs) => {
+      count(msgs.length);
+      renderPlainMessages(msgs, () => true);
+    }, undefined, size)
+  );
 }
 
 // ---------- Linkage Notifications ----------
@@ -3522,6 +3593,8 @@ function openNotificationsChat() {
 
 function clearUnreadMark(id) {
   if (isMarkedUnread(id)) toggleUserList("unreadMarks", id, false);
+  // Opening the chat a banner is about makes the banner pointless.
+  if (activeBanner && activeBanner._chatId === id) hideMessageBanner(activeBanner);
 }
 
 function openContactChat(chatId, otherUid, profile) {
@@ -3567,15 +3640,18 @@ function openContactChat(chatId, otherUid, profile) {
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
   rememberDevices(otherUid, profile);
   refreshDevices(otherUid).then(() => currentChatId === chatId && refreshChatChrome());
-  unsubMessages = listenMessages(chatId, (msgs) => {
-    if (currentChatId !== chatId) return;
-    currentChatRawSource = msgs;
-    openMessages(chatId, msgs).then((list) => {
+  listenHistory((size, count) =>
+    listenMessages(chatId, (msgs) => {
       if (currentChatId !== chatId) return;
-      currentChatRawMessages = list;
-      rerenderMessages();
-    });
-  });
+      count(msgs.length);
+      currentChatRawSource = msgs;
+      openMessages(chatId, msgs).then((list) => {
+        if (currentChatId !== chatId) return;
+        currentChatRawMessages = list;
+        rerenderMessages();
+      });
+    }, undefined, size)
+  );
   let lastChatData = null;
   unsubChatDoc = listenChatDoc(chatId, (data) => {
     if (currentChatId !== chatId || !data) return;
@@ -3649,14 +3725,17 @@ function openGroupChat(group) {
 
   renderChats();
   messagesEl.innerHTML = '<div class="system-msg">Загрузка сообщений…</div>';
-  unsubMessages = listenGroupMessages(group.id, async (msgs) => {
-    if (currentChatId !== group.id) return;
-    // Media forwarded from encrypted chats keeps its file key.
-    if (msgs.some((m) => m.mediaKey)) msgs = await Promise.all(msgs.map((m) => (m.mediaKey ? openPlainMedia(m) : m)));
-    if (currentChatId !== group.id) return;
-    currentChatRawMessages = msgs;
-    rerenderMessages();
-  });
+  listenHistory((size, count) =>
+    listenGroupMessages(group.id, async (msgs) => {
+      if (currentChatId !== group.id) return;
+      count(msgs.length);
+      // Media forwarded from encrypted chats keeps its file key.
+      if (msgs.some((m) => m.mediaKey)) msgs = await Promise.all(msgs.map((m) => (m.mediaKey ? openPlainMedia(m) : m)));
+      if (currentChatId !== group.id) return;
+      currentChatRawMessages = msgs;
+      rerenderMessages();
+    }, undefined, size)
+  );
 }
 
 let groupRenderToken = 0;
@@ -6276,6 +6355,18 @@ function appendPendingUploads() {
   mine.forEach((e) => messagesEl.appendChild(e.row));
 }
 
+// A Firestore write resolves only once the server has it — offline, that's
+// "later", yet the message already shows in the chat (local write). Wait a
+// moment, then drop the upload placeholder; a late failure is still reported.
+async function sentOrQueued(promise, what) {
+  const settled = await Promise.race([promise.then(() => true), new Promise((r) => setTimeout(() => r(false), 2500))]);
+  if (!settled)
+    promise.catch((err) => {
+      console.error(err);
+      toast(`${what}: не удалось отправить`, { tone: "error", duration: 5000 });
+    });
+}
+
 function dropPending(id, animated = false) {
   const entry = pendingUploads.get(id);
   if (!entry) return;
@@ -6540,7 +6631,7 @@ async function sendMediaBatch(files, target, caption, { above = false, spoiler =
       if (visual && spoiler) attachment.fields.mediaSpoiler = true;
       if (visual && above && job.text) attachment.fields.captionAbove = true;
       job.progress.sending();
-      await deliver({ ...target, text: job.text, attachment });
+      await sentOrQueued(deliver({ ...target, text: job.text, attachment }), job.file.name || "Файл");
       job.progress.done();
     } catch (err) {
       if (err?.name === "AbortError") continue;
@@ -7292,10 +7383,13 @@ async function sendVoice(blob, duration, wave, target) {
     // Served as MP3 so Safari can play recordings made in Chrome (webm/opus).
     // Encrypted recordings can't be transcoded by the server and play as recorded.
     const playable = sealed.mediaKey ? url : url.replace(/\.(webm|ogg|weba|m4a)$/i, ".mp3");
-    await deliver({
-      ...target,
-      attachment: { fields: { voiceUrl: playable, duration, wave, ...(sealed.mediaKey ? { mediaKey: sealed.mediaKey } : {}) }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
-    });
+    await sentOrQueued(
+      deliver({
+        ...target,
+        attachment: { fields: { voiceUrl: playable, duration, wave, ...(sealed.mediaKey ? { mediaKey: sealed.mediaKey } : {}) }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
+      }),
+      "Голосовое сообщение"
+    );
     progress.done();
   } catch (err) {
     progress.fail();
@@ -7320,7 +7414,7 @@ async function sendCircle(result, target, shape = "circle") {
     const playable = sealed.mediaKey
       ? url
       : url.replace("/upload/", "/upload/c_fill,g_center,w_480,h_480,q_auto/").replace(/\.(webm|mov|mkv)$/i, ".mp4");
-    await deliver({
+    await sentOrQueued(deliver({
       ...target,
       attachment: {
         fields: {
@@ -7332,7 +7426,7 @@ async function sendCircle(result, target, shape = "circle") {
         previewText: shape === "triangle" ? "🔺 Видеотреугольник" : "⭕ Видеосообщение",
         defaultCaption: shape === "triangle" ? "🔺" : "⭕",
       },
-    });
+    }), "Видеосообщение");
     progress.done();
   } catch (err) {
     progress.fail();
@@ -7729,7 +7823,7 @@ function hideMessageBanner(banner = activeBanner, dir = -1) {
     .finished.then(() => banner.remove(), () => banner.remove());
 }
 
-function showMessageBanner({ title, body, avatar, onOpen }) {
+function showMessageBanner({ title, body, avatar, onOpen, chatId }) {
   if (activeBanner) {
     activeBanner.remove();
     activeBanner = null;
@@ -7740,6 +7834,7 @@ function showMessageBanner({ title, body, avatar, onOpen }) {
   banner.innerHTML = `${avatar || ""}<span class="msg-banner-meta"><span class="msg-banner-title"></span><span class="msg-banner-body"></span></span>`;
   banner.querySelector(".msg-banner-title").textContent = title;
   banner.querySelector(".msg-banner-body").textContent = body;
+  banner._chatId = chatId;
   document.body.appendChild(banner);
   activeBanner = banner;
   animate(banner, [{ opacity: 0, transform: "translateY(-80px) scale(.85)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
@@ -7779,7 +7874,7 @@ function announce({ title, body, silent, chatId, kind, avatar }) {
   if (prefs.sound !== false && !silent) chime();
   if (!document.hidden) {
     if (touchOnly && !silent && prefs.vibrate !== false && navigator.vibrate) navigator.vibrate(30);
-    showMessageBanner({ title, body, avatar, onOpen: () => openChatById(chatId, kind) });
+    showMessageBanner({ title, body, avatar, chatId, onOpen: () => openChatById(chatId, kind) });
     return;
   }
   if (prefs.desktop !== false) systemNotify(title, body, { chatId, kind, silent });
@@ -10128,6 +10223,19 @@ function closeTopLayer() {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeTopLayer();
 });
+
+// ---------- Connection state ----------
+// Like Telegram: "Waiting for network…" instead of the usual status while
+// offline (messages sent meanwhile wait with a clock and go out on reconnect).
+const meStatusEl = document.querySelector(".me-status");
+function syncOnline() {
+  const off = navigator.onLine === false;
+  document.documentElement.classList.toggle("is-offline", off);
+  if (meStatusEl) meStatusEl.textContent = off ? "Ожидание сети…" : "Linkage Message";
+}
+window.addEventListener("online", syncOnline);
+window.addEventListener("offline", syncOnline);
+syncOnline();
 
 // ---------- System Back (Android back gesture, browser Back button) ----------
 // A guard entry sits on top of the app's history. Back closes what's on top,

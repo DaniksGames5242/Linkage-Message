@@ -6932,7 +6932,8 @@ mark.search-mark {
   border-radius: 14px;
   font-size: 12.5px;
   font-weight: 650;
-  white-space: nowrap;
+  max-width: calc(100vw - 16px);
+  text-align: center;
   pointer-events: none;
 }
 
@@ -8943,9 +8944,9 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 .auth-sub-row { margin: 4px 0 14px; }
 
 /* ---------- Mobile performance ----------
-   Off-screen rows skip layout/paint entirely; decorative loops pause while
-   the user scrolls or the tab is busy, so frames go to scrolling. */
-.msg-row:nth-last-child(n+40) { content-visibility: auto; contain-intrinsic-size: auto 64px; }
+   Decorative loops pause while the user scrolls or the tab is busy, so frames
+   go to scrolling. (No content-visibility on message rows: they are rebuilt
+   on every update, and estimated heights made the chat jump while reading.) */
 .fx-lite .bubble, .fx-lite .room-item, .fx-lite .glass { box-shadow: none; }
 .fx-lite #chat[data-wall]::before { will-change: auto; }
 
@@ -9374,3 +9375,18 @@ button {
     -webkit-touch-callout: none;
   }
 }
+
+/* Offline: the header says so instead of "online / last seen". */
+html.is-offline .me-status::before {
+  background: #f5a623;
+  box-shadow: 0 0 6px rgba(245, 166, 35, 0.7);
+}
+html.is-offline #chat-sub { display: none; }
+html.is-offline .chat-header-meta::after {
+  content: "ожидание сети…";
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  animation: onlinePulse 1.6s ease-in-out infinite;
+}
+html.is-offline[lang="en"] .chat-header-meta::after { content: "waiting for network…"; }
