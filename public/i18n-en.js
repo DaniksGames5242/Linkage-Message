@@ -3,6 +3,29 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Викторина (один правильный ответ)": "Quiz (one correct answer)",
+  "Нажмите на кружок слева от правильного варианта.": "Tap the dot to the left of the correct option.",
+  "Пояснение после ответа (необязательно)": "Explanation shown after answering (optional)",
+  "Отметьте правильный ответ — нажмите на кружок слева": "Mark the correct answer — tap the dot on the left",
+  "Викторина": "Quiz",
+  "Публичная викторина": "Public quiz",
+  "Верно!": "Correct!",
+  "Неверно": "Wrong",
+  "Не беспокоить и автоответ": "Do not disturb & auto-reply",
+  "1 час": "1 hour",
+  "3 часа": "3 hours",
+  "До завтра, 9:00": "Until tomorrow, 9:00",
+  "Неделя": "A week",
+  "Автоответ: например, «В отпуске, отвечу позже»": "Auto-reply: e.g. “On vacation, will reply later”",
+  "Собеседники увидят плашку с вашим автоответом в чате с вами": "People will see a banner with your auto-reply in their chat with you",
+  "Статус «Не беспокоить» выключен": "Do not disturb is off",
+  "Сначала добавьте стикеры": "Add some stickers first",
+  "Не удалось опубликовать набор (обновите правила Firestore)": "Couldn't publish the pack (update Firestore rules)",
+  "Ссылка на набор скопирована": "Pack link copied",
+  "Набор стикеров не найден": "Sticker pack not found",
+  "Это ваш набор": "This is your pack",
+  "Все стикеры уже у вас": "You already have all these stickers",
+  "Мои стикеры": "My stickers",
   "Стикеры": "Stickers",
   "Стикер": "Sticker",
   "🖼 Стикер": "🖼 Sticker",
@@ -771,6 +794,11 @@ const MONTHS = { января: "January", февраля: "February", марта
 
 // Strings with numbers or names inside.
 export const EN_PATTERNS = [
+  [/^(.+) не беспокоить до (.+?)( · «[\s\S]*»)?$/, (m, n, t, r) => `${n}: do not disturb until ${t}${r || ""}`],
+  [/^Включено до (.+) — собеседники видят это в чате с вами$/, "On until $1 — people see it in their chat with you"],
+  [/^Не беспокоить до (.+)$/, "Do not disturb until $1"],
+  [/^Добавить стикеры \((\d+)\)$/, "Add stickers ($1)"],
+  [/^Стикеры (.+)$/, "$1's stickers"],
   [/^Медленный режим: следующее сообщение через (\d+) (с|мин|ч)$/, (m, n, u) => `Slow mode: next message in ${n} ${{ с: "s", мин: "min", ч: "h" }[u]}`],
   [/^Медленный режим: одно сообщение в (\d+) (с|мин|ч)$/, (m, n, u) => `Slow mode: one message per ${n} ${{ с: "s", мин: "min", ч: "h" }[u]}`],
   [/^(✓ )?(\d+) (с|мин|ч)$/, (m, c, n, u) => `${c || ""}${n} ${{ с: "s", мин: "min", ч: "h" }[u]}`],

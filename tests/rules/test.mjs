@@ -148,6 +148,12 @@ await t("own private tools read", getDoc(doc(db("bob"), "users/bob/private/tools
 await t("someone's private tools read", getDoc(doc(db("eve"), "users/bob/private/tools")), DENY);
 await t("someone's private tools write", setDoc(doc(db("eve"), "users/bob/private/tools"), { notes: {} }), DENY);
 
+await t("publish own sticker pack", setDoc(doc(db("bob"), "stickerPacks/bob"), { ownerId: "bob", name: "B", stickers: ["https://x/1.webp"] }), ALLOW);
+await t("read someone's sticker pack", getDoc(doc(db("eve"), "stickerPacks/bob")), ALLOW);
+await t("overwrite someone's sticker pack", setDoc(doc(db("eve"), "stickerPacks/bob"), { ownerId: "eve", name: "E", stickers: [] }), DENY);
+await t("publish pack under another id", setDoc(doc(db("eve"), "stickerPacks/bob2"), { ownerId: "eve", name: "E", stickers: [] }), DENY);
+await t("oversized sticker pack", setDoc(doc(db("bob"), "stickerPacks/bob"), { ownerId: "bob", name: "B", stickers: Array(121).fill("u") }), DENY);
+
 // ---- stories
 await t("audience reads story", getDoc(doc(db("bob"), "stories/s1")), ALLOW);
 await t("outsider reads story", getDoc(doc(db("eve"), "stories/s1")), DENY);

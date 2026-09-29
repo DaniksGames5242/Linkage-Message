@@ -2,7 +2,7 @@
 const { execFileSync } = require("child_process");
 const path = require("path");
 let failed = 0;
-for (const f of ["run1", "run2", "run3", "run4", "run5", "run6", "run7", "run8", "run9"]) {
+for (const f of ["run1", "run2", "run3", "run4", "run5", "run6", "run7", "run8", "run9", "run10"]) {
   console.log(`\n##### ${f}`);
   try {
     execFileSync(process.execPath, [path.join(__dirname, f + ".cjs")], { stdio: "inherit" });

@@ -100,7 +100,7 @@ import {
   REACTION_EMOJIS,
   uiLocale,
 } from "./utils.js";
-import { listenTools, saveToolsField } from "./tools-sync.js";
+import { listenTools, saveToolsField, publishStickerPack, getStickerPack } from "./tools-sync.js";
 import { uploadToCloudinary, prepareImageForUpload, uploadsConfigured } from "./upload.js";
 import {
   SPRINGS,
@@ -538,8 +538,9 @@ document.getElementById("look-reset").addEventListener("click", () => {
 // ---------- Profile links (/?u=username) ----------
 
 const launchParams = new URLSearchParams(location.search);
-if (launchParams.get("u") || launchParams.get("chat")) {
+if (launchParams.get("u") || launchParams.get("chat") || launchParams.get("stickers")) {
   try {
+    if (launchParams.get("stickers")) sessionStorage.setItem("lm-open-stickers", launchParams.get("stickers"));
     if (launchParams.get("u")) sessionStorage.setItem("lm-open-u", launchParams.get("u"));
     if (launchParams.get("chat")) sessionStorage.setItem("lm-open-chat", JSON.stringify({ id: launchParams.get("chat"), kind: launchParams.get("kind") }));
   } catch (_) {}
@@ -689,6 +690,8 @@ function enterApp() {
   window.addEventListener("pagehide", () => currentUser && touchPresence(currentUser.uid, false));
   document.addEventListener("visibilitychange", onVisibilityChange);
   setTimeout(openLinkedProfile, 700);
+  setTimeout(openLinkedStickerPack, 900);
+  paintAwaySettings();
   openLaunchChat();
   setTimeout(setupNotificationPrompt, 2500);
 }
@@ -3572,6 +3575,7 @@ function openSavedChat() {
   resetChatView();
   currentChatId = SAVED_ID;
   currentChatType = "saved";
+  hideAwayBanner();
   currentOtherUid = null;
   currentOtherProfile = null;
 
@@ -3596,6 +3600,7 @@ function openNotificationsChat() {
   resetChatView();
   currentChatId = NOTIFICATIONS_ID;
   currentChatType = "notifications";
+  hideAwayBanner();
   currentOtherUid = null;
   currentOtherProfile = null;
 
@@ -3623,6 +3628,7 @@ function openContactChat(chatId, otherUid, profile) {
   resetChatView();
   currentChatId = chatId;
   currentChatType = "contact";
+  hideAwayBanner();
   currentOtherUid = otherUid;
   currentOtherProfile = profile;
   currentChatRawMessages = [];
@@ -3685,6 +3691,7 @@ function openContactChat(chatId, otherUid, profile) {
     if (currentChatId !== chatId) return;
     currentOtherProfile = { ...profile, ...fresh };
     updateChatSub(currentOtherProfile, lastChatData);
+    updateAwayBanner(currentOtherProfile, chatId);
   });
 }
 
@@ -3728,6 +3735,7 @@ function openGroupChat(group) {
   resetChatView();
   currentChatId = group.id;
   currentChatType = group.type;
+  hideAwayBanner();
   currentOtherUid = null;
   currentOtherProfile = null;
   currentChatRawMessages = [];
@@ -4536,7 +4544,9 @@ function renderPoll(msg) {
   box.innerHTML = `<div class="poll-q"></div><div class="poll-kind"></div><div class="poll-opts"></div>
     <div class="poll-foot"><span class="poll-total"></span><button type="button" class="poll-action hidden"></button></div>`;
   box.querySelector(".poll-q").textContent = poll.q || "Опрос";
-  box.querySelector(".poll-kind").textContent = [poll.anon === false ? "Публичный опрос" : "Анонимный опрос", poll.multi ? "несколько ответов" : ""]
+  const quiz = poll.quiz && Number.isInteger(poll.correct);
+  if (quiz) box.classList.add("quiz");
+  box.querySelector(".poll-kind").textContent = [quiz ? (poll.anon === false ? "Публичная викторина" : "Викторина") : poll.anon === false ? "Публичный опрос" : "Анонимный опрос", poll.multi ? "несколько ответов" : ""]
     .filter(Boolean)
     .join(" · ");
   box.querySelector(".poll-total").textContent = total ? pluralVotes(total) : "Пока никто не голосовал";
@@ -4545,7 +4555,15 @@ function renderPoll(msg) {
 
   const cast = (choices, fromEl) => {
     pending.clear();
-    if (choices.length && fromEl) burst(...centerOf(fromEl), { count: 10, spread: 46, colors: [...accentColors(), "#fff3c4"] });
+    if (quiz && choices.length) {
+      if (choices[0] === poll.correct) {
+        playEffect("confetti", fromEl ? centerOfPoint(fromEl) : undefined);
+        toast("Верно!", { icon: "🎉" });
+      } else {
+        if (fromEl) shake(fromEl);
+        toast("Неверно", { icon: "❌" });
+      }
+    } else if (choices.length && fromEl) burst(...centerOf(fromEl), { count: 10, spread: 46, colors: [...accentColors(), "#fff3c4"] });
     ops.vote(msg.id, choices).catch((err) => {
       console.error(err);
       toast("Не удалось проголосовать", { tone: "error" });
@@ -4559,7 +4577,8 @@ function renderPoll(msg) {
       "poll-opt" +
       (mine.includes(i) ? " chosen" : "") +
       (pending.has(i) ? " pending" : "") +
-      (showResults && leader > 0 && counts[i] === leader ? " leader" : "");
+      (showResults && leader > 0 && counts[i] === leader ? " leader" : "") +
+      (quiz && showResults ? (i === poll.correct ? " correct" : mine.includes(i) ? " wrong" : "") : "");
     b.innerHTML = '<span class="poll-bar"></span><span class="poll-check"></span><span class="poll-label"></span><span class="poll-voters"></span><span class="poll-pct"></span>';
     b.querySelector(".poll-label").textContent = label;
     if (showResults) {
@@ -4592,7 +4611,13 @@ function renderPoll(msg) {
     list.appendChild(b);
   });
 
-  if (canVote && voted) {
+  if (quiz && showResults && poll.explain) {
+    const ex = document.createElement("div");
+    ex.className = "poll-explain";
+    ex.textContent = "💡 " + poll.explain;
+    box.insertBefore(ex, box.querySelector(".poll-foot"));
+  }
+  if (canVote && voted && !quiz) {
     action.textContent = "Отменить голос";
     action.classList.remove("hidden");
     action.addEventListener("click", (e) => {
@@ -6981,7 +7006,21 @@ const pollOptionsEl = document.getElementById("poll-options");
 const pollAddBtn = document.getElementById("poll-add-option");
 const pollAnon = document.getElementById("poll-anon");
 const pollMulti = document.getElementById("poll-multi");
+const pollQuiz = document.getElementById("poll-quiz");
+const pollExplain = document.getElementById("poll-explain");
 let pollTarget = null;
+
+// Quiz mode: one correct answer, marked by tapping an option's dot.
+function syncQuizMode() {
+  const on = pollQuiz.checked;
+  if (on) pollMulti.checked = false;
+  pollMulti.disabled = on;
+  pollOverlay.classList.toggle("quiz-mode", on);
+  document.getElementById("poll-quiz-hint").classList.toggle("hidden", !on);
+  pollExplain.classList.toggle("hidden", !on);
+  if (!on) pollOptionsEl.querySelectorAll(".poll-edit-row.correct").forEach((r) => r.classList.remove("correct"));
+}
+pollQuiz.addEventListener("change", syncQuizMode);
 
 function syncPollAddBtn() {
   pollAddBtn.classList.toggle("hidden", pollOptionsEl.children.length >= 10);
@@ -6993,6 +7032,11 @@ function addPollOption(focus = false) {
   row.className = "poll-edit-row";
   row.innerHTML = '<span class="poll-edit-dot"></span><input type="text" maxlength="100" placeholder="Вариант ответа" /><button type="button" class="icon-btn" title="Убрать">✕</button>';
   const input = row.querySelector("input");
+  row.querySelector(".poll-edit-dot").addEventListener("click", () => {
+    if (!pollQuiz.checked) return;
+    pollOptionsEl.querySelectorAll(".poll-edit-row.correct").forEach((r) => r.classList.remove("correct"));
+    row.classList.add("correct");
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
@@ -7025,6 +7069,9 @@ function openPollCreator() {
   pollOptionsEl.innerHTML = "";
   pollAnon.checked = true;
   pollMulti.checked = false;
+  pollQuiz.checked = false;
+  pollExplain.value = "";
+  syncQuizMode();
   addPollOption();
   addPollOption();
   showOverlay(pollOverlay);
@@ -7055,12 +7102,24 @@ document.getElementById("poll-create").addEventListener("click", async () => {
     toast("Нужно хотя бы два разных варианта", { tone: "error" });
     return;
   }
+  const poll = { q, options, multi: pollMulti.checked, anon: pollAnon.checked };
+  if (pollQuiz.checked) {
+    const mark = pollOptionsEl.querySelector(".poll-edit-row.correct input")?.value.trim().slice(0, 100);
+    const correct = mark ? options.indexOf(mark) : -1;
+    if (correct < 0) {
+      toast("Отметьте правильный ответ — нажмите на кружок слева", { tone: "error" });
+      return;
+    }
+    Object.assign(poll, { quiz: true, multi: false, correct });
+    const explain = pollExplain.value.trim().slice(0, 200);
+    if (explain) poll.explain = explain;
+  }
   hideOverlay(pollOverlay);
   try {
     await deliver({
       ...pollTarget,
-      text: "📊 " + q,
-      extra: { poll: { q, options, multi: pollMulti.checked, anon: pollAnon.checked } },
+      text: (poll.quiz ? "❓ " : "📊 ") + q,
+      extra: { poll },
       plain: { votes: {} },
     });
   } catch (err) {
@@ -7756,6 +7815,7 @@ function closeCurrentChatView() {
   unsubMessages = unsubChatDoc = null;
   currentChatId = null;
   currentChatType = null;
+  hideAwayBanner();
   currentOtherUid = null;
   currentOtherProfile = null;
   chatHeader.classList.add("hidden");
@@ -11082,6 +11142,12 @@ function openStickerPanel() {
     edit.textContent = editing ? "Готово" : "Изменить";
     paint();
   });
+  const share = document.createElement("button");
+  share.type = "button";
+  share.className = "small-btn secondary x-sticker-edit";
+  share.textContent = "Поделиться";
+  share.addEventListener("click", shareStickerPack);
+  modal.el.querySelector(".x-modal-head").insertBefore(share, modal.el.querySelector(".x-modal-close"));
   modal.el.querySelector(".x-modal-head").insertBefore(edit, modal.el.querySelector(".x-modal-close"));
   paint();
 }
@@ -11124,6 +11190,128 @@ function openSlowModePicker(group, x, y) {
         toast(s ? `Медленный режим: одно сообщение в ${fmtWait(s)}` : "Медленный режим выключен", { icon: "🐢" });
       },
     })),
+  });
+}
+
+// ---------- Do not disturb until… with an auto-reply (users/{uid}.away) ----------
+const awayBanner = document.getElementById("away-banner");
+const awayBannerText = document.getElementById("away-banner-text");
+const activeAway = (p) => (p?.away?.until > Date.now() ? p.away : null);
+const fmtAwayUntil = (ms) => {
+  const d = new Date(ms);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return d.toLocaleString(document.documentElement.lang || "ru", sameDay ? { hour: "2-digit", minute: "2-digit" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+function hideAwayBanner() {
+  awayBanner?.classList.add("hidden");
+}
+function updateAwayBanner(profile, chatId) {
+  const away = activeAway(profile);
+  if (!away || currentChatId !== chatId) {
+    hideAwayBanner();
+    return;
+  }
+  const name = profile.displayName || "Собеседник";
+  awayBannerText.textContent = `${name} не беспокоить до ${fmtAwayUntil(away.until)}` + (away.text ? ` · «${away.text}»` : "");
+  awayBanner.classList.remove("hidden");
+  clearTimeout(updateAwayBanner._t);
+  updateAwayBanner._t = setTimeout(() => updateAwayBanner(profile, chatId), Math.min(away.until - Date.now() + 500, 2 ** 31 - 1));
+}
+
+const awayFor = document.getElementById("settings-away-for");
+const awayText = document.getElementById("settings-away-text");
+const awayHint = document.getElementById("settings-away-hint");
+function paintAwaySettings() {
+  if (!awayFor) return;
+  const away = activeAway(myProfile);
+  awayText.value = away?.text || myProfile?.away?.text || "";
+  awayHint.textContent = away ? `Включено до ${fmtAwayUntil(away.until)} — собеседники видят это в чате с вами` : "Собеседники увидят плашку с вашим автоответом в чате с вами";
+  if (!away) awayFor.value = "0";
+}
+document.getElementById("settings-away-save")?.addEventListener("click", async () => {
+  const v = awayFor.value;
+  let until = 0;
+  if (v === "tomorrow") {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    until = d.getTime();
+  } else if (+v > 0) until = Date.now() + +v * 1000;
+  const away = until ? { until, text: awayText.value.trim().slice(0, 140) } : null;
+  try {
+    await updateProfileFields(currentUser.uid, { away });
+    myProfile.away = away;
+    paintAwaySettings();
+    toast(away ? `Не беспокоить до ${fmtAwayUntil(until)}` : "Статус «Не беспокоить» выключен", { icon: "🌙" });
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось сохранить", { tone: "error" });
+  }
+});
+
+// ---------- Sticker packs shared by link (?stickers=<ownerUid>) ----------
+async function shareStickerPack() {
+  const list = myStickers();
+  if (!list.length) {
+    toast("Сначала добавьте стикеры", { icon: "🖼" });
+    return;
+  }
+  try {
+    await publishStickerPack(currentUser.uid, `Стикеры ${myProfile.displayName || "@" + myProfile.username}`.slice(0, 60), list);
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось опубликовать набор (обновите правила Firestore)", { tone: "error" });
+    return;
+  }
+  const link = `${location.origin}/?stickers=${encodeURIComponent(currentUser.uid)}`;
+  if (navigator.share) navigator.share({ title: "Мои стикеры", url: link }).catch(() => {});
+  navigator.clipboard?.writeText(link).catch(() => {});
+  toast("Ссылка на набор скопирована", { icon: "🔗" });
+}
+
+async function openLinkedStickerPack() {
+  let id = null;
+  try {
+    id = sessionStorage.getItem("lm-open-stickers");
+    sessionStorage.removeItem("lm-open-stickers");
+  } catch (_) {}
+  if (id) showStickerPack(id);
+}
+
+async function showStickerPack(id) {
+  let pack = null;
+  try {
+    pack = await getStickerPack(id);
+  } catch (err) {
+    console.error(err);
+  }
+  if (!pack?.stickers?.length) {
+    toast("Набор стикеров не найден", { tone: "error" });
+    return;
+  }
+  const box = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = "x-stickers";
+  pack.stickers.forEach((url) => {
+    const d = document.createElement("div");
+    d.className = "x-sticker";
+    d.innerHTML = `<img alt="" loading="lazy">`;
+    d.firstChild.src = url;
+    grid.appendChild(d);
+  });
+  const mine = new Set(myStickers());
+  const fresh = pack.stickers.filter((u) => !mine.has(u));
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "small-btn x-pack-add";
+  btn.textContent = id === currentUser.uid ? "Это ваш набор" : fresh.length ? `Добавить стикеры (${fresh.length})` : "Все стикеры уже у вас";
+  btn.disabled = id === currentUser.uid || !fresh.length;
+  box.append(grid, btn);
+  const modal = extraModal(pack.name || "Стикеры", box);
+  btn.addEventListener("click", () => {
+    saveStickers([...fresh, ...myStickers()]);
+    modal.close();
+    toast(`Добавлено стикеров: ${Math.min(fresh.length, MAX_STICKERS)}`, { icon: "🖼" });
   });
 }
 

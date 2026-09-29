@@ -122,6 +122,18 @@ service cloud.firestore {
       }
     }
 
+    // ---------- stickerPacks/{ownerUid} : sticker packs shared by link ----------
+    match /stickerPacks/{ownerUid} {
+      allow read: if isSignedIn();
+      allow create, update: if isMe(ownerUid)
+        && request.resource.data.ownerId == ownerUid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.stickers is list
+        && request.resource.data.stickers.size() <= 120;
+      allow delete: if isMe(ownerUid);
+    }
+
     // ---------- usernames/{username} -> { uid, authEmail } : lookup / uniqueness index ----------
     // Public read on purpose: logging in has to resolve "username" -> the
     // synthetic Auth email *before* the client is signed in. Neither field

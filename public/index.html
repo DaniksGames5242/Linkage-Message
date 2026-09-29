@@ -232,6 +232,8 @@
         <button type="button" class="small-btn" id="blocked-bar-unblock">Разблокировать</button>
       </div>
 
+      <div id="away-banner" class="glass hidden"><span class="away-icon">🌙</span><span id="away-banner-text"></span></div>
+
       <form id="composer" class="hidden">
         <button type="button" class="icon-btn" id="emoji-btn" title="Эмодзи">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M8 14.5s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9.5" x2="9.01" y2="9.5" stroke-width="3"/><line x1="15" y1="9.5" x2="15.01" y2="9.5" stroke-width="3"/></svg>
@@ -467,6 +469,9 @@
       <div class="poll-switches">
         <label class="setting-row toggle-row"><span class="setting-title">Анонимное голосование</span><input type="checkbox" id="poll-anon" class="switch" checked /></label>
         <label class="setting-row toggle-row"><span class="setting-title">Несколько вариантов ответа</span><input type="checkbox" id="poll-multi" class="switch" /></label>
+        <label class="setting-row toggle-row"><span class="setting-title">Викторина (один правильный ответ)</span><input type="checkbox" id="poll-quiz" class="switch" /></label>
+        <p class="hint hidden" id="poll-quiz-hint">Нажмите на кружок слева от правильного варианта.</p>
+        <input id="poll-explain" class="hidden" type="text" maxlength="200" placeholder="Пояснение после ответа (необязательно)" autocomplete="off" />
       </div>
       <div class="alias-actions">
         <button type="button" class="small-btn secondary" id="poll-cancel">Отмена</button>
@@ -634,6 +639,21 @@
               <button type="button" class="small-btn secondary" id="settings-profile-link-copy">Поделиться</button>
               <button type="button" class="small-btn secondary" id="settings-profile-qr">QR-код</button>
             </div>
+          </div>
+          <div class="field">
+            <label>Не беспокоить и автоответ</label>
+            <div class="away-row">
+              <select id="settings-away-for">
+                <option value="0">Выключено</option>
+                <option value="3600">1 час</option>
+                <option value="10800">3 часа</option>
+                <option value="tomorrow">До завтра, 9:00</option>
+                <option value="604800">Неделя</option>
+              </select>
+              <input id="settings-away-text" type="text" maxlength="140" placeholder="Автоответ: например, «В отпуске, отвечу позже»" />
+              <button type="button" class="small-btn" id="settings-away-save">Сохранить</button>
+            </div>
+            <div class="field-hint" id="settings-away-hint"></div>
           </div>
           <div class="field">
             <label>Эмодзи-статус</label>
