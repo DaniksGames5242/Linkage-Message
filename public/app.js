@@ -624,6 +624,18 @@ function listenMyLists() {
         changed = true;
       }
     });
+    // A new device of mine: note its key and share the open chat's message
+    // keys with it right away, so its history is readable there too.
+    const devs = data.e2eDevices || {};
+    const known = deviceLists.get(currentUser.uid)?.devices || myProfile.e2eDevices || {};
+    if (Object.keys(devs).sort().join() !== Object.keys(known).sort().join()) {
+      myProfile.e2eDevices = devs;
+      deviceLists.set(currentUser.uid, { devices: devs, at: Date.now() });
+      if (currentChatType === "contact" && currentChatId) {
+        const chatId = currentChatId;
+        openMessages(chatId, currentChatRawSource).catch(() => {});
+      }
+    }
     if (!changed) return;
     renderCustomFolderTabs();
     renderChats();
@@ -3192,8 +3204,6 @@ function refreshReceipts() {
 
 function onCurrentChatDataChanged() {
   if (!currentChatId) return;
-  updateAutoDeleteBadge();
-  refreshViews();
   if (currentChatType === "group" || currentChatType === "channel") {
     const fresh = groups.find((g) => g.id === currentChatId);
     if (fresh) {
@@ -3204,6 +3214,9 @@ function onCurrentChatDataChanged() {
   }
   renderPinnedBar();
   refreshReceipts();
+  // After currentGroupRef is refreshed above: views / auto-delete read it.
+  updateAutoDeleteBadge();
+  refreshViews();
   maybeMarkRead();
 }
 
