@@ -3237,9 +3237,27 @@ let scrollBtnFrame = 0;
 // long-press: the list has to actually move).
 let userScrollAt = 0;
 ["wheel", "touchmove", "keydown"].forEach((type) => messagesEl.addEventListener(type, () => (userScrollAt = performance.now()), { passive: true }));
+// Stick to the bottom (like Telegram): while you're at the end of the chat,
+// content that grows afterwards — photos loading, uploads turning into
+// messages, polls — keeps you pinned there. Scrolling up yourself releases it.
+let stickBottom = true;
+const distanceFromBottom = () => messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+function pinToBottom() {
+  if (stickBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function pinSoon() {
+  [120, 450, 1000].forEach((ms) => setTimeout(pinToBottom, ms));
+}
+messagesEl.addEventListener("load", () => stickBottom && requestAnimationFrame(pinToBottom), true);
+messagesEl.addEventListener("loadedmetadata", () => stickBottom && requestAnimationFrame(pinToBottom), true);
 messagesEl.addEventListener("scroll", () => {
   // Reading scroll metrics forces layout: once per frame is plenty.
-  if (!scrollBtnFrame) scrollBtnFrame = requestAnimationFrame(() => ((scrollBtnFrame = 0), updateScrollBottomBtn()));
+  if (!scrollBtnFrame)
+    scrollBtnFrame = requestAnimationFrame(() => {
+      scrollBtnFrame = 0;
+      updateScrollBottomBtn();
+      if (performance.now() - userScrollAt < 250) stickBottom = distanceFromBottom() < 80;
+    });
   if (activeCtx && performance.now() - userScrollAt < 200) closeContextMenu();
 }, { passive: true });
 scrollBottomBtn.addEventListener("click", () => {
@@ -3330,6 +3348,8 @@ function finishMessagesRender(snap) {
     msgAnim.seen = new Set(rows.map((r) => r.dataset.msgId));
     msgAnim.reactions = new Map(rows.map((r) => [r.dataset.msgId, r.dataset.rx]));
     messagesEl.scrollTop = messagesEl.scrollHeight;
+    stickBottom = true;
+    pinSoon();
     rows
       .slice(-14)
       .reverse()
@@ -3365,7 +3385,9 @@ function finishMessagesRender(snap) {
 
   messagesEl.scrollTop = snap.top;
   if (snap.nearBottom || fresh.some((r) => r.classList.contains("me"))) {
+    stickBottom = true;
     messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+    pinSoon();
   }
 
   const [glow] = accentColors(0.55);
@@ -4860,6 +4882,9 @@ function renderMessage(msg, isMine, senderName) {
       <div class="msg-time"></div>
     </div>
   `;
+  // Hover actions sit beside the bubble (not over its first line).
+  const actionsEl = row.querySelector(":scope > .msg-actions");
+  if (actionsEl) row.querySelector(".msg-group").prepend(actionsEl);
   if (senderName) row.querySelector(".msg-sender").textContent = senderName;
   if (msg.forwardedFrom?.name) {
     const fwd = document.createElement("div");

@@ -9275,3 +9275,9 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 }
 /* Search rows cascade in from JS (stagger); the CSS drop would fight it. */
 .search-result-card.person-row { animation: none; }
+
+/* Hover actions beside the bubble, vertically at its top edge. */
+.msg-group { position: relative; }
+.msg-row .msg-group > .msg-actions { top: 2px; }
+.msg-row:not(.me) .msg-group > .msg-actions { left: calc(100% + 6px); right: auto; transform-origin: left center; }
+.msg-row.me .msg-group > .msg-actions { right: calc(100% + 6px); left: auto; transform-origin: right center; }
