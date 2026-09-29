@@ -289,6 +289,7 @@ const settingsAvatarPreview = document.getElementById("settings-avatar-preview")
 const settingsAvatarPickBtn = document.getElementById("settings-avatar-pick-btn");
 const settingsAvatarInput = document.getElementById("settings-avatar-input");
 const settingsAvatarRemoveBtn = document.getElementById("settings-avatar-remove-btn");
+const settingsAvatarStrip = document.getElementById("settings-avatar-strip");
 const settingsDisplayname = document.getElementById("settings-displayname");
 const settingsUsername = document.getElementById("settings-username");
 const settingsUsernameHint = document.getElementById("settings-username-hint");
@@ -351,7 +352,7 @@ attachPasswordToggle(deleteAccountPassword, document.getElementById("delete-acco
 
 let currentUser = null;
 let myProfile = null;
-let selectedSettingsAvatarImage = null;
+let selectedAvatars = [];
 
 let chats = [];
 let groups = [];
@@ -390,44 +391,144 @@ let activeStoryIndex = 0;
 let storyAdvanceTimer = null;
 const STORY_DURATION_MS = 5000;
 
-// ---------- Settings avatar upload ----------
+// ---------- Settings avatar gallery (several photos / video avatars) ----------
+
+// Each item: { t: "img", src: dataUrl } or { t: "vid", src: https url, poster: dataUrl }.
+// The first item is the main avatar; `avatarImage` keeps a still of it so
+// every small avatar in the app keeps working unchanged.
+const MAX_AVATARS = 10;
+const MAX_AVATAR_VIDEO_SEC = 10;
 
 function renderSettingsAvatarPreview() {
   const color = myProfile.avatarColor || colorForUid(currentUser.uid);
   settingsAvatarPreview.style.background = color;
-  if (selectedSettingsAvatarImage) {
-    settingsAvatarPreview.innerHTML = `<img src="${selectedSettingsAvatarImage}" alt="" />`;
-    settingsAvatarRemoveBtn.hidden = false;
+  const main = selectedAvatars[0];
+  if (main?.t === "vid") {
+    settingsAvatarPreview.innerHTML = `<video src="${escapeHTML(main.src)}" poster="${main.poster}" autoplay muted loop playsinline></video>`;
+  } else if (main) {
+    settingsAvatarPreview.innerHTML = `<img src="${main.src}" alt="" />`;
   } else {
     settingsAvatarPreview.textContent = initials(myProfile.displayName);
-    settingsAvatarRemoveBtn.hidden = true;
+  }
+  settingsAvatarRemoveBtn.hidden = !main;
+  renderSettingsAvatarStrip();
+}
+
+function renderSettingsAvatarStrip() {
+  settingsAvatarStrip.innerHTML = "";
+  settingsAvatarStrip.hidden = selectedAvatars.length < 2;
+  selectedAvatars.forEach((item, i) => {
+    const cell = document.createElement("div");
+    cell.className = "avatar-thumb" + (i === 0 ? " main" : "");
+    cell.title = i === 0 ? "Основное фото" : "Сделать основным";
+    cell.innerHTML = `<img src="${item.t === "vid" ? item.poster : item.src}" alt="" />${item.t === "vid" ? '<span class="avatar-thumb-vid">▶</span>' : ""}<button type="button" class="avatar-thumb-del" aria-label="Удалить">✕</button>`;
+    cell.addEventListener("click", (e) => {
+      if (e.target.closest(".avatar-thumb-del")) {
+        cell.animate([{ transform: "none", opacity: 1 }, { transform: "scale(.2)", opacity: 0 }], { duration: 220, easing: "ease-in" }).onfinish = () => {
+          selectedAvatars.splice(i, 1);
+          renderSettingsAvatarPreview();
+        };
+        return;
+      }
+      if (i === 0) return;
+      selectedAvatars.unshift(...selectedAvatars.splice(i, 1));
+      renderSettingsAvatarPreview();
+      animate(settingsAvatarPreview, [{ transform: "scale(.6) rotate(-12deg)", opacity: 0.3 }, { transform: "none", opacity: 1 }], { spring: "jelly" });
+    });
+    settingsAvatarStrip.appendChild(cell);
+  });
+  stagger(settingsAvatarStrip.children, { y: 8, blur: 0, scale: 0.6, step: 30, spring: "jelly" });
+}
+
+// Grabs a square still frame from the video (used as poster + small avatar).
+function videoPosterAndDuration(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "auto";
+    v.src = url;
+    const fail = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Не удалось прочитать видео"));
+    };
+    v.onerror = fail;
+    v.onloadedmetadata = () => {
+      v.currentTime = Math.min(0.1, (v.duration || 1) / 2);
+    };
+    v.onseeked = () => {
+      const size = 256;
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = size;
+      const side = Math.min(v.videoWidth, v.videoHeight);
+      canvas.getContext("2d").drawImage(v, (v.videoWidth - side) / 2, (v.videoHeight - side) / 2, side, side, 0, 0, size, size);
+      const poster = canvas.toDataURL("image/jpeg", 0.82);
+      URL.revokeObjectURL(url);
+      resolve({ poster, duration: v.duration });
+    };
+  });
+}
+
+async function addAvatarFile(file) {
+  if (file.type.startsWith("image/")) {
+    selectedAvatars.unshift({ t: "img", src: await resizeImageToDataUrl(file, 320) });
+    return;
+  }
+  if (!file.type.startsWith("video/")) throw new Error("Выберите фото или видео");
+  if (!uploadsConfigured) throw new Error("Видео-аватар требует настроенной загрузки файлов (cloudinary-config.js)");
+  const { poster, duration } = await videoPosterAndDuration(file);
+  if (duration > MAX_AVATAR_VIDEO_SEC + 0.5) throw new Error(`Видео-аватар — не длиннее ${MAX_AVATAR_VIDEO_SEC} секунд`);
+  settingsAvatarPreview.classList.add("uploading");
+  try {
+    const { url } = await uploadToCloudinary(file, "video", (p) => {
+      settingsAvatarPreview.style.setProperty("--up", Math.round(p * 100) + "%");
+    });
+    selectedAvatars.unshift({ t: "vid", src: url, poster });
+  } finally {
+    settingsAvatarPreview.classList.remove("uploading");
   }
 }
 
 settingsAvatarPickBtn.addEventListener("click", () => settingsAvatarInput.click());
 
 settingsAvatarInput.addEventListener("change", async () => {
-  const file = settingsAvatarInput.files?.[0];
+  const files = Array.from(settingsAvatarInput.files || []);
   settingsAvatarInput.value = "";
-  if (!file) return;
-  if (!file.type.startsWith("image/")) {
-    settingsProfileError.textContent = "Выберите файл изображения";
-    return;
-  }
+  if (!files.length) return;
+  settingsProfileError.textContent = "";
   try {
-    selectedSettingsAvatarImage = await resizeImageToDataUrl(file);
-    settingsProfileError.textContent = "";
+    for (const file of files.reverse()) await addAvatarFile(file);
+    selectedAvatars.length = Math.min(selectedAvatars.length, MAX_AVATARS);
     renderSettingsAvatarPreview();
+    animate(settingsAvatarPreview, [{ transform: "scale(.6)", opacity: 0.3 }, { transform: "none", opacity: 1 }], { spring: "jelly" });
   } catch (err) {
     console.error(err);
-    settingsProfileError.textContent = "Не удалось загрузить фото";
+    settingsProfileError.textContent = err.message || "Не удалось загрузить фото";
+    renderSettingsAvatarPreview();
   }
 });
 
+// "Удалить фото" removes the current (main) avatar; the next one takes its place.
 settingsAvatarRemoveBtn.addEventListener("click", () => {
-  selectedSettingsAvatarImage = null;
+  selectedAvatars.shift();
   renderSettingsAvatarPreview();
 });
+
+// Normalized list of a profile's avatars (old profiles only have avatarImage).
+function profileAvatars(profile) {
+  if (Array.isArray(profile?.avatars) && profile.avatars.length) return profile.avatars;
+  return profile?.avatarImage ? [{ t: "img", src: profile.avatarImage }] : [];
+}
+
+function avatarFieldsFrom(list) {
+  const main = list[0];
+  return {
+    avatars: list,
+    avatarImage: main ? (main.t === "vid" ? main.poster : main.src) : null,
+    avatarVideo: main?.t === "vid" ? main.src : null,
+  };
+}
 
 // ---------- Appearance (Settings → Оформление, stored on this device) ----------
 
@@ -813,6 +914,37 @@ function visibleAvatarHTML(profile, uid) {
 
 // ---------- Contact / group profile viewer ----------
 
+// Telegram-style avatar gallery: tap the right/left half of the big avatar to
+// flip through all profile photos/videos; dots show the position.
+function setupProfileGallery(profile, uid) {
+  const list = profileAvatars(profile);
+  profileViewAvatar.classList.toggle("has-gallery", list.length > 1);
+  if (!list.length) return;
+  const color = profile.avatarColor || colorForUid(uid);
+  let idx = 0;
+  const render = (dir = 0) => {
+    const item = list[idx];
+    const media =
+      item.t === "vid"
+        ? `<video src="${escapeHTML(item.src)}" poster="${item.poster}" autoplay muted loop playsinline></video>`
+        : `<img src="${item.src}" alt="" />`;
+    const dots = list.length > 1 ? `<div class="avatar-dots">${list.map((_, i) => `<i class="${i === idx ? "on" : ""}"></i>`).join("")}</div>` : "";
+    profileViewAvatar.innerHTML = `<div class="avatar" style="background:${color}">${media}</div>${dots}`;
+    if (dir) {
+      animate(profileViewAvatar.querySelector(".avatar > *"), [{ transform: `translateX(${dir * 40}%) scale(.9)`, opacity: 0 }, { transform: "none", opacity: 1 }], { spring: "smooth" });
+    }
+  };
+  render();
+  if (list.length < 2) return;
+  profileViewAvatar.onclick = (e) => {
+    if (!profileViewAvatar.classList.contains("has-gallery")) return;
+    const r = profileViewAvatar.querySelector(".avatar").getBoundingClientRect();
+    const dir = e.clientX < r.left + r.width / 2 ? -1 : 1;
+    idx = (idx + dir + list.length) % list.length;
+    render(dir);
+  };
+}
+
 function setProfileViewRow(index, label, value) {
   const { row, label: labelEl, value: valueEl } = profileViewRows[index];
   if (!value) {
@@ -827,6 +959,7 @@ function setProfileViewRow(index, label, value) {
 function openContactProfile(uid, profile) {
   if (!profile) return;
   profileViewAvatar.innerHTML = visibleAvatarHTML(profile, uid);
+  if (canSeeProfileField(profile, uid, "avatarVisibility")) setupProfileGallery(profile, uid);
 
   const contact = contactsMap.get(uid);
   profileViewName.textContent = contact ? contactDisplayName(contact.alias, profile) : profile.displayName;
@@ -983,6 +1116,7 @@ function openGroupInfo(group) {
   if (!group) return;
   renderSharedMedia(currentChatId === group.id);
   profileViewAvatar.innerHTML = groupAvatarHTML(group);
+  profileViewAvatar.classList.remove("has-gallery");
   profileViewName.textContent = group.name;
   profileViewUsername.textContent = group.type === "channel" ? "Канал" : "Группа";
   setProfileViewRow(0, group.type === "channel" ? "Подписчики" : "Участники", pluralMembers((group.members || []).length, group.type));
@@ -8331,6 +8465,10 @@ function showSettingsSection(section) {
   morphText(settingsHeaderTitle, SETTINGS_SECTION_TITLES(section) || t("settings_title"), 1);
   animate(settingsBackBtn, [{ transform: "scale(0) rotate(90deg)", opacity: 0 }, { transform: "none", opacity: 1 }], { spring: "jelly" });
   if (section === "sessions") loadSessions();
+  if (section === "privacy" && panel) {
+    stagger(panel.querySelectorAll(".setting-row"), { y: 16, step: 40, delay: 120 });
+    stagger(panel.querySelectorAll(".segmented"), { y: 0, x: -10, blur: 0, scale: 0.94, step: 40, delay: 200, spring: "jelly" });
+  }
 }
 
 settingsMenuItems.forEach((btn) => {
@@ -8449,7 +8587,7 @@ function openSettings() {
   deleteAccountConfirm.classList.add("hidden");
   deleteAccountPassword.value = "";
 
-  selectedSettingsAvatarImage = myProfile.avatarImage || null;
+  selectedAvatars = profileAvatars(myProfile).map((a) => ({ ...a }));
   renderSettingsAvatarPreview();
 
   settingsDisplayname.value = myProfile.displayName || "";
@@ -8532,7 +8670,7 @@ settingsProfileSave.addEventListener("click", async () => {
       displayName: settingsDisplayname.value.trim().slice(0, 40) || myProfile.username,
       bio: settingsBio.value.trim().slice(0, 140),
       birthday: settingsBirthday.value || null,
-      avatarImage: selectedSettingsAvatarImage,
+      ...avatarFieldsFrom(selectedAvatars),
       emojiStatus: selectedEmojiStatus || null,
     });
     myProfile = await fetchMyProfile(currentUser.uid);
@@ -10232,7 +10370,7 @@ fxQuality.addEventListener("change", () => {
   );
 });
 
-[privacyLastseen, privacyAvatar, privacyBio, privacyBirthday, chatsFontSize, settingsLanguage, fxQuality].forEach(segmentize);
+[privacyLastseen, privacyAvatar, privacyBio, privacyBirthday, document.getElementById("privacy-calls"), chatsFontSize, settingsLanguage, fxQuality].forEach(segmentize);
 
 watchMessages(document.querySelectorAll(".auth-error, .attach-error"));
 
