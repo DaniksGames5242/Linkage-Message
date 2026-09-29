@@ -24,6 +24,8 @@ service cloud.firestore {
         && (!('fileUrl' in request.resource.data) || (request.resource.data.fileUrl is string && request.resource.data.fileUrl.size() <= 500))
         && (!('voiceUrl' in request.resource.data) || (request.resource.data.voiceUrl is string && request.resource.data.voiceUrl.size() <= 500))
         && (!('videoNoteUrl' in request.resource.data) || (request.resource.data.videoNoteUrl is string && request.resource.data.videoNoteUrl.size() <= 500))
+        && (!('topic' in request.resource.data) || (request.resource.data.topic is string && request.resource.data.topic.size() <= 40))
+        && (!('transcript' in request.resource.data) || (request.resource.data.transcript is string && request.resource.data.transcript.size() <= 4000))
         && (!('sticker' in request.resource.data) || (request.resource.data.sticker is string && request.resource.data.sticker.size() <= 500))
         && (!('enc' in request.resource.data) || (request.resource.data.enc.ct is string && request.resource.data.enc.ct.size() <= 60000));
     }
@@ -233,7 +235,7 @@ service cloud.firestore {
     function memberGroupUpdateOk() {
       return slowStampOk()
         && !request.resource.data.diff(resource.data).affectedKeys()
-          .hasAny(['admins', 'ownerId', 'settings', 'perms', 'type', 'joins', 'autoDelete'])
+          .hasAny(['admins', 'ownerId', 'settings', 'perms', 'type', 'joins', 'autoDelete', 'topics'])
         && (!groupMembersChanged() || isSelfLeave() || isMemberAdd());
     }
     function adminGroupUpdateOk() {

@@ -257,6 +257,10 @@ export async function updateGroupSettings(groupId, patch) {
   await updateDoc(doc(db, "groups", groupId), data);
 }
 
+export async function updateGroupTopics(groupId, topics) {
+  await updateDoc(doc(db, "groups", groupId), { topics });
+}
+
 export async function setMemberPerms(groupId, uid, perms) {
   const clean = Object.fromEntries(Object.entries(perms || {}).filter(([, v]) => v === false));
   await updateDoc(doc(db, "groups", groupId), {

@@ -9516,3 +9516,53 @@ html[data-bubble] .msg-row.me .bubble.sticker-bubble {
 .away-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .away-row select, .away-row input { flex: 1 1 160px; min-width: 0; }
 .x-pack-add { width: 100%; margin-top: 12px; }
+
+/* ---------- Group topics ---------- */
+#topic-bar {
+  position: absolute;
+  top: 82px;
+  left: 12px;
+  right: 12px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 2px;
+}
+#chat.has-pinned #topic-bar { top: 134px; }
+#chat.has-topics { --header-space: 124px; }
+#chat.has-topics.has-pinned { --header-space: 180px; }
+#chat.has-search #topic-bar { display: none; }
+@media (max-width: 720px) {
+  #topic-bar { top: calc(74px + env(safe-area-inset-top) + var(--call-dock)); left: 8px; right: 8px; }
+  #chat.has-pinned #topic-bar { top: calc(126px + env(safe-area-inset-top) + var(--call-dock)); }
+  #chat.has-topics { --header-space: calc(116px + env(safe-area-inset-top) + var(--call-dock)); }
+  #chat.has-topics.has-pinned { --header-space: calc(172px + env(safe-area-inset-top) + var(--call-dock)); }
+}
+#topic-bar::-webkit-scrollbar { display: none; }
+#topic-bar.hidden { display: none; }
+.topic-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--stroke-strong);
+  background: var(--glass);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s, color 0.2s;
+}
+.topic-chip.active { background: var(--accent-grad); color: var(--on-accent); border-color: transparent; }
+.topic-chip.add { border-style: dashed; color: var(--accent-text); }
+
+/* ---------- Voice transcript ---------- */
+.voice-transcript { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 4px; }
+.voice-transcript-btn { border: 0; border-radius: 8px; padding: 2px 8px; font: inherit; font-size: 12px; font-weight: 700; background: color-mix(in srgb, currentColor 14%, transparent); color: inherit; cursor: pointer; }
+.voice-transcript-btn.active { background: color-mix(in srgb, currentColor 26%, transparent); }
+.voice-transcript-text { font-size: 14px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.voice-transcript-text.hidden { display: none; }
+.setting-row.disabled { opacity: 0.5; }

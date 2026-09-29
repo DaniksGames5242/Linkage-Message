@@ -3,6 +3,17 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Расшифровка голосовых": "Transcribe voice messages",
+  "Пока вы записываете голосовое, браузер распознаёт речь, и к сообщению прикладывается текст (кнопка «Aa»). В Chrome звук для распознавания отправляется в Google.": "While you record a voice message, the browser recognises speech and attaches the text (the “Aa” button). In Chrome the audio is sent to Google for recognition.",
+  "Показать текст": "Show text",
+  "💬 Общее": "💬 General",
+  "+ Темы": "+ Topics",
+  "Новая тема": "New topic",
+  "Переименовать тему": "Rename topic",
+  "Удалить тему": "Delete topic",
+  "Новое название темы": "New topic name",
+  "Название темы (можно начать с эмодзи)": "Topic name (may start with an emoji)",
+  "Не удалось сохранить темы (обновите правила Firestore)": "Couldn't save topics (update Firestore rules)",
   "Викторина (один правильный ответ)": "Quiz (one correct answer)",
   "Нажмите на кружок слева от правильного варианта.": "Tap the dot to the left of the correct option.",
   "Пояснение после ответа (необязательно)": "Explanation shown after answering (optional)",
@@ -794,6 +805,8 @@ const MONTHS = { января: "January", февраля: "February", марта
 
 // Strings with numbers or names inside.
 export const EN_PATTERNS = [
+  [/^Тема «(.+)» создана$/, "Topic “$1” created"],
+  [/^Удалить тему «(.+)»\? Сообщения останутся во вкладке «Все»\.$/, "Delete topic “$1”? Messages stay under “All”."],
   [/^(.+) не беспокоить до (.+?)( · «[\s\S]*»)?$/, (m, n, t, r) => `${n}: do not disturb until ${t}${r || ""}`],
   [/^Включено до (.+) — собеседники видят это в чате с вами$/, "On until $1 — people see it in their chat with you"],
   [/^Не беспокоить до (.+)$/, "Do not disturb until $1"],

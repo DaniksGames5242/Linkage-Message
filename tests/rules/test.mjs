@@ -154,6 +154,12 @@ await t("overwrite someone's sticker pack", setDoc(doc(db("eve"), "stickerPacks/
 await t("publish pack under another id", setDoc(doc(db("eve"), "stickerPacks/bob2"), { ownerId: "eve", name: "E", stickers: [] }), DENY);
 await t("oversized sticker pack", setDoc(doc(db("bob"), "stickerPacks/bob"), { ownerId: "bob", name: "B", stickers: Array(121).fill("u") }), DENY);
 
+await t("member can't edit topics", updateDoc(doc(db("bob"), "groups/g1"), { topics: [{ id: "t", name: "x" }] }), DENY);
+await t("admin edits topics", updateDoc(doc(db("alice"), "groups/g1"), { topics: [{ id: "t", name: "x" }] }), ALLOW);
+await t("message with a topic", gmsg("bob", "g1", { topic: "t" }), ALLOW);
+await t("oversized topic id", gmsg("bob", "g1", { topic: "x".repeat(41) }), DENY);
+await t("voice transcript", addDoc(collection(db("alice"), "chats/alice_bob/messages"), { senderId: "alice", text: "🎤", voiceUrl: "https://x/v.mp3", transcript: "привет" }), ALLOW);
+
 // ---- stories
 await t("audience reads story", getDoc(doc(db("bob"), "stories/s1")), ALLOW);
 await t("outsider reads story", getDoc(doc(db("eve"), "stories/s1")), DENY);

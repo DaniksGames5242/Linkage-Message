@@ -45,6 +45,7 @@ import {
   listenMyGroups,
   listenGroupMessages,
   sendGroupMessage,
+  updateGroupTopics,
   updateGroupSettings,
   setMemberPerms,
   setGroupAdmin,
@@ -1904,8 +1905,10 @@ function readDraft(chatId) {
 function writeDraft(chatId, text) {
   if (!chatId) return;
   try {
+    const before = localStorage.getItem(draftKey(chatId)) || "";
     if (text.trim()) localStorage.setItem(draftKey(chatId), text);
     else localStorage.removeItem(draftKey(chatId));
+    if (before !== (text.trim() ? text : "")) pushDraftsSoon();
   } catch (_) {
     /* storage unavailable */
   }
@@ -3264,6 +3267,11 @@ function onCurrentChatDataChanged() {
         chatHeaderAvatar._html = av;
       }
       applyGroupComposerState(fresh);
+      if (currentChatType === "group" && JSON.stringify(fresh.topics || []) !== topicBar.dataset.sig) {
+        topicBar.dataset.sig = JSON.stringify(fresh.topics || []);
+        renderTopicBar(fresh);
+        rerenderMessages();
+      }
     }
   }
   renderPinnedBar();
@@ -3576,6 +3584,7 @@ function openSavedChat() {
   currentChatId = SAVED_ID;
   currentChatType = "saved";
   hideAwayBanner();
+  hideTopicBar();
   currentOtherUid = null;
   currentOtherProfile = null;
 
@@ -3601,6 +3610,7 @@ function openNotificationsChat() {
   currentChatId = NOTIFICATIONS_ID;
   currentChatType = "notifications";
   hideAwayBanner();
+  hideTopicBar();
   currentOtherUid = null;
   currentOtherProfile = null;
 
@@ -3629,6 +3639,7 @@ function openContactChat(chatId, otherUid, profile) {
   currentChatId = chatId;
   currentChatType = "contact";
   hideAwayBanner();
+  hideTopicBar();
   currentOtherUid = otherUid;
   currentOtherProfile = profile;
   currentChatRawMessages = [];
@@ -3736,6 +3747,7 @@ function openGroupChat(group) {
   currentChatId = group.id;
   currentChatType = group.type;
   hideAwayBanner();
+  hideTopicBar();
   currentOtherUid = null;
   currentOtherProfile = null;
   currentChatRawMessages = [];
@@ -3750,6 +3762,7 @@ function openGroupChat(group) {
 
   const canPost = applyGroupComposerState(group);
   refreshChatChrome();
+  renderTopicBar(group);
   if (canPost) restoreDraft();
 
   renderChats();
@@ -3839,6 +3852,7 @@ function rerenderMessages() {
     .filter((m) => !currentClearedAt || !m.createdAt?.toMillis || m.createdAt.toMillis() > currentClearedAt)
     .filter((m) => !(m.hiddenFor || []).includes(me)) // "deleted for me"
     .filter((m) => !(m.expireAt?.toMillis?.() <= now)) // auto-deleted
+    .filter(topicFilterOk) // group topics
     .sort((a, b) => (a._scheduled ? 1 : 0) - (b._scheduled ? 1 : 0) || ms(a) - ms(b));
   shownMessages = visible;
   sweepExpired(now);
@@ -4217,6 +4231,7 @@ function renderBubbleContent(bubble, msg) {
   } else if (msg.voiceUrl) {
     bubble.classList.add("voice-bubble");
     bubble.appendChild(buildVoicePlayer(msg));
+    addTranscriptToggle(bubble, msg);
   } else if (msg.fileUrl) {
     const fileType = msg.fileType || "";
     if (fileType.startsWith("video/")) {
@@ -7450,6 +7465,7 @@ async function startVoice(session) {
   session.recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   session.recorder.ondataavailable = (e) => e.data.size && session.chunks.push(e.data);
   session.recorder.start(250);
+  startTranscript(session);
   session.startedAt = performance.now();
   session.levels = [];
   drawVoiceLevels(session);
@@ -7528,6 +7544,7 @@ function finishVoice(session, send) {
     } catch (_) {}
   };
   const recorder = session.recorder;
+  const transcript = stopTranscript(session);
   if (!recorder || recorder.state === "inactive") {
     stopStream();
     return;
@@ -7537,16 +7554,17 @@ function finishVoice(session, send) {
     stopStream();
     if (!send || !session.chunks.length) return;
     const blob = new Blob(session.chunks, { type: recorder.mimeType || "audio/webm" });
-    sendVoice(blob, duration, encodeWave(session.levels), session.target);
+    const wave = encodeWave(session.levels);
+    transcript.then((text) => sendVoice(blob, duration, wave, session.target, text));
   };
   recorder.stop();
 }
 
-async function sendVoice(blob, duration, wave, target) {
+async function sendVoice(blob, duration, wave, target, transcript = "") {
   const type = blob.type.split(";")[0];
   const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
   const file = new File([blob], `voice.${ext}`, { type });
-  const progress = pendingUpload({ target, kind: "voice", file, duration, wave, retry: () => sendVoice(blob, duration, wave, target) });
+  const progress = pendingUpload({ target, kind: "voice", file, duration, wave, retry: () => sendVoice(blob, duration, wave, target, transcript) });
   try {
     const sealed = await sealUpload(file, target);
     const { url } = await uploadToCloudinary(sealed.file, sealed.mediaKey ? "raw" : "video", progress.update, progress.signal); // Cloudinary files audio under "video"
@@ -7557,7 +7575,7 @@ async function sendVoice(blob, duration, wave, target) {
     await sentOrQueued(
       deliver({
         ...target,
-        attachment: { fields: { voiceUrl: playable, duration, wave, ...(sealed.mediaKey ? { mediaKey: sealed.mediaKey } : {}) }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
+        attachment: { fields: { voiceUrl: playable, duration, wave, ...(sealed.mediaKey ? { mediaKey: sealed.mediaKey } : {}), ...(transcript ? { transcript } : {}) }, previewText: "🎤 Голосовое сообщение", defaultCaption: "🎤" },
       }),
       "Голосовое сообщение"
     );
@@ -7816,6 +7834,7 @@ function closeCurrentChatView() {
   currentChatId = null;
   currentChatType = null;
   hideAwayBanner();
+  hideTopicBar();
   currentOtherUid = null;
   currentOtherProfile = null;
   chatHeader.classList.add("hidden");
@@ -9152,6 +9171,7 @@ async function deliver({ type, id, text = "", attachment = null, replyTo = null,
     const members = (groups.find((g) => g.id === id) || currentGroupRef)?.members || [];
     const mentions = await mentionedUids(text, members);
     if (mentions.length) extra = { ...(extra || {}), mentions };
+    if (type === "group" && activeTopic && id === currentChatId) extra = { ...(extra || {}), topic: activeTopic };
     return sendGroupMessage(id, me, text, attachment, replyTo, extra, members, { scheduleAt, silent, plain });
   }
   // 1:1 chat — encrypted whenever the other person's app has a device key.
@@ -10983,7 +11003,10 @@ function startToolsSync() {
           if (local && (Array.isArray(local) ? local.length : Object.keys(local).length)) saveToolsField(currentUser.uid, field, local).catch(() => {});
         }
       });
+      if (data.drafts) applyRemoteDrafts(data.drafts);
+      const first = !toolsSynced;
       toolsSynced = true;
+      if (first && !data.drafts) pushDraftsSoon();
     },
     (err) => console.warn("tools sync:", err.code || err)
   );
@@ -11209,6 +11232,7 @@ function updateAwayBanner(profile, chatId) {
   const away = activeAway(profile);
   if (!away || currentChatId !== chatId) {
     hideAwayBanner();
+  hideTopicBar();
     return;
   }
   const name = profile.displayName || "Собеседник";
@@ -11313,6 +11337,248 @@ async function showStickerPack(id) {
     modal.close();
     toast(`Добавлено стикеров: ${Math.min(fresh.length, MAX_STICKERS)}`, { icon: "🖼" });
   });
+}
+
+// ---------- Drafts synced across my devices (tools.drafts) ----------
+let remoteDrafts = {};
+const pushDraftsSoon = debounce(() => {
+  if (!currentUser || !toolsSynced) return;
+  const drafts = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith("lm-draft:")) drafts[k.slice(9)] = localStorage.getItem(k).slice(0, 4000);
+    }
+  } catch (_) {}
+  if (JSON.stringify(drafts) === JSON.stringify(remoteDrafts)) return;
+  remoteDrafts = drafts;
+  saveToolsField(currentUser.uid, "drafts", drafts).catch(() => {});
+}, 1500);
+
+function applyRemoteDrafts(drafts) {
+  remoteDrafts = drafts || {};
+  let changed = false;
+  try {
+    const local = new Set();
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith("lm-draft:")) local.add(k.slice(9));
+    }
+    Object.entries(remoteDrafts).forEach(([id, text]) => {
+      if (localStorage.getItem(draftKey(id)) !== text) {
+        localStorage.setItem(draftKey(id), text);
+        changed = true;
+      }
+      local.delete(id);
+    });
+    // Sent (or cleared) on another device.
+    local.forEach((id) => {
+      if (id === currentChatId && document.activeElement === msgInput) return;
+      localStorage.removeItem(draftKey(id));
+      changed = true;
+    });
+  } catch (_) {}
+  if (!changed) return;
+  if (currentChatId && document.activeElement !== msgInput && msgInput.value !== readDraft(currentChatId)) {
+    // No "input" event: that would also tell the other side we're typing.
+    msgInput.value = readDraft(currentChatId);
+    msgInput.style.height = "auto";
+    msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
+    updateComposerButtons();
+    updateCharCount();
+  }
+  renderChats();
+}
+
+// ---------- Voice messages transcribed while recording ----------
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const TRANSCRIBE_KEY = "lm-transcribe";
+const transcribeOn = () => !!SpeechRec && readLS(TRANSCRIBE_KEY, false) === true;
+const transcribeToggle = document.getElementById("transcribe-voice");
+if (transcribeToggle) {
+  transcribeToggle.checked = transcribeOn();
+  transcribeToggle.disabled = !SpeechRec;
+  if (!SpeechRec) transcribeToggle.closest(".setting-row")?.classList.add("disabled");
+  transcribeToggle.addEventListener("change", () => writeLS(TRANSCRIBE_KEY, transcribeToggle.checked));
+}
+
+function startTranscript(session) {
+  if (!transcribeOn()) return;
+  try {
+    const r = new SpeechRec();
+    r.lang = document.documentElement.lang === "en" ? "en-US" : "ru-RU";
+    r.continuous = true;
+    r.interimResults = false;
+    session.transcript = [];
+    r.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) session.transcript.push(e.results[i][0].transcript.trim());
+    };
+    r.onerror = () => {};
+    // Chrome stops after a pause; keep listening while the recording runs.
+    r.onend = () => {
+      if (!session.ended && !session.stopped) {
+        try {
+          r.start();
+        } catch (_) {}
+      }
+    };
+    r.start();
+    session.speech = r;
+  } catch (err) {
+    console.warn("speech recognition:", err);
+  }
+}
+
+// Waits a moment for the last phrase to be recognised.
+function stopTranscript(session) {
+  const r = session.speech;
+  if (!r) return Promise.resolve("");
+  session.stopped = true;
+  return new Promise((resolve) => {
+    const done = () => resolve((session.transcript || []).filter(Boolean).join(" ").slice(0, 4000));
+    const t = setTimeout(done, 1500);
+    r.onend = () => {
+      clearTimeout(t);
+      done();
+    };
+    try {
+      r.stop();
+    } catch (_) {
+      clearTimeout(t);
+      done();
+    }
+  });
+}
+
+function addTranscriptToggle(bubble, msg) {
+  if (!msg.transcript) return;
+  const wrap = document.createElement("div");
+  wrap.className = "voice-transcript";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "voice-transcript-btn";
+  btn.textContent = "Aa";
+  btn.title = "Показать текст";
+  const text = document.createElement("div");
+  text.className = "voice-transcript-text hidden";
+  text.textContent = msg.transcript;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    text.classList.toggle("hidden");
+    btn.classList.toggle("active", !text.classList.contains("hidden"));
+  });
+  wrap.append(btn, text);
+  bubble.appendChild(wrap);
+}
+
+// ---------- Topics in groups (group.topics, message.topic) ----------
+const topicBar = document.getElementById("topic-bar");
+let activeTopic = null; // null = all, "" = general, otherwise a topic id
+const MAX_TOPICS = 20;
+const topicOfMessage = (m) => m.topic || "";
+const topicFilterOk = (m) => activeTopic === null || currentChatType !== "group" || topicOfMessage(m) === activeTopic;
+
+function hideTopicBar() {
+  activeTopic = null;
+  topicBar?.classList.add("hidden");
+  chatSection.classList.remove("has-topics");
+}
+
+function renderTopicBar(group) {
+  if (!topicBar) return;
+  const topics = Array.isArray(group?.topics) ? group.topics : [];
+  const isAdmin = (group?.admins || []).includes(currentUser.uid);
+  if (group?.type !== "group" || (!topics.length && !isAdmin)) {
+    hideTopicBar();
+    return;
+  }
+  if (activeTopic && !topics.some((t) => t.id === activeTopic)) activeTopic = null;
+  topicBar.replaceChildren();
+  const chip = (id, label) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "topic-chip" + (activeTopic === id ? " active" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      activeTopic = id;
+      renderTopicBar(currentGroupRef);
+      rerenderMessages();
+      messagesEl.scrollTo({ top: messagesEl.scrollHeight });
+    });
+    return b;
+  };
+  topicBar.append(chip(null, "Все"), chip("", "💬 Общее"));
+  topics.forEach((t) => {
+    const b = chip(t.id, `${t.emoji || "#"} ${t.name}`);
+    if (isAdmin)
+      b.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        openContextMenu({
+          x: e.clientX,
+          y: e.clientY,
+          items: [
+            { label: "Переименовать тему", icon: MI.edit, onClick: () => editTopic(group, t) },
+            { label: "Удалить тему", icon: MI.trash, danger: true, onClick: () => deleteTopic(group, t) },
+          ],
+        });
+      });
+    topicBar.appendChild(b);
+  });
+  if (isAdmin && topics.length < MAX_TOPICS) {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "topic-chip add";
+    add.textContent = topics.length ? "+" : "+ Темы";
+    add.title = "Новая тема";
+    add.addEventListener("click", () => editTopic(group, null));
+    topicBar.appendChild(add);
+  }
+  topicBar.classList.remove("hidden");
+  chatSection.classList.add("has-topics");
+}
+
+async function saveTopics(group, topics) {
+  try {
+    await updateGroupTopics(group.id, topics);
+    group.topics = topics;
+    renderTopicBar(group);
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось сохранить темы (обновите правила Firestore)", { tone: "error" });
+  }
+}
+
+function editTopic(group, topic) {
+  const raw = prompt(topic ? "Новое название темы" : "Название темы (можно начать с эмодзи)", topic ? `${topic.emoji || ""} ${topic.name}`.trim() : "");
+  const value = (raw || "").trim().slice(0, 40);
+  if (!value) return;
+  const m = value.match(/^(\p{Extended_Pictographic}️?)\s*(.*)$/u);
+  const emoji = m?.[2] ? m[1] : "";
+  const name = (m?.[2] ? m[2] : value).trim();
+  const topics = [...(group.topics || [])];
+  if (topic) {
+    const i = topics.findIndex((t) => t.id === topic.id);
+    if (i >= 0) topics[i] = { ...topics[i], name, emoji };
+  } else {
+    topics.push({ id: Math.random().toString(36).slice(2, 10), name, emoji });
+    toast(`Тема «${name}» создана`, { icon: "💬" });
+  }
+  saveTopics(group, topics);
+}
+
+function deleteTopic(group, topic) {
+  if (!confirm(`Удалить тему «${topic.name}»? Сообщения останутся во вкладке «Все».`)) return;
+  if (activeTopic === topic.id) activeTopic = null;
+  saveTopics(
+    group,
+    (group.topics || []).filter((t) => t.id !== topic.id)
+  );
+  rerenderMessages();
+}
+
+function topicLabel(id) {
+  const t = (currentGroupRef?.topics || []).find((x) => x.id === id);
+  return t ? `${t.emoji || "#"} ${t.name}` : "";
 }
 
 // ---------- Settings → Security: check the call relay (TURN) ----------
