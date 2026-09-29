@@ -5263,6 +5263,10 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
       !msg.call && { label: "Переслать", icon: MI.forward, onClick: () => openForward(msg) },
       hasText && "speechSynthesis" in window && { label: speakingMsgId === msg.id ? "Остановить чтение" : "Прочитать вслух", icon: MI.music, onClick: () => speakMessage(msg) },
       hasText && { label: "Перевести", icon: MI.link, onClick: () => translateMessage(msg) },
+      hasText && { label: "Копировать как цитату", icon: MI.copy, onClick: () => copyAsQuote(msg, isMine) },
+      { label: isBookmarked(msg.id) ? "Убрать закладку" : "В закладки", icon: MI.pin, onClick: () => toggleBookmark(msg) },
+      hasText && navigator.share && { label: "Поделиться", icon: MI.forward, onClick: () => navigator.share({ text: msg.text }).catch(() => {}) },
+      { label: "Подробнее", icon: MI.eye, onClick: () => showMessageInfo(msg, isMine) },
       { label: "Напомнить", icon: MI.bell, onClick: () => setTimeout(() => openReminderPicker(msg, x, y), 60) },
       canPinInCurrentChat() && {
         label: pinnedId === msg.id ? "Открепить" : "Закрепить",
@@ -6107,7 +6111,14 @@ let lastTypingPing = 0;
 const saveDraftSoon = debounce(() => writeDraft(currentChatId, msgInput.value), 400);
 
 async function doSendMessage(attachment, { scheduleAt = null, effect = null, silent = false } = {}) {
-  const text = msgInput.value.trim();
+  const text = expandComposerText(msgInput.value.trim());
+  if (text === null) {
+    msgInput.value = "";
+    msgInput.style.height = "auto";
+    writeDraft(currentChatId, "");
+    updateComposerButtons();
+    return;
+  }
   if (!text && !attachment) return;
   if (!currentChatId) return;
   const replyPayload = replyToMessage
@@ -10403,6 +10414,465 @@ document.addEventListener("keydown", (e) => {
   } else if (mod && !e.shiftKey && e.key.toLowerCase() === "f" && currentChatId && !chatSearchBtn.classList.contains("hidden")) {
     e.preventDefault();
     chatSearchBtn.click();
+  }
+});
+
+// ---------- Small modal for the extra tools below ----------
+function extraModal(title, body, { wide = false } = {}) {
+  const wrap = document.createElement("div");
+  wrap.className = "x-modal";
+  wrap.innerHTML = `<div class="x-modal-card${wide ? " wide" : ""}" role="dialog" aria-modal="true"><div class="x-modal-head"><h3></h3><button type="button" class="icon-btn x-modal-close" title="Закрыть">✕</button></div><div class="x-modal-body"></div></div>`;
+  wrap.querySelector("h3").textContent = title;
+  const bodyEl = wrap.querySelector(".x-modal-body");
+  if (typeof body === "string") bodyEl.innerHTML = body;
+  else if (body) bodyEl.appendChild(body);
+  const close = () => {
+    document.removeEventListener("keydown", onKey, true);
+    wrap.classList.add("leaving");
+    setTimeout(() => wrap.remove(), 160);
+  };
+  const onKey = (e) => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation();
+    close();
+  };
+  wrap.addEventListener("click", (e) => e.target === wrap && close());
+  wrap.querySelector(".x-modal-close").addEventListener("click", close);
+  document.addEventListener("keydown", onKey, true);
+  document.body.appendChild(wrap);
+  return { el: wrap, body: bodyEl, close };
+}
+
+const escapeHtmlX = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const loadedRows = () => [...messagesEl.querySelectorAll(".msg-row")].filter((r) => r._ctx && !r._ctx.msg._scheduled);
+const msgDate = (msg) => (msg.createdAt?.toDate ? msg.createdAt.toDate() : null);
+const senderNameX = (msg, isMine) =>
+  isMine
+    ? myProfile?.displayName || "Вы"
+    : currentChatType === "group" || currentChatType === "channel"
+    ? groupSenderCache.get(msg.senderId)?.displayName || "Участник"
+    : chatTitle.textContent.trim() || "Собеседник";
+const readLS = (key, fallback) => {
+  try {
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
+  } catch (_) {
+    return fallback;
+  }
+};
+const writeLS = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (_) {}
+};
+
+// ---------- Composer commands, templates and emoji shortcodes ----------
+const TEMPLATES_KEY = "lm-templates";
+const SHORTCODES = {
+  ":)": "🙂", ":-)": "🙂", ":D": "😄", ";)": "😉", ":(": "🙁", ":P": "😛", "<3": "❤️",
+  ":fire:": "🔥", ":heart:": "❤️", ":ok:": "👌", ":+1:": "👍", ":-1:": "👎", ":lol:": "😂", ":cry:": "😢",
+  ":party:": "🎉", ":rocket:": "🚀", ":star:": "⭐", ":think:": "🤔", ":clap:": "👏", ":pray:": "🙏",
+  ":cool:": "😎", ":eyes:": "👀", ":100:": "💯", ":check:": "✅", ":x:": "❌", ":warn:": "⚠️", ":coffee:": "☕",
+};
+const COMMANDS_HELP = [
+  ["/shrug", "¯\\_(ツ)_/¯"],
+  ["/tableflip · /unflip · /lenny", "текстовые смайлы"],
+  ["/me текст", "сообщение от третьего лица"],
+  ["/roll [N]", "случайное число от 1 до N (по умолчанию 100)"],
+  ["/coin", "орёл или решка"],
+  ["/choose а, б, в", "случайный выбор из вариантов"],
+  ["/calc 2*(3+4)", "калькулятор"],
+  ["/time · /date", "текущее время или дата"],
+  ["/upper · /lower · /reverse · /mock текст", "преобразовать текст"],
+  ["/spoiler текст", "скрыть текст под спойлер"],
+  ["/t имя", "вставить шаблон"],
+  ["/tsave имя текст", "сохранить шаблон"],
+  ["/tdel имя · /tlist", "удалить шаблон · список шаблонов"],
+  [":fire: :) <3 …", "автозамена на эмодзи"],
+  ["/help", "эта справка"],
+];
+
+function safeCalc(expr) {
+  const src = expr.replace(/,/g, ".").replace(/\^/g, "**").replace(/×/g, "*").replace(/÷/g, "/");
+  if (!/^[\d\s+\-*/().%]+$/.test(src)) return null;
+  try {
+    const v = Function(`"use strict";return (${src})`)();
+    return typeof v === "number" && isFinite(v) ? +v.toPrecision(12) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function showCommandsHelp() {
+  const templates = readLS(TEMPLATES_KEY, {});
+  const names = Object.keys(templates);
+  extraModal(
+    "Команды в поле ввода",
+    `<table class="x-table">${COMMANDS_HELP.map(([c, d]) => `<tr><td><code>${escapeHtmlX(c)}</code></td><td>${escapeHtmlX(d)}</td></tr>`).join("")}</table>` +
+      `<p class="x-dim">Ваши шаблоны: ${names.length ? names.map((n) => `<code>${escapeHtmlX(n)}</code>`).join(" ") : "пока нет"}</p>`
+  );
+}
+
+// Returns the text to send, or null when the command was handled here.
+function expandComposerText(text) {
+  if (!text) return text;
+  const m = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
+  if (m) {
+    const cmd = m[1].toLowerCase();
+    const arg = (m[2] || "").trim();
+    const templates = readLS(TEMPLATES_KEY, {});
+    switch (cmd) {
+      case "help":
+      case "commands":
+        showCommandsHelp();
+        return null;
+      case "shrug":
+        return `${arg} ¯\\_(ツ)_/¯`.trim();
+      case "tableflip":
+        return `${arg} (╯°□°)╯︵ ┻━┻`.trim();
+      case "unflip":
+        return `${arg} ┬─┬ノ( º _ ºノ)`.trim();
+      case "lenny":
+        return `${arg} ( ͡° ͜ʖ ͡°)`.trim();
+      case "me":
+        return arg ? `* ${myProfile?.displayName || "Я"} ${arg}` : null;
+      case "roll": {
+        const n = Math.max(2, Math.min(1e9, parseInt(arg, 10) || 100));
+        return `🎲 ${1 + Math.floor(Math.random() * n)} (1–${n})`;
+      }
+      case "coin":
+        return `🪙 ${Math.random() < 0.5 ? "Орёл" : "Решка"}`;
+      case "choose": {
+        const opts = arg.split(/[,;|]| или /).map((x) => x.trim()).filter(Boolean);
+        if (opts.length < 2) {
+          toast("Укажите варианты через запятую", { icon: "🤔" });
+          return null;
+        }
+        return `🤔 ${opts.join(" / ")} → ${opts[Math.floor(Math.random() * opts.length)]}`;
+      }
+      case "calc": {
+        const v = safeCalc(arg);
+        if (v === null) {
+          toast("Не удалось посчитать", { tone: "error" });
+          return null;
+        }
+        return `🧮 ${arg} = ${v}`;
+      }
+      case "time":
+        return `🕒 ${new Date().toLocaleTimeString(document.documentElement.lang || "ru", { hour: "2-digit", minute: "2-digit" })}`;
+      case "date":
+        return `📅 ${new Date().toLocaleDateString(document.documentElement.lang || "ru", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`;
+      case "upper":
+        return arg.toUpperCase() || null;
+      case "lower":
+        return arg.toLowerCase() || null;
+      case "reverse":
+        return [...arg].reverse().join("") || null;
+      case "mock":
+        return [...arg].map((c, i) => (i % 2 ? c.toUpperCase() : c.toLowerCase())).join("") || null;
+      case "spoiler":
+        return arg ? `||${arg}||` : null;
+      case "t": {
+        const t = templates[arg.toLowerCase()];
+        if (!t) {
+          toast(`Шаблон «${arg}» не найден`, { tone: "error" });
+          return null;
+        }
+        return t;
+      }
+      case "tsave": {
+        const mm = arg.match(/^(\S+)\s+([\s\S]+)$/);
+        if (!mm) {
+          toast("Формат: /tsave имя текст", { icon: "📝" });
+          return null;
+        }
+        templates[mm[1].toLowerCase()] = mm[2];
+        writeLS(TEMPLATES_KEY, templates);
+        toast(`Шаблон «${mm[1]}» сохранён`, { icon: "📝" });
+        return null;
+      }
+      case "tdel":
+        delete templates[arg.toLowerCase()];
+        writeLS(TEMPLATES_KEY, templates);
+        toast(`Шаблон «${arg}» удалён`, { icon: "🗑️" });
+        return null;
+      case "tlist":
+        showCommandsHelp();
+        return null;
+      default:
+        break; // unknown "/…" is sent as is
+    }
+  }
+  return text.replace(/(^|\s)(:[a-z0-9+\-]+:|:-?\)|:D|;\)|:\(|:P|<3)(?=\s|$)/g, (all, pre, code) => (SHORTCODES[code] ? pre + SHORTCODES[code] : all));
+}
+
+// ---------- Message tools: quote, info, bookmarks ----------
+function copyAsQuote(msg, isMine) {
+  const d = msgDate(msg);
+  const quote = `${stripRich(msg.text)
+    .split("\n")
+    .map((l) => "> " + l)
+    .join("\n")}\n— ${senderNameX(msg, isMine)}${d ? ", " + d.toLocaleString(document.documentElement.lang || "ru") : ""}`;
+  navigator.clipboard
+    ?.writeText(quote)
+    .then(() => toast("Цитата скопирована", { icon: "📋" }))
+    .catch(() => toast("Не удалось скопировать", { tone: "error" }));
+}
+
+function showMessageInfo(msg, isMine) {
+  const d = msgDate(msg);
+  const e = msg.editedAt?.toDate ? msg.editedAt.toDate() : null;
+  const text = stripRich(msg.text || "");
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const reactions = Object.entries(msg.reactions || {}).filter(([, u]) => u?.length);
+  const rows = [
+    ["Автор", senderNameX(msg, isMine)],
+    ["Отправлено", d ? d.toLocaleString(document.documentElement.lang || "ru", { dateStyle: "full", timeStyle: "medium" }) : "—"],
+    e && ["Изменено", e.toLocaleString(document.documentElement.lang || "ru")],
+    text && ["Символов / слов", `${text.length} / ${words}`],
+    words > 40 && ["Время чтения", `~${Math.max(1, Math.round(words / 200))} мин`],
+    msg.fileName && ["Файл", msg.fileName],
+    reactions.length && ["Реакции", reactions.map(([em, u]) => `${em} ${u.length}`).join("  ")],
+    msg.enc && ["Шифрование", "🔒 сквозное"],
+    msg.expireAt && ["Удалится", (msg.expireAt.toDate ? msg.expireAt.toDate() : new Date(msg.expireAt)).toLocaleString(document.documentElement.lang || "ru")],
+  ].filter(Boolean);
+  extraModal("О сообщении", `<table class="x-table">${rows.map(([k, v]) => `<tr><td>${escapeHtmlX(k)}</td><td>${escapeHtmlX(v)}</td></tr>`).join("")}</table>`);
+}
+
+const BOOKMARKS_KEY = "lm-bookmarks";
+const allBookmarks = () => readLS(BOOKMARKS_KEY, {});
+const isBookmarked = (id) => !!allBookmarks()[currentChatId]?.some((b) => b.id === id);
+function toggleBookmark(msg) {
+  const all = allBookmarks();
+  const list = all[currentChatId] || [];
+  const had = list.some((b) => b.id === msg.id);
+  all[currentChatId] = had
+    ? list.filter((b) => b.id !== msg.id)
+    : [...list, { id: msg.id, text: (msg.text && !DEFAULT_CAPTIONS.includes(msg.text) ? stripRich(msg.text) : "Вложение").slice(0, 140), at: msgDate(msg)?.getTime() || Date.now() }];
+  if (!all[currentChatId].length) delete all[currentChatId];
+  writeLS(BOOKMARKS_KEY, all);
+  toast(had ? "Закладка убрана" : "Добавлено в закладки", { icon: "🔖" });
+}
+
+function showBookmarks() {
+  const list = (allBookmarks()[currentChatId] || []).slice().sort((a, b) => a.at - b.at);
+  const box = document.createElement("div");
+  if (!list.length) box.innerHTML = `<p class="x-dim">Закладок пока нет. Долгое нажатие на сообщение → «В закладки».</p>`;
+  let modal;
+  list.forEach((b) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "x-list-item";
+    btn.innerHTML = `<span class="x-dim">${escapeHtmlX(new Date(b.at).toLocaleString(document.documentElement.lang || "ru", { dateStyle: "short", timeStyle: "short" }))}</span><span></span>`;
+    btn.lastChild.textContent = b.text;
+    btn.addEventListener("click", () => {
+      modal.close();
+      if (messagesEl.querySelector(`[data-msg-id="${CSS.escape(b.id)}"]`)) scrollToMessage(b.id);
+      else toast("Сообщение ещё не загружено — прокрутите чат выше", { icon: "🔖" });
+    });
+    box.appendChild(btn);
+  });
+  modal = extraModal("Закладки", box);
+}
+
+// ---------- Chat tools: jump to date, stats, note, HTML export ----------
+function openJumpToDate() {
+  const box = document.createElement("div");
+  box.innerHTML = `<input type="date" class="x-input" /><button type="button" class="small-btn x-go">Перейти</button>`;
+  const input = box.querySelector("input");
+  input.value = new Date().toISOString().slice(0, 10);
+  const modal = extraModal("Перейти к дате", box);
+  const go = () => {
+    if (!input.value) return;
+    const from = new Date(input.value + "T00:00:00").getTime();
+    const rows = loadedRows();
+    const row = rows.find((r) => (msgDate(r._ctx.msg)?.getTime() || 0) >= from);
+    modal.close();
+    const first = rows[0] && msgDate(rows[0]._ctx.msg)?.getTime();
+    if (first && from < first) {
+      messagesEl.scrollTo({ top: 0, behavior: "smooth" });
+      toast("Более ранние сообщения подгружаются — повторите, когда они появятся", { icon: "📅", duration: 4000 });
+      return;
+    }
+    if (!row) {
+      messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: "smooth" });
+      toast("В этот день сообщений нет", { icon: "📅" });
+      return;
+    }
+    scrollToMessage(row.dataset.msgId);
+  };
+  box.querySelector(".x-go").addEventListener("click", go);
+  input.addEventListener("keydown", (e) => e.key === "Enter" && go());
+  setTimeout(() => input.focus(), 50);
+}
+
+function showChatStats() {
+  const rows = loadedRows();
+  if (!rows.length) {
+    toast("В этом чате пока нет сообщений", { icon: "📊" });
+    return;
+  }
+  const by = new Map();
+  const hours = new Array(24).fill(0);
+  const days = new Map();
+  const emojis = new Map();
+  const wordsMap = new Map();
+  let media = 0, voice = 0, links = 0, words = 0, chars = 0, reactionsN = 0;
+  rows.forEach((r) => {
+    const { msg, isMine } = r._ctx;
+    const name = senderNameX(msg, isMine);
+    by.set(name, (by.get(name) || 0) + 1);
+    const d = msgDate(msg);
+    if (d) {
+      hours[d.getHours()]++;
+      const k = d.toLocaleDateString(document.documentElement.lang || "ru");
+      days.set(k, (days.get(k) || 0) + 1);
+    }
+    if (msg.imageUrl || msg.fileUrl || msg.videoNoteUrl) media++;
+    if (msg.voiceUrl) voice++;
+    const text = msg.text && !DEFAULT_CAPTIONS.includes(msg.text) ? stripRich(msg.text) : "";
+    if (/https?:\/\//.test(text)) links++;
+    chars += text.length;
+    const ws = text.toLowerCase().match(/[\p{L}\d]{4,}/gu) || [];
+    words += text.trim() ? text.trim().split(/\s+/).length : 0;
+    ws.forEach((w) => wordsMap.set(w, (wordsMap.get(w) || 0) + 1));
+    (text.match(/\p{Extended_Pictographic}/gu) || []).forEach((em) => emojis.set(em, (emojis.get(em) || 0) + 1));
+    Object.values(msg.reactions || {}).forEach((u) => (reactionsN += u?.length || 0));
+  });
+  const top = (m, n) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+  const maxH = Math.max(...hours);
+  const peak = hours.indexOf(maxH);
+  const first = msgDate(rows[0]._ctx.msg);
+  const busiest = top(days, 1)[0];
+  const total = rows.length;
+  const bars = hours
+    .map((h, i) => `<div class="x-bar" title="${i}:00 — ${h}"><i style="height:${maxH ? Math.max(2, (h / maxH) * 100) : 2}%"></i></div>`)
+    .join("");
+  extraModal(
+    "Статистика чата",
+    `<p class="x-dim">По загруженным сообщениям${first ? " с " + escapeHtmlX(first.toLocaleDateString(document.documentElement.lang || "ru")) : ""}</p>
+    <div class="x-stats">
+      <div><b>${total}</b><span>сообщений</span></div>
+      <div><b>${words}</b><span>слов</span></div>
+      <div><b>${media}</b><span>медиа</span></div>
+      <div><b>${voice}</b><span>голосовых</span></div>
+      <div><b>${links}</b><span>ссылок</span></div>
+      <div><b>${reactionsN}</b><span>реакций</span></div>
+    </div>
+    <h4>Кто пишет</h4>
+    ${top(by, 10)
+      .map(([n, c]) => `<div class="x-share"><span>${escapeHtmlX(n)}</span><div><i style="width:${(c / total) * 100}%"></i></div><b>${c}</b></div>`)
+      .join("")}
+    <h4>Активность по часам${maxH ? ` · пик в ${peak}:00` : ""}</h4>
+    <div class="x-bars">${bars}</div>
+    ${busiest ? `<p>Самый активный день: <b>${escapeHtmlX(busiest[0])}</b> (${busiest[1]})</p>` : ""}
+    ${emojis.size ? `<p>Любимые эмодзи: ${top(emojis, 8).map(([e, c]) => `${e}<small>×${c}</small>`).join(" ")}</p>` : ""}
+    ${wordsMap.size ? `<p>Частые слова: ${top(wordsMap, 10).map(([w, c]) => `<code>${escapeHtmlX(w)}</code><small>×${c}</small>`).join(" ")}</p>` : ""}
+    <p class="x-dim">Средняя длина сообщения: ${Math.round(chars / total)} символов</p>`,
+    { wide: true }
+  );
+}
+
+const NOTES_KEY = "lm-chat-notes";
+function openChatNote() {
+  const notes = readLS(NOTES_KEY, {});
+  const box = document.createElement("div");
+  box.innerHTML = `<p class="x-dim">Видна только вам, хранится на этом устройстве.</p><textarea class="x-input" rows="7" maxlength="4000" placeholder="Например: день рождения, о чём договорились…"></textarea>`;
+  const ta = box.querySelector("textarea");
+  const id = currentChatId;
+  ta.value = notes[id] || "";
+  ta.addEventListener(
+    "input",
+    debounce(() => {
+      const all = readLS(NOTES_KEY, {});
+      if (ta.value.trim()) all[id] = ta.value;
+      else delete all[id];
+      writeLS(NOTES_KEY, all);
+    }, 300)
+  );
+  extraModal("Заметка к чату", box);
+  setTimeout(() => ta.focus(), 50);
+}
+
+function exportCurrentChatHtml() {
+  const rows = loadedRows();
+  if (!rows.length) {
+    toast("В этом чате пока нечего сохранять", { icon: "💾" });
+    return;
+  }
+  const title = chatTitle.textContent.trim() || "Чат";
+  let lastDay = "";
+  const body = rows
+    .map((r) => {
+      const { msg, isMine } = r._ctx;
+      const d = msgDate(msg);
+      const day = d ? d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "";
+      const sep = day && day !== lastDay ? `<div class="day">${escapeHtmlX(day)}</div>` : "";
+      if (day) lastDay = day;
+      let text = msg.poll ? `📊 ${msg.poll.q} — ${msg.poll.options.join(" / ")}` : stripRich(msg.text || "");
+      const media = msg.imageUrl || msg.fileUrl || msg.voiceUrl || msg.videoNoteUrl;
+      const img = msg.imageUrl && !msg.enc ? `<img src="${escapeHtmlX(msg.imageUrl)}" alt="">` : "";
+      const link = media && !img ? `<a href="${escapeHtmlX(media)}">${escapeHtmlX(msg.fileName || "Вложение")}</a>` : "";
+      return `${sep}<div class="m ${isMine ? "me" : ""}"><div class="b"><div class="n">${escapeHtmlX(senderNameX(msg, isMine))}</div>${img}${link}<div class="t">${escapeHtmlX(text)}</div><div class="w">${d ? d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : ""}</div></div></div>`;
+    })
+    .join("\n");
+  const html = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtmlX(title)}</title><style>
+body{margin:0;background:#120e0b;color:#f7efe5;font:15px/1.45 system-ui,sans-serif}main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:20px}.day{text-align:center;color:#a99;margin:18px 0 8px;font-size:13px}.m{display:flex;margin:4px 0}.m.me{justify-content:flex-end}
+.b{max-width:75%;background:#2a211b;border-radius:16px;padding:8px 12px}.me .b{background:#ff8a1a;color:#1f1100}.n{font-size:12px;font-weight:600;opacity:.75}
+.t{white-space:pre-wrap;word-wrap:break-word}.w{font-size:11px;opacity:.6;text-align:right}img{max-width:100%;border-radius:10px;display:block;margin:4px 0}a{color:inherit}
+</style></head><body><main><h1>${escapeHtmlX(title)}</h1><p style="color:#a99">Экспорт Linkage Message · ${escapeHtmlX(new Date().toLocaleString("ru-RU"))}</p>${body}</main></body></html>`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+  a.download = `Linkage-${translit(title)}-${new Date().toISOString().slice(0, 10)}.html`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast(`Сохранено сообщений: ${rows.length}`, { icon: "💾" });
+}
+
+[
+  ["chat-menu-export-html-btn", exportCurrentChatHtml],
+  ["chat-menu-date-btn", openJumpToDate],
+  ["chat-menu-bookmarks-btn", showBookmarks],
+  ["chat-menu-stats-btn", showChatStats],
+  ["chat-menu-note-btn", openChatNote],
+].forEach(([id, fn]) =>
+  document.getElementById(id)?.addEventListener("click", () => {
+    hidePopover(chatMenuDropdown);
+    if (currentChatId) fn();
+  })
+);
+
+// ---------- Profile QR code ----------
+document.getElementById("settings-profile-qr")?.addEventListener("click", () => {
+  const link = settingsProfileLink.textContent.trim();
+  if (!link) return;
+  extraModal(
+    "QR-код профиля",
+    `<div class="x-qr"><img alt="QR" src="https://api.qrserver.com/v1/create-qr-code/?size=480x480&margin=12&data=${encodeURIComponent(link)}"></div><p class="x-dim" style="text-align:center">Наведите камеру — откроется чат с вами<br><code>${escapeHtmlX(link)}</code></p>`
+  );
+});
+
+// ---------- Keyboard shortcuts help (Ctrl+/ or ?) ----------
+function showShortcutsHelp() {
+  const list = [
+    ["Ctrl/⌘ + K", "поиск"],
+    ["Alt + ↑ / ↓", "предыдущий / следующий чат"],
+    ["Ctrl/⌘ + F", "поиск по чату"],
+    ["Ctrl/⌘ + /", "эта справка"],
+    ["↑ в пустом поле", "изменить последнее сообщение"],
+    ["Ctrl + B / I", "жирный / курсив"],
+    ["Ctrl + Shift + X / M / P", "зачёркнутый / код / спойлер"],
+    ["Esc", "закрыть меню, окно или чат"],
+    ["/help в поле ввода", "команды и шаблоны"],
+  ];
+  extraModal("Горячие клавиши", `<table class="x-table">${list.map(([k, d]) => `<tr><td><kbd>${escapeHtmlX(k)}</kbd></td><td>${escapeHtmlX(d)}</td></tr>`).join("")}</table>`);
+}
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+    e.preventDefault();
+    showShortcutsHelp();
   }
 });
 
