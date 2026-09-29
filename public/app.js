@@ -72,7 +72,7 @@ import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS,
   listenStoryComments,
 } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
-import { initCalls, startCall, fmtDuration, stopCalls } from "./call-ui.js";
+import { initCalls, startCall, fmtDuration, stopCalls, checkTurn } from "./call-ui.js";
 import { emojiOnly, animatedEmoji, emojiEffect, emojiPop, holdEmojiPlayback } from "./emoji-anim.js";
 import { EMOJI_GROUPS, ANIMATED_EMOJI } from "./emoji-data.js";
 import { EFFECTS, playEffect } from "./effects.js";
@@ -10288,6 +10288,30 @@ function closeTopLayer() {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeTopLayer();
+});
+
+// ---------- Settings → Security: check the call relay (TURN) ----------
+const turnCheckBtn = document.getElementById("turn-check-btn");
+const turnCheckStatus = document.getElementById("turn-check-status");
+turnCheckBtn?.addEventListener("click", async () => {
+  turnCheckBtn.disabled = true;
+  turnCheckStatus.textContent = "Проверяем…";
+  turnCheckStatus.style.color = "";
+  let res;
+  try {
+    res = await checkTurn();
+  } catch (err) {
+    res = { ok: false, reason: String(err.message || err) };
+  }
+  turnCheckBtn.disabled = false;
+  turnCheckStatus.style.color = res.ok ? "var(--success)" : "#ff8a7a";
+  turnCheckStatus.textContent = res.ok
+    ? "✓ Работает: звонки пойдут через сервер, если напрямую не соединятся"
+    : res.reason === "not-configured"
+    ? "Не настроен: добавьте ключи TURN в Vercel (см. README)"
+    : res.reason === "no-relay"
+    ? "Сервер не принял ключи: проверьте их в Vercel"
+    : "Ошибка: " + res.reason;
 });
 
 // ---------- On-screen keyboard ----------

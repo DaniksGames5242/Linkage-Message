@@ -38,13 +38,13 @@ async function scan(p, where) {
   await B.waitForTimeout(1500);
   await H.send(B, "hello");
   await A.evaluate(() => document.querySelector('#tabbar .tab[data-tab="settings"]').click()); await A.waitForTimeout(600);
-  await A.evaluate(() => [...document.querySelectorAll("#settings-menu [data-tab]")].find((b) => b.dataset.tab === "language")?.click()); await A.waitForTimeout(500);
+  await A.evaluate(() => [...document.querySelectorAll("#settings-menu [data-section]")].find((b) => b.dataset.section === "language")?.click()); await A.waitForTimeout(500);
   await A.evaluate(() => [...document.querySelectorAll("button, label")].find((b) => b.textContent.trim() === "English")?.click());
   await click(A, "#settings-language-save"); await A.waitForTimeout(1500);
   await A.evaluate(() => document.getElementById("settings-back-btn")?.click()); await A.waitForTimeout(500);
-  const secs = await A.evaluate(() => [...document.querySelectorAll("#settings-menu [data-tab]")].map((b) => b.dataset.tab));
+  const secs = await A.evaluate(() => [...document.querySelectorAll("#settings-menu [data-section]")].map((b) => b.dataset.section));
   for (const s of secs) {
-    await A.evaluate((s) => document.querySelector(`#settings-menu [data-tab="${s}"]`).click(), s);
+    await A.evaluate((s) => document.querySelector(`#settings-menu [data-section="${s}"]`).click(), s);
     await A.waitForTimeout(500);
     for (let y = 0; y < 4; y++) { await scan(A, "settings/" + s); await A.evaluate(() => document.querySelectorAll(".settings-body, .settings-tab-panel:not(.hidden)").forEach((e) => (e.scrollTop += 600))); }
     await A.evaluate(() => document.getElementById("settings-back-btn")?.click()); await A.waitForTimeout(500);

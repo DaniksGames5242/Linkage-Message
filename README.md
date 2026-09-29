@@ -41,10 +41,10 @@ Firebase Authentication из коробки не умеет «просто ло�
 2. Сайт должен открываться по **HTTPS** (Vercel — да) или с `localhost`: браузеры дают доступ к камере и микрофону только так.
 3. **TURN-сервер.** Без него звонок идёт только напрямую (STUN), а в мобильных сетях и за строгими роутерами прямое соединение часто невозможно — звонок «соединяется» и обрывается. TURN пересылает звук и видео через сервер-посредник. Секрет от TURN хранится в функции Vercel [`api/turn.js`](./api/turn.js), приложение получает только временные логины и только для вошедших пользователей. Выберите один вариант и добавьте переменные в **Vercel → Project → Settings → Environment Variables**, затем сделайте Redeploy:
    - **Cloudflare Realtime TURN** (есть бесплатный объём): в панели Cloudflare → Realtime → TURN создайте ключ → `TURN_CLOUDFLARE_KEY_ID` и `TURN_CLOUDFLARE_API_TOKEN`.
-   - **Metered.ca** (есть бесплатный тариф): после регистрации → `METERED_DOMAIN` (вида `имя.metered.live`) и `METERED_API_KEY`.
+   - **Metered.ca** (есть бесплатный тариф): `METERED_DOMAIN` (вида `имя.metered.live`) и `METERED_SECRET_KEY` — секретный ключ вида `sk_secret_…` (Dashboard → Developers); если рядом показан `sk_id_…`, добавьте его как `METERED_SECRET_KEY_ID`. Вместо секретного ключа можно указать `METERED_API_KEY` — API-ключ TURN-учётки.
    - **Свой coturn**: `TURN_URLS` (через запятую, например `turn:turn.example.com:3478,turns:turn.example.com:5349`), `TURN_USERNAME`, `TURN_CREDENTIAL`.
 
-   Проверить: откройте `https://ваш-сайт/api/turn` — ответ `401 sign in required` значит, что функция задеплоена; во время звонка в консоли браузера не должно быть предупреждения «TURN credentials unavailable». Дополнительные STUN/TURN можно по-прежнему вписать вручную в [`public/ice-config.js`](./public/ice-config.js).
+   Проверить: «Настройки → Безопасность → Сервер звонков (TURN) → Проверить» — приложение получит временный ключ и попросит у TURN-сервера relay-адрес; «✓ Работает» значит, что звонки через мобильный интернет будут соединяться. Ключи никогда не хранятся в коде — только в переменных окружения Vercel. Дополнительные STUN/TURN можно по-прежнему вписать вручную в [`public/ice-config.js`](./public/ice-config.js).
 
 ### Сквозное шифрование
 

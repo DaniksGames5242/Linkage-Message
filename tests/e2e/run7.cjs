@@ -171,6 +171,15 @@ const chatOpen = (p) => p.evaluate(() => document.getElementById("sidebar").clas
     if (before.top !== after.top || Math.abs(before.off - after.off) > 4) throw new Error(JSON.stringify([before, after]));
   });
 
+  section("calls relay");
+  await L.check("Settings → Security → TURN check reports its state", async () => {
+    await H.backToList(A);
+    await A.evaluate(() => document.querySelector('#tabbar .tab[data-tab="settings"]').click()); await A.waitForTimeout(600);
+    await A.evaluate(() => document.querySelector('#settings-menu [data-section="security"]').click()); await A.waitForTimeout(500);
+    await A.evaluate(() => document.getElementById("turn-check-btn").click());
+    await L.until(A, () => /Не настроен/.test(document.getElementById("turn-check-status").textContent), null, 12000);
+  });
+
   console.log("\nerrors:\n" + [...A.errors, ...B.errors].join("\n"));
   console.log(`\n${L.passed()} passed, ${L.failures.length} failed`);
   await browser.close();

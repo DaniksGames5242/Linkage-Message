@@ -41,16 +41,18 @@ function fetchIceServers() {
       const token = await auth?.currentUser?.getIdToken?.();
       if (!token) return;
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const timer = setTimeout(() => ctrl.abort(), 9000);
       const r = await fetch("/api/turn", { headers: { Authorization: "Bearer " + token }, signal: ctrl.signal });
       clearTimeout(timer);
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || "HTTP " + r.status);
       iceCache.servers = Array.isArray(data.iceServers) ? data.iceServers : [];
       iceCache.configured = !!data.configured;
       iceCache.at = Date.now();
+      iceCache.error = null;
     } catch (err) {
-      console.warn("TURN credentials unavailable:", err.message || err);
+      iceCache.error = String(err.message || err);
+      console.warn("TURN credentials unavailable:", iceCache.error);
     } finally {
       iceCache.promise = null;
     }
@@ -65,6 +67,39 @@ async function iceServers() {
   }
   const base = window.LINKAGE_ICE_SERVERS || [{ urls: "stun:stun.l.google.com:19302" }];
   return [...base, ...(iceCache.servers || [])];
+}
+
+// Settings → Security → "Check": fetches fresh credentials and asks the
+// browser for a relay address with them — that only succeeds if the TURN
+// server really accepts them.
+export async function checkTurn() {
+  iceCache.at = 0;
+  iceCache.servers = null;
+  await fetchIceServers();
+  if (iceCache.error) return { ok: false, reason: iceCache.error };
+  const turn = (iceCache.servers || []).filter((s) => [].concat(s.urls || []).some((u) => /^turns?:/.test(u)));
+  if (!turn.length) return { ok: false, reason: "not-configured" };
+  const pc = new RTCPeerConnection({ iceServers: turn, iceTransportPolicy: "relay" });
+  try {
+    const relay = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 8000);
+      pc.onicecandidate = (e) => {
+        if (e.candidate && / typ relay /.test(e.candidate.candidate)) {
+          clearTimeout(timer);
+          resolve(true);
+        }
+        if (!e.candidate) {
+          clearTimeout(timer);
+          resolve(false);
+        }
+      };
+      pc.createDataChannel("check");
+      pc.createOffer().then((o) => pc.setLocalDescription(o));
+    });
+    return relay ? { ok: true } : { ok: false, reason: "no-relay" };
+  } finally {
+    pc.close();
+  }
 }
 
 // ---------- Public API ----------
