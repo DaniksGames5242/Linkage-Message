@@ -7062,8 +7062,11 @@ function releaseRecButton(e) {
     return;
   }
   if (!rec || rec.locked) return;
+  // Round videos judge "too short" themselves (their clock starts when the
+  // camera is live); rec.startedAt is only kept for voice.
+  if (rec.mode === "video") return endRecording(e.type === "pointerup");
   const tooShort = !rec.startedAt || performance.now() - rec.startedAt < 700;
-  if (tooShort && rec.mode === "voice") showRecTip("Удерживайте, чтобы записать, отпустите — отправить");
+  if (tooShort) showRecTip("Удерживайте, чтобы записать, отпустите — отправить");
   endRecording(e.type === "pointerup" && !tooShort);
 }
 recBtn.addEventListener("pointerup", releaseRecButton);
@@ -7886,7 +7889,7 @@ let currentLanguage = "ru";
 // swapped through the EN dictionary. User content (messages, names) is skipped.
 
 const I18N_SKIP =
-  ".bubble, .mention-name, .sm-meta, .link-bar-meta, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
+  ".bubble, .mention-name, .link-bar-meta, .msg-reply-quote, .msg-sender, .room-item:not(.pinned-item) .room-name, .pick-item-name, .search-result-name, #chat-title, #me-name, #profile-view-name, .msg-banner-title, .msg-banner-body, .pinned-bar-text, .reply-preview-text, .vp-title, .poll-q, .poll-label, textarea, input, [contenteditable], script, style";
 const I18N_ATTRS = ["placeholder", "title", "aria-label"];
 const CYRILLIC = /[А-Яа-яЁё]/;
 let i18nObserver = null;
@@ -7918,17 +7921,19 @@ function translateNode(node) {
     }
     return;
   }
-  if (node.nodeType !== 1 || node.closest(I18N_SKIP)) return;
+  if (node.nodeType !== 1) return;
+  // Tooltips and placeholders are interface text even inside messages or
+  // fields (a voice player's "Слушать", a search box's hint), so attributes
+  // are translated everywhere; text content skips user-written areas.
   const translateAttrs = (el) =>
     I18N_ATTRS.forEach((a) => {
       const v = el.getAttribute(a);
       const tr = v && translateString(v);
-      if (tr) el.setAttribute(a, tr);
+      if (tr && tr !== v) el.setAttribute(a, tr);
     });
   translateAttrs(node);
-  const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (n.nodeType === 1 && n.matches(I18N_SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
-  });
+  const skipText = !!node.closest(I18N_SKIP);
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT | (skipText ? 0 : NodeFilter.SHOW_TEXT));
   let n;
   while ((n = walker.nextNode())) {
     if (n.nodeType === 1) translateAttrs(n);
