@@ -267,7 +267,7 @@ export async function removeGroupMember(groupId, uid) {
 // Joining from an invite link: allowed by the rules when the group is public
 // or the code matches the group's current invite code.
 export async function joinGroup(groupId, uid, code) {
-  await updateDoc(doc(db, "groups", groupId), { members: arrayUnion(uid), joinCode: code || null });
+  await updateDoc(doc(db, "groups", groupId), { members: arrayUnion(uid), ...(code ? { [`joins.${uid}`]: code } : {}) });
 }
 
 export async function setGroupChecklistItem(groupId, messageId, idx, uid) {

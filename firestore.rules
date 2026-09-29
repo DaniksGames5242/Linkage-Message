@@ -197,7 +197,7 @@ service cloud.firestore {
     }
     function memberGroupUpdateOk() {
       return !request.resource.data.diff(resource.data).affectedKeys()
-          .hasAny(['admins', 'ownerId', 'settings', 'perms', 'type', 'joinCode', 'autoDelete'])
+          .hasAny(['admins', 'ownerId', 'settings', 'perms', 'type', 'joins', 'autoDelete'])
         && (!groupMembersChanged() || isSelfLeave() || isMemberAdd());
     }
     function adminGroupUpdateOk() {
@@ -207,14 +207,21 @@ service cloud.firestore {
           || (resource.data.ownerId in request.resource.data.members
             && resource.data.ownerId in request.resource.data.admins));
     }
+    // Joining from an invite link: the joiner adds only themselves and writes
+    // the code they used under their own uid (joins.<uid>), which must match
+    // the current invite code. (A single shared field would stay "valid" for
+    // everyone after the first join.)
     function isGroupJoin() {
-      return !(request.auth.uid in resource.data.members)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'joinCode'])
+      let uid = request.auth.uid;
+      let joins = request.resource.data.get('joins', {});
+      return !(uid in resource.data.members)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'joins'])
         && request.resource.data.members.hasAll(resource.data.members)
-        && request.resource.data.members.removeAll(resource.data.members).hasOnly([request.auth.uid])
+        && request.resource.data.members.removeAll(resource.data.members).hasOnly([uid])
+        && joins.diff(resource.data.get('joins', {})).affectedKeys().hasOnly([uid])
         && (gSettings(resource.data).get('isPublic', false) == true
           || (gSettings(resource.data).get('inviteCode', '') != ''
-            && request.resource.data.get('joinCode', '') == gSettings(resource.data).get('inviteCode', '')));
+            && joins.get(uid, '') == gSettings(resource.data).get('inviteCode', '')));
     }
     function groupPostOk(g) {
       return request.auth.uid in g.admins

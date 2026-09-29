@@ -3218,10 +3218,15 @@ function updateScrollBottomBtn() {
   scrollBottomBadge.classList.toggle("hidden", unreadWhileAway === 0);
 }
 let scrollBtnFrame = 0;
+// An open menu closes when *you* scroll the chat — not when a new message
+// arriving scrolls it for you (and not on the finger's jitter after a
+// long-press: the list has to actually move).
+let userScrollAt = 0;
+["wheel", "touchmove", "keydown"].forEach((type) => messagesEl.addEventListener(type, () => (userScrollAt = performance.now()), { passive: true }));
 messagesEl.addEventListener("scroll", () => {
   // Reading scroll metrics forces layout: once per frame is plenty.
   if (!scrollBtnFrame) scrollBtnFrame = requestAnimationFrame(() => ((scrollBtnFrame = 0), updateScrollBottomBtn()));
-  if (activeCtx) closeContextMenu();
+  if (activeCtx && performance.now() - userScrollAt < 200) closeContextMenu();
 }, { passive: true });
 scrollBottomBtn.addEventListener("click", () => {
   messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
