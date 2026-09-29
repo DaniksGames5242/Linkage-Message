@@ -3,6 +3,15 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Прочитать вслух": "Read aloud",
+  "Остановить чтение": "Stop reading",
+  "Перевести": "Translate",
+  "Напомнить": "Remind me",
+  "Через 20 минут": "In 20 minutes",
+  "Через 1 час": "In 1 hour",
+  "Через 3 часа": "In 3 hours",
+  "Завтра в 9:00": "Tomorrow at 9:00",
+  "⏰ Напоминание": "⏰ Reminder",
   "с": "from",
   "до": "to",
   "Открыть ссылку": "Open link",
@@ -680,6 +689,8 @@ const MONTHS = { января: "January", февраля: "February", марта
 
 // Strings with numbers or names inside.
 export const EN_PATTERNS = [
+  [/^Напомню (.+)$/, "I'll remind you $1"],
+  [/^Напоминание: ([\s\S]+)$/, "Reminder: $1"],
   [/^(\d+(?:[.,]\d+)?) (Б|КБ|МБ|ГБ)$/, (m, n, u) => `${n.replace(",", ".")} ${{ Б: "B", КБ: "KB", МБ: "MB", ГБ: "GB" }[u]}`],
   [/^Прочитали: (\d+)$/, "Read by $1"],
   [/^Новые сообщения удалятся через (.+)$/, (m, p) => `New messages will be deleted after ${{ "день": "1 day", "неделя": "1 week", "месяц": "1 month" }[p] || p}`],

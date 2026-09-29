@@ -5261,6 +5261,9 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
             .catch(() => toast("Не удалось скопировать", { tone: "error" })),
       },
       !msg.call && { label: "Переслать", icon: MI.forward, onClick: () => openForward(msg) },
+      hasText && "speechSynthesis" in window && { label: speakingMsgId === msg.id ? "Остановить чтение" : "Прочитать вслух", icon: MI.music, onClick: () => speakMessage(msg) },
+      hasText && { label: "Перевести", icon: MI.link, onClick: () => translateMessage(msg) },
+      { label: "Напомнить", icon: MI.bell, onClick: () => setTimeout(() => openReminderPicker(msg, x, y), 60) },
       canPinInCurrentChat() && {
         label: pinnedId === msg.id ? "Открепить" : "Закрепить",
         icon: MI.pin,
@@ -10305,6 +10308,102 @@ function closeTopLayer() {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeTopLayer();
+});
+
+// ---------- Read aloud, translate, reminders (all on this device) ----------
+let speakingMsgId = null;
+function speakMessage(msg) {
+  speechSynthesis.cancel();
+  if (speakingMsgId === msg.id) {
+    speakingMsgId = null;
+    return;
+  }
+  const u = new SpeechSynthesisUtterance(msg.text);
+  u.lang = /[а-яё]/i.test(msg.text) ? "ru-RU" : "en-US";
+  u.onend = u.onerror = () => speakingMsgId === msg.id && (speakingMsgId = null);
+  speakingMsgId = msg.id;
+  speechSynthesis.speak(u);
+}
+
+function translateMessage(msg) {
+  const tl = document.documentElement.lang === "en" ? "en" : "ru";
+  window.open(`https://translate.google.com/?sl=auto&tl=${tl}&op=translate&text=${encodeURIComponent(msg.text)}`, "_blank", "noopener");
+}
+
+const REMINDERS_KEY = "lm-reminders";
+const loadReminders = () => {
+  try {
+    return JSON.parse(localStorage.getItem(REMINDERS_KEY)) || [];
+  } catch (_) {
+    return [];
+  }
+};
+const saveReminders = (list) => {
+  try {
+    localStorage.setItem(REMINDERS_KEY, JSON.stringify(list));
+  } catch (_) {}
+};
+
+function openReminderPicker(msg, x, y) {
+  const add = (ms) => {
+    const at = Date.now() + ms;
+    const preview = (msg.text && !DEFAULT_CAPTIONS.includes(msg.text) ? msg.text : "Сообщение").slice(0, 120);
+    saveReminders([...loadReminders(), { at, chatId: currentChatId, kind: currentChatType, text: preview }]);
+    toast(`Напомню ${new Date(at).toLocaleString(document.documentElement.lang || "ru", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, { icon: "⏰" });
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+  };
+  const tomorrow9 = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    return d - Date.now();
+  };
+  openContextMenu({
+    x,
+    y,
+    items: [
+      { label: "Через 20 минут", icon: MI.clock, onClick: () => add(20 * 60e3) },
+      { label: "Через 1 час", icon: MI.clock, onClick: () => add(60 * 60e3) },
+      { label: "Через 3 часа", icon: MI.clock, onClick: () => add(3 * 60 * 60e3) },
+      { label: "Завтра в 9:00", icon: MI.clock, onClick: () => add(tomorrow9()) },
+    ],
+  });
+}
+
+function checkReminders() {
+  const list = loadReminders();
+  const now = Date.now();
+  const due = list.filter((r) => r.at <= now);
+  if (!due.length) return;
+  saveReminders(list.filter((r) => r.at > now));
+  due.forEach((r) => {
+    toast(`Напоминание: ${r.text}`, { icon: "⏰", duration: 6000 });
+    if (document.hidden) systemNotify("⏰ Напоминание", r.text, { chatId: r.chatId, kind: r.kind });
+  });
+}
+setInterval(checkReminders, 20e3);
+setTimeout(checkReminders, 3000);
+
+// ---------- Keyboard shortcuts ----------
+// Ctrl/Cmd+K — search, Alt+↑/↓ — previous/next chat, Ctrl+F in a chat — search in chat.
+document.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.shiftKey && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    const inp = document.getElementById("search-input");
+    inp?.focus();
+    inp?.select();
+  } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+    const rows = [...chatListEl.querySelectorAll(".room-item")];
+    if (!rows.length) return;
+    e.preventDefault();
+    const i = rows.findIndex((r) => r.classList.contains("active"));
+    const next = rows[i < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, i + (e.key === "ArrowUp" ? -1 : 1)))];
+    if (next && next !== rows[i]) next.click();
+  } else if (mod && !e.shiftKey && e.key.toLowerCase() === "f" && currentChatId && !chatSearchBtn.classList.contains("hidden")) {
+    e.preventDefault();
+    chatSearchBtn.click();
+  }
 });
 
 // ---------- Settings → Security: check the call relay (TURN) ----------
