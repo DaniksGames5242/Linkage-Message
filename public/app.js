@@ -98,6 +98,7 @@ import {
   attachPasswordToggle,
   EMOJI_PICKER_SET,
   REACTION_EMOJIS,
+  uiLocale,
 } from "./utils.js";
 import { uploadToCloudinary, prepareImageForUpload, uploadsConfigured } from "./upload.js";
 import {
@@ -844,7 +845,7 @@ function openContactProfile(uid, profile) {
     2,
     "Дата рождения",
     canSeeProfileField(profile, uid, "birthdayVisibility") && profile.birthday
-      ? new Date(profile.birthday + "T00:00:00").toLocaleDateString([], { day: "2-digit", month: "long", year: "numeric" })
+      ? new Date(profile.birthday + "T00:00:00").toLocaleDateString(uiLocale(), { day: "2-digit", month: "long", year: "numeric" })
       : ""
   );
 
@@ -946,7 +947,7 @@ function renderSharedMedia(show) {
         row.innerHTML = `<span class="sm-icon">${icon}</span><span class="sm-meta"><span class="sm-title"></span><span class="sm-sub"></span></span><span class="sm-date"></span>`;
         row.querySelector(".sm-title").textContent = title;
         row.querySelector(".sm-sub").textContent = sub;
-        row.querySelector(".sm-date").textContent = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleDateString([], { day: "numeric", month: "short" }) : "";
+        row.querySelector(".sm-date").textContent = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleDateString(uiLocale(), { day: "numeric", month: "short" }) : "";
         row.addEventListener("click", () => (sharedTab === "links" ? window.open(url, "_blank", "noopener") : jumpToShared(m)));
         body.appendChild(row);
       });
@@ -982,7 +983,7 @@ function openGroupInfo(group) {
   profileViewAvatar.innerHTML = groupAvatarHTML(group);
   profileViewName.textContent = group.name;
   profileViewUsername.textContent = group.type === "channel" ? "Канал" : "Группа";
-  setProfileViewRow(0, "Участники", pluralMembers((group.members || []).length));
+  setProfileViewRow(0, group.type === "channel" ? "Подписчики" : "Участники", pluralMembers((group.members || []).length, group.type));
   setProfileViewRow(1, "", "");
   setProfileViewRow(2, "", "");
 
@@ -1424,11 +1425,12 @@ newChatGroupCreateBtn.addEventListener("click", async () => {
   newChatGroupCreateBtn.disabled = true;
   try {
     const memberUids = Array.from(pendingGroupMembers.keys());
+    const avatarColor = colorForUid(name + Date.now());
     const groupId = await createGroup({
       type: pendingGroupType,
       name,
       avatarImage: pendingGroupAvatarImage,
-      avatarColor: colorForUid(name + Date.now()),
+      avatarColor,
       ownerId: currentUser.uid,
       memberUids,
     });
@@ -1437,7 +1439,7 @@ newChatGroupCreateBtn.addEventListener("click", async () => {
       type: pendingGroupType,
       name,
       avatarImage: pendingGroupAvatarImage,
-      avatarColor: colorForUid(name),
+      avatarColor,
       ownerId: currentUser.uid,
       admins: [currentUser.uid],
       members: [currentUser.uid, ...memberUids],
@@ -1888,10 +1890,10 @@ function fmtListTime(ts) {
   if (!ts?.toDate) return "";
   const d = ts.toDate();
   const now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(uiLocale(), { hour: "2-digit", minute: "2-digit" });
   const diffDays = (now - d) / 86400000;
-  if (diffDays < 6) return d.toLocaleDateString([], { weekday: "short" });
-  return d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
+  if (diffDays < 6) return d.toLocaleDateString(uiLocale(), { weekday: "short" });
+  return d.toLocaleDateString(uiLocale(), { day: "2-digit", month: "2-digit" });
 }
 
 const ICON_MUTED =
@@ -2076,12 +2078,20 @@ function openContextMenu({ x, y, reactions = null, items }) {
 
 // Long-press (touch) + right-click (mouse) both open a context menu.
 function onContextGesture(el, handler) {
-  el.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    handler(e.clientX, e.clientY);
-  });
   let timer = null;
   let start = null;
+  let touchMenuAt = 0;
+  el.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    // Android fires its own contextmenu on a long press too: one menu only.
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+      touchMenuAt = Date.now();
+      el._suppressClick = true;
+    } else if (Date.now() - touchMenuAt < 1500) return;
+    handler(e.clientX, e.clientY);
+  });
   el.addEventListener(
     "touchstart",
     (e) => {
@@ -2090,6 +2100,7 @@ function onContextGesture(el, handler) {
       start = { x: t.clientX, y: t.clientY };
       timer = setTimeout(() => {
         timer = null;
+        touchMenuAt = Date.now();
         el._suppressClick = true;
         if (navigator.vibrate) navigator.vibrate(12);
         handler(start.x, start.y);
@@ -2109,8 +2120,14 @@ function onContextGesture(el, handler) {
     },
     { passive: true }
   );
-  el.addEventListener("touchend", cancel, { passive: true });
-  el.addEventListener("touchcancel", cancel, { passive: true });
+  // The click that may follow a long press is swallowed; if the browser
+  // doesn't send one, the next real tap must still work.
+  const release = () => {
+    cancel();
+    if (el._suppressClick) setTimeout(() => (el._suppressClick = false), 350);
+  };
+  el.addEventListener("touchend", release, { passive: true });
+  el.addEventListener("touchcancel", release, { passive: true });
   el.addEventListener(
     "click",
     (e) => {
@@ -3209,7 +3226,14 @@ function onCurrentChatDataChanged() {
     const fresh = groups.find((g) => g.id === currentChatId);
     if (fresh) {
       currentGroupRef = fresh;
-      chatSub.textContent = pluralMembers((fresh.members || []).length);
+      chatSub.textContent = pluralMembers((fresh.members || []).length, fresh.type);
+      // Renamed or new photo from another admin.
+      if (chatTitle.textContent !== fresh.name) chatTitle.textContent = fresh.name;
+      const av = groupAvatarHTML(fresh);
+      if (chatHeaderAvatar._html !== av) {
+        chatHeaderAvatar.innerHTML = av;
+        chatHeaderAvatar._html = av;
+      }
       applyGroupComposerState(fresh);
     }
   }
@@ -3575,12 +3599,8 @@ function pluralRu(n, one, few, many) {
   return many;
 }
 
-function pluralMembers(n) {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${n} участник`;
-  if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return `${n} участника`;
-  return `${n} участников`;
+function pluralMembers(n, type) {
+  return `${n} ${type === "channel" ? pluralRu(n, "подписчик", "подписчика", "подписчиков") : pluralRu(n, "участник", "участника", "участников")}`;
 }
 
 let groupSenderCache = new Map();
@@ -3615,9 +3635,9 @@ function openGroupChat(group) {
   groupSenderCache = new Map();
   currentClearedAt = group.clearedFor?.[currentUser.uid]?.toMillis?.() || 0;
 
-  chatHeaderAvatar.innerHTML = groupAvatarHTML(group);
+  chatHeaderAvatar.innerHTML = chatHeaderAvatar._html = groupAvatarHTML(group);
   chatTitle.textContent = group.name;
-  chatSub.textContent = pluralMembers((group.members || []).length);
+  chatSub.textContent = pluralMembers((group.members || []).length, group.type);
   chatMenuBtn.classList.remove("hidden");
 
   const canPost = applyGroupComposerState(group);
@@ -3723,7 +3743,7 @@ function rerenderMessages() {
 
 function fmtScheduleTime(msOrTs) {
   const d = new Date(typeof msOrTs === "number" ? msOrTs : msOrTs?.toMillis?.() || 0);
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString(uiLocale(), { hour: "2-digit", minute: "2-digit" });
   const today = new Date();
   const tomorrow = new Date(Date.now() + 86400000);
   if (d.toDateString() === today.toDateString()) return `сегодня в ${time}`;
@@ -5294,7 +5314,8 @@ function toggleSelected(row) {
   if (on) selection.ids.add(id);
   else selection.ids.delete(id);
   row.classList.toggle("selected", on);
-  animate(row.querySelector(".msg-group") || row, [{ transform: "scale(.97)" }, { transform: "none" }], { spring: "jelly" });
+  // Added on top of the select-mode shift, so the bubble doesn't jump back.
+  animate(row.querySelector(".msg-group") || row, [{ transform: "scale(.97)" }, { transform: "scale(1)" }], { spring: "jelly", composite: "add" });
   updateSelectBars();
 }
 
@@ -5686,10 +5707,13 @@ async function updateMentions() {
   if (!m) return closeMentions();
   const q = m[1].toLowerCase();
   const profiles = await memberProfiles(currentGroupRef?.members || []);
+  // Typed on (or sent) while the profiles loaded: a newer call handles it.
+  if (msgInput.value.slice(0, caret) !== before || (msgInput.selectionStart ?? caret) !== caret) return;
   const items = profiles
     .filter(([uid, p]) => uid !== currentUser.uid && (p.username.toLowerCase().startsWith(q) || (p.displayName || "").toLowerCase().startsWith(q)))
     .slice(0, 6);
-  if (!items.length) return closeMentions();
+  // A fully typed @username has nothing left to suggest — Enter should send.
+  if (!items.length || (items.length === 1 && items[0][1].username.toLowerCase() === q)) return closeMentions();
   const wasOpen = !!mentionState;
   mentionState = { start: caret - m[1].length - 1, end: caret, items, index: 0 };
   if (!mentionBox.isConnected) composer.before(mentionBox);
@@ -8246,7 +8270,7 @@ function openSettings() {
   settingsProfileLink.textContent = profileLink();
   updateProfileCounters();
   settingsCreatedAt.textContent = myProfile.createdAt?.toDate
-    ? myProfile.createdAt.toDate().toLocaleDateString([], { day: "2-digit", month: "long", year: "numeric" })
+    ? myProfile.createdAt.toDate().toLocaleDateString(uiLocale(), { day: "2-digit", month: "long", year: "numeric" })
     : "—";
 
   privacyLastseen.value = myProfile.privacy?.lastSeenVisibility || "everyone";
@@ -9733,7 +9757,7 @@ async function renderGroupMembers(group) {
   const isAdmin = (group.admins || []).includes(me);
   const canAdd = groupCan(group, me, "add");
   profileMembers.classList.remove("hidden");
-  profileMembersTitle.textContent = pluralMembers((group.members || []).length);
+  profileMembersTitle.textContent = pluralMembers((group.members || []).length, group.type);
   profileMembersAdd.classList.toggle("hidden", !canAdd);
   profileMembersInput.value = "";
   profileMembersResult.innerHTML = "";
@@ -10041,6 +10065,17 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (activeCtx) {
     closeContextMenu();
+    return;
+  }
+  // Dialogs built in JS (list, contact, folder, privacy) close like the rest.
+  const modal = [...document.querySelectorAll(".modal-overlay.open")].pop();
+  if (modal) {
+    const cancel = modal.querySelector('[data-act="cancel"], [data-act="done"]');
+    if (cancel) cancel.click();
+    else {
+      modal.classList.remove("open");
+      setTimeout(() => modal.remove(), 220);
+    }
     return;
   }
   if (selection.active) {

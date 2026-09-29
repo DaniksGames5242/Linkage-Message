@@ -255,6 +255,11 @@ export function tilt(el, max = 6) {
 // ---------- Overlays ----------
 
 const openOverlays = [];
+// Floating chrome (the tab bar) steps aside while a dialog is up; full-screen
+// pages (settings) keep it.
+function syncModalState() {
+  document.documentElement.classList.toggle("modal-open", openOverlays.some((o) => !o.classList.contains("as-page")));
+}
 
 // Opens a modal so its panel inflates out of the point the user tapped,
 // like a drop of liquid glass, then settles on a spring.
@@ -269,6 +274,7 @@ export function showOverlay(overlay, { origin } = {}) {
     pauseBackdrop(true);
   }
   if (!openOverlays.includes(overlay)) openOverlays.push(overlay);
+  syncModalState();
   if (!wasHidden) return;
 
   const panel = overlay.firstElementChild;
@@ -324,6 +330,7 @@ export function hideOverlay(overlay) {
   }
   const idx = openOverlays.indexOf(overlay);
   if (idx >= 0) openOverlays.splice(idx, 1);
+  syncModalState();
   const panel = overlay.firstElementChild;
   const duration = reducedMotion ? 80 : 260;
   // Closing right after opening continues from the current frame.

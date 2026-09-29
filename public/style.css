@@ -4041,7 +4041,8 @@ mark.search-mark {
 
 .date-sep {
   position: sticky;
-  top: 4px;
+  /* Sticks under the floating header, not behind it. */
+  top: calc(var(--header-space) + 6px);
   z-index: 2;
   align-self: center;
   margin: 12px 0 10px;
@@ -8738,6 +8739,12 @@ html.privacy-veil .settings-panel {
   bottom: 96px;
 }
 
+html.modal-open #tabbar {
+  transform: translateY(140%);
+  opacity: 0;
+  pointer-events: none;
+}
+
 .fx-lite #tabbar {
   background: var(--glass-tint), rgba(26, 20, 17, 0.97);
 }
@@ -8800,10 +8807,66 @@ html.privacy-veil .settings-panel {
 .camera-overlay.recording .camera-shutter span { background: #e53935; transform: scale(.55); border-radius: 22%; }
 
 /* Group privacy sheet */
-.modal-overlay { position: fixed; inset: 0; z-index: 300; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.35); opacity: 0; transition: opacity .2s ease; }
+/* Small dialogs built in JS (list, contact, folder, group privacy): same
+   glass look, backdrop and inputs as the rest of the app's dialogs. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: radial-gradient(1200px 800px at 50% 40%, rgba(12, 8, 6, 0.35), rgba(6, 4, 3, 0.7));
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
 .modal-overlay.open { opacity: 1; }
-.modal-overlay .modal-card { width: min(420px, 100%); max-height: 90vh; overflow-y: auto; padding: 20px; border-radius: 22px; background: var(--panel, var(--bg, #fff)); display: flex; flex-direction: column; gap: 10px; transform: translateY(14px) scale(.97); transition: transform .3s cubic-bezier(.2,1.3,.4,1); }
-.modal-overlay.open .modal-card { transform: none; }
+.fx-lite .modal-overlay { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(6, 4, 3, 0.78); }
+.modal-overlay .modal-card {
+  position: relative;
+  width: min(420px, 100%);
+  max-height: 86vh;
+  max-height: 86dvh;
+  overflow-y: auto;
+  padding: 22px;
+  border-radius: 28px;
+  background: var(--glass-tint), var(--glass);
+  border: 1px solid var(--stroke);
+  box-shadow: var(--glass-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  opacity: 0;
+  transform: translateY(18px) scale(0.96);
+  transition: transform var(--dur-bouncy, 0.5s) var(--ease-bouncy), opacity 0.2s ease;
+}
+.modal-overlay.open .modal-card { transform: none; opacity: 1; }
+.modal-card input:not([type]),
+.modal-card input[type="text"] {
+  width: 100%;
+  border: 1px solid var(--stroke);
+  background: var(--field-bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14.5px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.3s var(--ease-out), background 0.2s;
+}
+.modal-card input::placeholder { color: var(--text-faint); }
+.modal-card input:focus {
+  background: var(--field-bg-focus);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+body:has(.modal-overlay.open) #tabbar {
+  transform: translateY(140%);
+  opacity: 0;
+  pointer-events: none;
+}
 .modal-card h3 { margin: 0 0 4px; }
 .modal-card .hint { margin: 0; font-size: 13px; opacity: .7; }
 .seg { display: flex; padding: 3px; border-radius: 12px; background: rgba(127,127,127,.14); }
@@ -9281,3 +9344,33 @@ html[lang="en"] .room-item.swipe-unarchive::after { content: "Unarchive"; }
 .msg-row .msg-group > .msg-actions { top: 2px; }
 .msg-row:not(.me) .msg-group > .msg-actions { left: calc(100% + 6px); right: auto; transform-origin: left center; }
 .msg-row.me .msg-group > .msg-actions { right: calc(100% + 6px); left: auto; transform-origin: right center; }
+
+/* App chrome isn't text: a long press or a drag across the list, tabs or
+   headers must not start a text selection (or the iOS callout). */
+#sidebar,
+#tabbar,
+#chat-header,
+#folder-tabs,
+.ctx-menu,
+.select-top,
+.select-bottom,
+.settings-menu,
+button {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+#sidebar input,
+#sidebar textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* On touch screens a long press on a message opens its menu (with "Copy"),
+   so the browser's own selection handles and callout would fight it. */
+@media (hover: none) {
+  #messages .msg-row {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}

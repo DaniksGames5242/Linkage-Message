@@ -38,7 +38,7 @@ export function chatIdFor(uidA, uidB) {
 
 export function fmtTime(ts) {
   if (!ts || !ts.toDate) return "";
-  return ts.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return ts.toDate().toLocaleTimeString(uiLocale(), { hour: "2-digit", minute: "2-digit" });
 }
 
 export function fmtRelative(ts) {
@@ -51,7 +51,7 @@ export function fmtRelative(ts) {
   if (hrs < 24) return `${hrs} ч. назад`;
   const days = Math.floor(hrs / 24);
   if (days < 7) return `${days} дн. назад`;
-  return ts.toDate().toLocaleDateString();
+  return ts.toDate().toLocaleDateString(uiLocale());
 }
 
 // `ts` may be a timestamp or a whole profile ({ online, lastSeenAt }).
@@ -126,7 +126,7 @@ export function attachPasswordToggle(inputEl, btnEl) {
 
 export function fmtDateTime(ts) {
   if (!ts || !ts.toDate) return "";
-  return ts.toDate().toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return ts.toDate().toLocaleString(uiLocale(), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 // Rough, best-effort "Browser on OS" label for login history entries.
@@ -196,3 +196,9 @@ export const EMOJI_PICKER_SET = [
 ];
 
 export const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+// Dates follow the app's language, not the device's: a Russian interface on
+// an English phone must still say 18:05, not 06:05 PM.
+export function uiLocale() {
+  return document.documentElement.lang === "en" ? [] : "ru-RU";
+}

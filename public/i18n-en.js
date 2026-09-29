@@ -476,6 +476,12 @@ export const EN = {
   "Прикрепить файл": "Attach",
   "Принять": "Accept",
   "Пропущенный звонок": "Missed call",
+  "Пропущенный видеозвонок": "Missed video call",
+  "Отклонённый звонок": "Declined call",
+  "Отклонённый видеозвонок": "Declined video call",
+  "Отменённый звонок": "Cancelled call",
+  "Отменённый видеозвонок": "Cancelled video call",
+  "Фото": "Photo",
   "Профиль": "Profile",
   "Публикуем видео в историю": "Posting video to your story",
   "Публичный опрос": "Public poll",
@@ -572,6 +578,7 @@ export const EN = {
   "Уже занят": "Already taken",
   "Участник": "Member",
   "Участники": "Members",
+  "Подписчики": "Subscribers",
   "Файл": "File",
   "Файл не похож на изображение": "This doesn't look like an image",
   "Файл слишком большой для бесплатного тарифа Cloudinary": "The file is too large for Cloudinary's free plan",
@@ -675,8 +682,10 @@ export const EN_PATTERNS = [
   [/^(\d+) из 5 очков$/, "$1 of 5 points"],
   [/^(\d+) голос(а|ов)?$/, (m, n) => `${n} vote${n === "1" ? "" : "s"}`],
   [/^(\d+) участник(а|ов)?$/, (m, n) => `${n} member${n === "1" ? "" : "s"}`],
+  [/^(\d+) подписчик(а|ов)?$/, (m, n) => `${n} subscriber${n === "1" ? "" : "s"}`],
   [/^был\(а\) (.+)$/, "last seen $1"],
-  [/^Вы: (.*)$/s, "You: $1"],
+  [/^Вы: (.*)$/s, (m, rest) => "You: " + trEN(rest)],
+  [/^(Звонок|Видеозвонок) · (.+)$/, (m, k, d) => `${k === "Звонок" ? "Call" : "Video call"} · ${d}`],
   [/^(\d+) мин\. назад$/, "$1 min ago"],
   [/^(\d+) ч\. назад$/, "$1 h ago"],
   [/^Сегодня в (.+)$/, "Today at $1"],
@@ -686,4 +695,13 @@ export const EN_PATTERNS = [
   [/^Сообщение будет отправлено (.+)$/, "The message will be sent $1"],
   [/^Слишком много попыток\. Подождите (\d+) с$/, "Too many attempts. Wait $1 s"],
   [/^Звонок завершён · (.+)$/, "Call ended · $1"],
+  // Previews like "📷 Фото" or "📞 Пропущенный звонок": keep the emoji.
+  [/^(\p{Extended_Pictographic}\uFE0F?) (.+)$/su, (m, e, rest) => `${e} ${trEN(rest)}`],
 ];
+
+// Translates a nested piece of a pattern (the text after "Вы: " or an emoji).
+function trEN(s) {
+  if (EN[s] !== undefined) return EN[s];
+  for (const [re, rep] of EN_PATTERNS) if (re.test(s)) return s.replace(re, rep);
+  return s;
+}
