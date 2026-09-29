@@ -72,7 +72,7 @@ import { addStory, deleteStory, listenRecentStories, STORY_LIFETIME_MS,
   listenStoryComments,
 } from "./stories.js";
 import { updateProfileFields, changeUsername, updatePrivacy, updateNotifications, toggleUserListValue } from "./settings.js";
-import { initCalls, startCall, fmtDuration } from "./call-ui.js";
+import { initCalls, startCall, fmtDuration, stopCalls } from "./call-ui.js";
 import { emojiOnly, animatedEmoji, emojiEffect, emojiPop, holdEmojiPlayback } from "./emoji-anim.js";
 import { EMOJI_GROUPS, ANIMATED_EMOJI } from "./emoji-data.js";
 import { EFFECTS, playEffect } from "./effects.js";
@@ -644,6 +644,7 @@ function listenMyLists() {
 }
 
 function cleanupSubscriptions() {
+  stopCalls();
   unsubMyLists?.();
   unsubMyLists = null;
   if (unsubChats) unsubChats();

@@ -73,7 +73,8 @@ export function initCalls(context) {
   ctx = context;
   buildDOM();
   setTimeout(fetchIceServers, 3000);
-  listenIncomingCalls(ctx.me, onIncomingList, (err) => {
+  stopCalls();
+  unsubIncoming = listenIncomingCalls(ctx.me, onIncomingList, (err) => {
     if (err?.code === "permission-denied") {
       console.warn("Calls are disabled until the updated firestore.rules are published.");
     }
@@ -81,6 +82,13 @@ export function initCalls(context) {
   window.addEventListener("beforeunload", () => {
     if (call) hangUp();
   });
+}
+
+let unsubIncoming = null;
+// Logout / account deletion: stop listening for calls.
+export function stopCalls() {
+  if (typeof unsubIncoming === "function") unsubIncoming();
+  unsubIncoming = null;
 }
 
 export function isInCall() {
