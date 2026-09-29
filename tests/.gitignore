@@ -1,0 +1,4 @@
+node_modules/
+# copied from ../firestore.rules before each run
+firestore.rules
+*-debug.log
