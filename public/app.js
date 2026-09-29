@@ -1558,13 +1558,29 @@ function renderStoriesStrip() {
   const myBubble = document.createElement("div");
   myBubble.className = "story-bubble";
   myBubble.innerHTML = `
-    <div class="story-ring${myStories.length ? "" : " story-add-badge"}">${avatarHTML(myProfile, currentUser.uid)}</div>
-    <div class="story-bubble-label">Вы</div>
+    <div class="story-ring${myStories.length ? "" : " story-add-badge"}">${avatarHTML(myProfile, currentUser.uid)}<button type="button" class="story-add-btn" title="Добавить историю" aria-label="Добавить историю">+</button></div>
+    <div class="story-bubble-label">${myStories.length ? "Вы" : "Добавить"}</div>
   `;
+  // "+" always adds a story (even when you already have some); the avatar
+  // shows yours, or adds one if there are none yet.
+  myBubble.querySelector(".story-add-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    storyAddInput.click();
+  });
   myBubble.addEventListener("click", () => {
     if (myStories.length > 0) openStoryViewer(currentUser.uid, myProfile, myStories);
     else storyAddInput.click();
   });
+  onContextGesture(myBubble, (x, y) =>
+    openContextMenu({
+      x,
+      y,
+      items: [
+        { label: "Добавить историю", icon: MI.plus, onClick: () => storyAddInput.click() },
+        myStories.length > 0 && { label: "Мои истории", icon: MI.eye, onClick: () => openStoryViewer(currentUser.uid, myProfile, myStories) },
+      ].filter(Boolean),
+    })
+  );
   storiesStripEl.appendChild(myBubble);
 
   const otherEntries = Array.from(byOwner.entries())
@@ -1956,6 +1972,7 @@ function buildRoomItem({ key, chatId, avatar, name, last, lastAt, unread = 0, mu
 // ---------- Context menus ----------
 
 const MI = {
+  plus: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
   timer: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg>',
   eye: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
   unread: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/><circle cx="19" cy="5" r="3" fill="currentColor"/></svg>',

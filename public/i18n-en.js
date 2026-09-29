@@ -482,6 +482,8 @@ export const EN = {
   "Отменённый звонок": "Cancelled call",
   "Отменённый видеозвонок": "Cancelled video call",
   "Фото": "Photo",
+  "Мои истории": "My stories",
+  "Добавить историю": "Add story",
   "Сервер звонков (TURN)": "Call relay (TURN)",
   "Нужен, чтобы звонки соединялись через мобильный интернет и строгие роутеры": "Lets calls connect over mobile data and strict routers",
   "Проверить": "Check",
