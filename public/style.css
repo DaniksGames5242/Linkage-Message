@@ -9390,3 +9390,12 @@ html.is-offline .chat-header-meta::after {
   animation: onlinePulse 1.6s ease-in-out infinite;
 }
 html.is-offline[lang="en"] .chat-header-meta::after { content: "waiting for network…"; }
+
+/* iOS keyboard: the chat takes exactly the visible part of the screen. */
+@media (max-width: 720px) {
+  html.kb-open #chat {
+    top: var(--vv-top, 0px);
+    bottom: auto;
+    height: var(--vv-h, 100%);
+  }
+}

@@ -4,7 +4,7 @@ import {
   collection,
   query,
   orderBy,
-  limit,
+  limitToLast,
   onSnapshot,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -27,7 +27,7 @@ export function listenNotificationsFeed(uid, onChange) {
   }
 
   const unsubPersonal = onSnapshot(
-    query(collection(db, "users", uid, "systemChat"), orderBy("createdAt", "asc"), limit(200)),
+    query(collection(db, "users", uid, "systemChat"), orderBy("createdAt", "asc"), limitToLast(200)),
     (snap) => {
       personal = snap.docs.map((d) => ({ id: "p_" + d.id, ...d.data(), source: "personal" }));
       emit();
@@ -35,7 +35,7 @@ export function listenNotificationsFeed(uid, onChange) {
   );
 
   const unsubBroadcasts = onSnapshot(
-    query(collection(db, "broadcasts"), orderBy("createdAt", "asc"), limit(200)),
+    query(collection(db, "broadcasts"), orderBy("createdAt", "asc"), limitToLast(200)),
     (snap) => {
       broadcasts = snap.docs.map((d) => ({ id: "b_" + d.id, ...d.data(), source: "broadcast" }));
       emit();

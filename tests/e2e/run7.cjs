@@ -111,6 +111,24 @@ const chatOpen = (p) => p.evaluate(() => document.getElementById("sidebar").clas
     await L.until(B, () => [...document.querySelectorAll(".msg-row:not(.me) img.msg-image")].some((i) => i.naturalWidth > 0), null, 15000);
   });
 
+  await L.check("pulling the photo viewer down closes it", async () => {
+    await A.evaluate(() => [...document.querySelectorAll(".msg-row.me img.msg-image")].pop().click());
+    await L.until(A, () => !document.getElementById("lightbox").classList.contains("hidden"));
+    await A.waitForTimeout(600);
+    await T.swipe(195, 400, 198, 620, 12);
+    await L.until(A, () => document.getElementById("lightbox").classList.contains("hidden"));
+  });
+  await L.check("pulling a story down closes it", async () => {
+    await H.backToList(A);
+    await A.setInputFiles("#story-add-input", path.join(__dirname, "fixtures", "pic.png"));
+    await A.waitForTimeout(2500);
+    await A.evaluate(() => document.querySelector("#stories-strip .story-bubble .avatar")?.click());
+    await L.until(A, () => !document.getElementById("story-viewer-overlay").classList.contains("hidden"));
+    await A.waitForTimeout(700);
+    await T.swipe(195, 300, 197, 560, 12);
+    await L.until(A, () => document.getElementById("story-viewer-overlay").classList.contains("hidden"));
+  });
+
   section("long history");
   const info = () => A.evaluate(() => {
     const m = document.getElementById("messages"); const b = m.getBoundingClientRect();

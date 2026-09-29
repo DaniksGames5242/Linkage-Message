@@ -10,7 +10,6 @@ import {
   query,
   where,
   orderBy,
-  limit,
   limitToLast,
   onSnapshot,
   serverTimestamp,

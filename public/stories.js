@@ -8,6 +8,7 @@ import {
   where,
   orderBy,
   limit,
+  limitToLast,
   onSnapshot,
   serverTimestamp,
   Timestamp,
@@ -67,7 +68,7 @@ export async function deleteStoryComment(storyId, commentId) {
 }
 
 export function listenStoryComments(storyId, onChange) {
-  const q = query(collection(db, "stories", storyId, "comments"), orderBy("createdAt", "asc"), limit(200));
+  const q = query(collection(db, "stories", storyId, "comments"), orderBy("createdAt", "asc"), limitToLast(200));
   return onSnapshot(
     q,
     (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),

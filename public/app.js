@@ -1816,8 +1816,9 @@ function closeStoryViewer() {
   activeStoryGroup = null;
 }
 
-storyPrevBtn.addEventListener("click", () => showStoryAt(activeStoryIndex - 1));
-storyNextBtn.addEventListener("click", () => showStoryAt(activeStoryIndex + 1));
+storyPrevBtn.addEventListener("click", () => storyViewerOverlay._dragged || showStoryAt(activeStoryIndex - 1));
+storyNextBtn.addEventListener("click", () => storyViewerOverlay._dragged || showStoryAt(activeStoryIndex + 1));
+attachPullToClose(storyViewerOverlay, storyViewerOverlay.querySelector(".story-viewer"), closeStoryViewer);
 storyCloseBtn.addEventListener("click", closeStoryViewer);
 
 storyDeleteBtn.addEventListener("click", async () => {
@@ -5577,6 +5578,9 @@ function openLightbox(img) {
   lightboxSource = img;
   lightboxImg.src = img.src;
   lightboxDownload.href = img.src;
+  // Decrypted photos live in a blob: URL — save them instead of opening a tab.
+  if (img.src.startsWith("blob:")) lightboxDownload.download = "photo.jpg";
+  else lightboxDownload.removeAttribute("download");
   lightboxEl.classList.remove("hidden");
   const from = img.getBoundingClientRect();
   const to = lightboxImg.getBoundingClientRect();
@@ -5596,12 +5600,15 @@ function closeLightbox() {
     lightboxEl.classList.add("hidden");
     lightboxEl.getAnimations({ subtree: true }).forEach((a) => a.cancel());
   };
+  const pulled = lightboxImg.style.transform;
+  lightboxImg.style.transform = "";
   const from = lightboxImg.getBoundingClientRect();
   const to = lightboxSource?.isConnected ? lightboxSource.getBoundingClientRect() : null;
   if (to && to.width && !reducedMotion) {
     const dx = to.left + to.width / 2 - (from.left + from.width / 2);
     const dy = to.top + to.height / 2 - (from.top + from.height / 2);
-    lightboxImg.animate([{ transform: "none" }, { transform: `translate(${dx}px, ${dy}px) scale(${to.width / from.width})` }], {
+    // (From where a pull-down left it, if it was pulled.)
+    lightboxImg.animate([{ transform: pulled || "none" }, { transform: `translate(${dx}px, ${dy}px) scale(${to.width / from.width})` }], {
       duration: 300,
       easing: "cubic-bezier(.4,0,.2,1)",
       fill: "forwards",
@@ -5613,8 +5620,67 @@ function closeLightbox() {
 }
 
 lightboxEl.addEventListener("click", (e) => {
+  if (lightboxEl._dragged) return (lightboxEl._dragged = false);
   if (!e.target.closest(".lightbox-bar")) closeLightbox();
 });
+
+// Pull a full-screen viewer down to close it (photo viewer, stories), like
+// in Telegram: it follows the finger and fades; let go past the line to close.
+function attachPullToClose(el, moving, onClose) {
+  let y0 = null;
+  let x0 = 0;
+  let dy = 0;
+  let pulling = false;
+  el.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length !== 1 || e.target.closest("input, textarea, .story-comments, .lightbox-bar")) return (y0 = null);
+      y0 = e.touches[0].clientY;
+      x0 = e.touches[0].clientX;
+      dy = 0;
+      pulling = false;
+    },
+    { passive: true }
+  );
+  el.addEventListener(
+    "touchmove",
+    (e) => {
+      if (y0 === null || e.touches.length !== 1) return;
+      const my = e.touches[0].clientY - y0;
+      const mx = e.touches[0].clientX - x0;
+      if (!pulling) {
+        if (my < 12 || Math.abs(mx) > my) return;
+        pulling = true;
+        el._dragged = true;
+      }
+      dy = Math.max(0, my);
+      moving.style.transform = `translateY(${dy}px) scale(${1 - Math.min(dy, 400) / 1600})`;
+      el.style.opacity = String(1 - Math.min(dy, 500) / 700);
+    },
+    { passive: true }
+  );
+  const end = () => {
+    if (!pulling) return (y0 = null);
+    pulling = false;
+    y0 = null;
+    setTimeout(() => (el._dragged = false), 350);
+    if (dy > 110) {
+      onClose();
+      setTimeout(() => {
+        moving.style.transform = "";
+        el.style.opacity = "";
+      }, 400);
+      return;
+    }
+    const from = moving.style.transform;
+    moving.style.transform = "";
+    el.style.opacity = "";
+    animate(moving, [{ transform: from }, { transform: "none" }], { spring: "bouncy" });
+  };
+  el.addEventListener("touchend", end, { passive: true });
+  el.addEventListener("touchcancel", end, { passive: true });
+}
+attachPullToClose(lightboxEl, lightboxImg, closeLightbox);
 document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
 
 function centerOfPoint(el) {
@@ -10223,6 +10289,26 @@ function closeTopLayer() {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeTopLayer();
 });
+
+// ---------- On-screen keyboard ----------
+// Android resizes the page for the keyboard (interactive-widget in the
+// viewport meta). iOS doesn't: there the chat follows the visible area by
+// hand, so the header stays on screen and the composer sits on the keyboard.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const root = document.documentElement;
+  const syncKeyboard = () => {
+    const open = window.innerHeight - vv.height > 120;
+    root.classList.toggle("kb-open", open);
+    if (open) {
+      root.style.setProperty("--vv-top", vv.offsetTop + "px");
+      root.style.setProperty("--vv-h", vv.height + "px");
+    }
+  };
+  vv.addEventListener("resize", syncKeyboard);
+  vv.addEventListener("scroll", syncKeyboard);
+  syncKeyboard();
+}
 
 // ---------- Connection state ----------
 // Like Telegram: "Waiting for network…" instead of the usual status while
