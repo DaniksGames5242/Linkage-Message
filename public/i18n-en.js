@@ -3,6 +3,10 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Экспорт в PDF": "Export to PDF",
+  "Загружаем всю переписку…": "Loading the whole conversation…",
+  "Выберите «Сохранить как PDF» в окне печати": "Choose “Save as PDF” in the print dialog",
+  "Не удалось выгрузить PDF": "Couldn't export PDF",
   "Расшифровка голосовых": "Transcribe voice messages",
   "Пока вы записываете голосовое, браузер распознаёт речь, и к сообщению прикладывается текст (кнопка «Aa»). В Chrome звук для распознавания отправляется в Google.": "While you record a voice message, the browser recognises speech and attaches the text (the “Aa” button). In Chrome the audio is sent to Google for recognition.",
   "Показать текст": "Show text",
@@ -805,6 +809,7 @@ const MONTHS = { января: "January", февраля: "February", марта
 
 // Strings with numbers or names inside.
 export const EN_PATTERNS = [
+  [/^Загружено сообщений: (\d+)$/, "Messages loaded: $1"],
   [/^Тема «(.+)» создана$/, "Topic “$1” created"],
   [/^Удалить тему «(.+)»\? Сообщения останутся во вкладке «Все»\.$/, "Delete topic “$1”? Messages stay under “All”."],
   [/^(.+) не беспокоить до (.+?)( · «[\s\S]*»)?$/, (m, n, t, r) => `${n}: do not disturb until ${t}${r || ""}`],

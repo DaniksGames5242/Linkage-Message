@@ -1050,6 +1050,9 @@ export function progressToast(label, { onCancel } = {}) {
     update(p) {
       bar.style.transform = `scaleX(${Math.max(0.02, Math.min(1, p))})`;
     },
+    setText(text) {
+      el.querySelector(".toast-text").textContent = text;
+    },
     done() {
       bar.style.transform = "scaleX(1)";
       setTimeout(remove, 250);

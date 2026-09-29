@@ -9566,3 +9566,5 @@ html[data-bubble] .msg-row.me .bubble.sticker-bubble {
 .voice-transcript-text { font-size: 14px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
 .voice-transcript-text.hidden { display: none; }
 .setting-row.disabled { opacity: 0.5; }
+
+.print-frame { position: fixed; right: 0; bottom: 0; width: 0; height: 0; border: 0; visibility: hidden; }
