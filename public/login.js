@@ -214,7 +214,7 @@ avatarRemoveBtn.addEventListener("click", () => {
 // ---------- Submit ----------
 
 function goToApp() {
-  window.location.href = "/";
+  window.location.replace("/");
 }
 
 tilt(authCard, 5);

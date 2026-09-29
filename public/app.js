@@ -587,7 +587,7 @@ async function openLinkedProfile() {
 // Anything else redirects to /login, which owns the username/password/registration flow.
 
 function goToLogin() {
-  window.location.href = "/login";
+  window.location.replace("/login");
 }
 
 if (configLooksEmpty) {
@@ -2112,21 +2112,24 @@ function onContextGesture(el, handler) {
     clearTimeout(timer);
     timer = null;
   };
-  el.addEventListener(
-    "touchmove",
-    (e) => {
-      const t = e.touches[0];
-      if (start && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) cancel();
-    },
-    { passive: true }
-  );
+  const moved = (x, y) => start && Math.hypot(x - start.x, y - start.y) > 10 && cancel();
+  el.addEventListener("touchmove", (e) => moved(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+  // Touch events can arrive late while a swipe is being handled; pointer
+  // events don't, so a sideways swipe never turns into a long press.
+  el.addEventListener("pointermove", (e) => e.pointerType === "touch" && moved(e.clientX, e.clientY), { passive: true });
+  el.addEventListener("pointercancel", () => cancel(), { passive: true });
   // The click that may follow a long press is swallowed; if the browser
   // doesn't send one, the next real tap must still work.
-  const release = () => {
+  const release = (e) => {
     cancel();
-    if (el._suppressClick) setTimeout(() => (el._suppressClick = false), 350);
+    if (el._suppressClick) {
+      // The finger lifts over the menu's backdrop now: without this the
+      // browser's follow-up click would land there and close the menu.
+      if (e.cancelable && Date.now() - touchMenuAt < 5000) e.preventDefault();
+      setTimeout(() => (el._suppressClick = false), 350);
+    }
   };
-  el.addEventListener("touchend", release, { passive: true });
+  el.addEventListener("touchend", release, { passive: false });
   el.addEventListener("touchcancel", release, { passive: true });
   el.addEventListener(
     "click",
@@ -4996,7 +4999,7 @@ function renderMessage(msg, isMine, senderName) {
     bubbleArea.addEventListener(
       "touchstart",
       (e) => {
-        tapStart = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+        tapStart = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, at: performance.now() } : null;
       },
       { passive: true }
     );
@@ -5004,7 +5007,8 @@ function renderMessage(msg, isMine, senderName) {
       "touchend",
       (e) => {
         const t = e.changedTouches[0];
-        if (!tapStart || e.touches.length || interactive(e.target) || Math.hypot(t.clientX - tapStart.x, t.clientY - tapStart.y) > 10) {
+        // A long press isn't half of a double tap.
+        if (!tapStart || e.touches.length || interactive(e.target) || performance.now() - tapStart.at > 400 || Math.hypot(t.clientX - tapStart.x, t.clientY - tapStart.y) > 10) {
           lastTap = null;
           return;
         }
@@ -5623,13 +5627,15 @@ function attachLinkMenu(a) {
       ],
     });
   };
+  let timer = 0;
+  let pressed = false;
   a.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (pressed) return; // Android's own long-press event after ours
+    clearTimeout(timer);
     open(e.clientX, e.clientY);
   });
-  let timer = 0;
-  let pressed = false;
   a.addEventListener(
     "touchstart",
     (e) => {
@@ -5646,7 +5652,15 @@ function attachLinkMenu(a) {
   );
   const cancel = () => clearTimeout(timer);
   a.addEventListener("touchmove", cancel, { passive: true });
-  a.addEventListener("touchend", cancel, { passive: true });
+  a.addEventListener(
+    "touchend",
+    (e) => {
+      cancel();
+      // Menu already open under the finger: no click onto its backdrop.
+      if (pressed && e.cancelable) e.preventDefault();
+    },
+    { passive: false }
+  );
   a.addEventListener("click", (e) => {
     e.stopPropagation(); // tapping a link never opens the message menu
     if (pressed) {
@@ -8622,7 +8636,7 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
     cleanupSubscriptions();
     await forgetDevice(currentUser.uid);
     await deleteAccount(currentUser, deleteAccountPassword.value, myProfile.username);
-    window.location.href = "/login";
+    window.location.replace("/login");
   } catch (err) {
     console.error(err);
     deleteAccountError.textContent = err.message || "Не удалось удалить аккаунт";
@@ -9343,7 +9357,7 @@ lockForgot.addEventListener("click", async () => {
   try {
     await logout();
   } catch (_) {}
-  location.href = "/login";
+  location.replace("/login");
 });
 document.addEventListener("keydown", (e) => {
   if (!lockState) return;
@@ -10061,11 +10075,12 @@ new ResizeObserver(() => {
   }, 90);
 }).observe(chatDock);
 
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape") return;
+// Closes whatever sits on top — menu, dialog, viewer, search, page — and
+// reports whether there was anything. Shared by Esc and the system Back.
+function closeTopLayer() {
   if (activeCtx) {
     closeContextMenu();
-    return;
+    return true;
   }
   // Dialogs built in JS (list, contact, folder, privacy) close like the rest.
   const modal = [...document.querySelectorAll(".modal-overlay.open")].pop();
@@ -10076,31 +10091,75 @@ document.addEventListener("keydown", (e) => {
       modal.classList.remove("open");
       setTimeout(() => modal.remove(), 220);
     }
-    return;
+    return true;
   }
   if (selection.active) {
     exitSelectMode();
-    return;
+    return true;
   }
   if (!lightboxEl.classList.contains("hidden")) {
     closeLightbox();
-    return;
+    return true;
   }
   if (!chatSearchBar.classList.contains("hidden")) {
     closeChatSearch();
-    return;
+    return true;
   }
   if (!storyViewerOverlay.classList.contains("hidden")) {
     closeStoryViewer();
-    return;
+    return true;
   }
   const top = topOverlay();
   if (top) {
     hideOverlay(top);
-    return;
+    return true;
   }
-  if (!chatMenuDropdown.classList.contains("hidden")) hidePopover(chatMenuDropdown);
-  else if (!emojiPicker.classList.contains("hidden")) closeEmojiPicker();
+  if (!chatMenuDropdown.classList.contains("hidden")) {
+    hidePopover(chatMenuDropdown);
+    return true;
+  }
+  if (!emojiPicker.classList.contains("hidden")) {
+    closeEmojiPicker();
+    return true;
+  }
+  return false;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeTopLayer();
+});
+
+// ---------- System Back (Android back gesture, browser Back button) ----------
+// A guard entry sits on top of the app's history. Back closes what's on top,
+// then the open chat (on a phone), and only leaves the app from the list.
+// The guard is (re)armed from a user gesture: Chrome skips history entries
+// pushed without one when going back.
+const HISTORY_GUARD = { lmGuard: 1 };
+function armBackGuard() {
+  if (!currentUser || history.state?.lmGuard) return;
+  try {
+    history.pushState(HISTORY_GUARD, "");
+  } catch (_) {}
+}
+["pointerdown", "keydown"].forEach((t) => window.addEventListener(t, armBackGuard, { capture: true, passive: true }));
+let chatClosedAt = 0;
+let chatWasOpen = false;
+new MutationObserver(() => {
+  const open = sidebar.classList.contains("chat-open");
+  if (chatWasOpen && !open) chatClosedAt = Date.now();
+  chatWasOpen = open;
+}).observe(sidebar, { attributes: true, attributeFilter: ["class"] });
+window.addEventListener("popstate", () => {
+  if (!currentUser) return;
+  let handled = closeTopLayer();
+  if (!handled && isMobileLayout() && sidebar.classList.contains("chat-open")) {
+    backToListBtn.click();
+    handled = true;
+  }
+  // The edge swipe that triggered Back already slid the chat away.
+  if (!handled && Date.now() - chatClosedAt < 800) handled = true;
+  if (handled) armBackGuard();
+  else history.back(); // nothing to close: leave for real
 });
 
 // Mobile: swipe right anywhere in the chat (not just from the edge) to drag
