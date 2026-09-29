@@ -3,6 +3,20 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Стикеры": "Stickers",
+  "Стикер": "Sticker",
+  "🖼 Стикер": "🖼 Sticker",
+  "Сохранить стикер": "Save sticker",
+  "Добавить стикеры": "Add stickers",
+  "Стикер добавлен": "Sticker added",
+  "Стикер сохранён в ваш набор": "Sticker saved to your pack",
+  "Сейчас нельзя отправить стикер": "You can't send a sticker right now",
+  "Не удалось отправить стикер": "Couldn't send the sticker",
+  "Не удалось добавить стикер": "Couldn't add the sticker",
+  "Не удалось открыть картинку": "Couldn't open the image",
+  "Добавьте картинки (лучше PNG с прозрачным фоном) — они появятся здесь на всех ваших устройствах.": "Add pictures (PNG with a transparent background works best) — they'll show up here on all your devices.",
+  "Медленный режим": "Slow mode",
+  "Медленный режим выключен": "Slow mode is off",
   "Экспорт в HTML": "Export to HTML",
   "Перейти к дате": "Go to date",
   "Закладки": "Bookmarks",
@@ -757,6 +771,12 @@ const MONTHS = { января: "January", февраля: "February", марта
 
 // Strings with numbers or names inside.
 export const EN_PATTERNS = [
+  [/^Медленный режим: следующее сообщение через (\d+) (с|мин|ч)$/, (m, n, u) => `Slow mode: next message in ${n} ${{ с: "s", мин: "min", ч: "h" }[u]}`],
+  [/^Медленный режим: одно сообщение в (\d+) (с|мин|ч)$/, (m, n, u) => `Slow mode: one message per ${n} ${{ с: "s", мин: "min", ч: "h" }[u]}`],
+  [/^(✓ )?(\d+) (с|мин|ч)$/, (m, c, n, u) => `${c || ""}${n} ${{ с: "s", мин: "min", ч: "h" }[u]}`],
+  [/^Одно сообщение в (\d+) (с|мин|ч)$/, (m, n, u) => `One message per ${n} ${{ с: "s", мин: "min", ч: "h" }[u]}`],
+  [/^Добавлено стикеров: (\d+)$/, "Stickers added: $1"],
+  [/^Не больше (\d+) стикеров$/, "No more than $1 stickers"],
   [/^Шаблон «(.+)» (сохранён|удалён|не найден)$/, (m, n, w) => `Template “${n}” ${{ "сохранён": "saved", "удалён": "deleted", "не найден": "not found" }[w]}`],
   [/^Активность по часам(?: · пик в (\d+):00)?$/, (m, h) => "Activity by hour" + (h ? ` · peak at ${h}:00` : "")],
   [/^Ваши шаблоны: (.*)$/, "Your templates: $1"],

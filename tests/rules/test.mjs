@@ -1,7 +1,7 @@
 import { initializeTestEnvironment, assertSucceeds, assertFails } from "@firebase/rules-unit-testing";
 import { readFileSync } from "fs";
 import {
-  doc, setDoc, getDoc, updateDoc, deleteDoc, addDoc, collection, query, where, getDocs, serverTimestamp, arrayUnion, arrayRemove, increment, deleteField, Timestamp,
+  doc, setDoc, getDoc, updateDoc, deleteDoc, addDoc, collection, query, where, getDocs, serverTimestamp, arrayUnion, arrayRemove, increment, deleteField, Timestamp, writeBatch,
 } from "firebase/firestore";
 
 const env = await initializeTestEnvironment({
@@ -118,6 +118,35 @@ await t("member without media sends photo", gmsg("bob", "perm", { imageUrl: "htt
 await t("member without media sends text", gmsg("bob", "perm"), ALLOW);
 await t("group reaction", updateDoc(doc(db("alice"), "groups/g1/messages/gm1"), { reactions: { "👍": ["alice"] } }), ALLOW);
 await t("group edit by non-sender", updateDoc(doc(db("alice"), "groups/g1/messages/gm1"), { text: "x" }), DENY);
+
+// ---- slow mode (settings.slowMode seconds; post must stamp slow.<uid> in the same batch)
+await seed((d) => setDoc(doc(d, "groups/slow"), { type: "group", name: "S", ownerId: "alice", admins: ["alice"], members: ["alice", "bob"], settings: { slowMode: 60 } }));
+const slowPost = (uid, stamp = true) => {
+  const d = db(uid);
+  const b = writeBatch(d);
+  b.set(doc(collection(d, "groups/slow/messages")), { senderId: uid, text: "hi" });
+  if (stamp) b.set(doc(d, "groups/slow"), { slow: { [uid]: serverTimestamp() } }, { merge: true });
+  return b.commit();
+};
+await t("slow mode: post without stamp", slowPost("bob", false), DENY);
+await t("slow mode: first post", slowPost("bob"), ALLOW);
+await t("slow mode: second post too soon", slowPost("bob"), DENY);
+await t("slow mode: rewind own stamp", updateDoc(doc(db("bob"), "groups/slow"), { "slow.bob": Timestamp.fromMillis(0) }), DENY);
+await t("slow mode: stamp someone else", updateDoc(doc(db("bob"), "groups/slow"), { "slow.alice": serverTimestamp() }), DENY);
+await t("slow mode: admin is exempt", (async () => { await slowPost("alice"); await slowPost("alice"); })(), ALLOW);
+await seed((d) => updateDoc(doc(d, "groups/slow"), { "slow.bob": Timestamp.fromMillis(Date.now() - 120000) }));
+await t("slow mode: after the interval", slowPost("bob"), ALLOW);
+await t("member can't change slow mode", updateDoc(doc(db("bob"), "groups/slow"), { "settings.slowMode": 0 }), DENY);
+await t("no slow mode: plain post", gmsg("bob", "g1"), ALLOW);
+
+// ---- stickers & private tools
+await t("sticker in chat", addDoc(collection(db("alice"), "chats/alice_bob/messages"), { senderId: "alice", text: "🖼", sticker: "https://x/s.webp" }), ALLOW);
+await t("oversized sticker field", addDoc(collection(db("alice"), "chats/alice_bob/messages"), { senderId: "alice", text: "🖼", sticker: "x".repeat(600) }), DENY);
+await t("sticker without media right", gmsg("bob", "perm", { sticker: "https://x/s.webp" }), DENY);
+await t("own private tools write", setDoc(doc(db("bob"), "users/bob/private/tools"), { notes: { a: "x" } }), ALLOW);
+await t("own private tools read", getDoc(doc(db("bob"), "users/bob/private/tools")), ALLOW);
+await t("someone's private tools read", getDoc(doc(db("eve"), "users/bob/private/tools")), DENY);
+await t("someone's private tools write", setDoc(doc(db("eve"), "users/bob/private/tools"), { notes: {} }), DENY);
 
 // ---- stories
 await t("audience reads story", getDoc(doc(db("bob"), "stories/s1")), ALLOW);

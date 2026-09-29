@@ -19,6 +19,7 @@ import {
   runTransaction,
   Timestamp,
   deleteField,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 export async function createGroup({ type, name, avatarImage, avatarColor, ownerId, memberUids }) {
@@ -97,20 +98,25 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
 
   const preview = opts.preview ?? (attachment?.previewText || trimmed);
   const ref = doc(collection(db, "groups", groupId, "messages"));
+  const groupRef = doc(db, "groups", groupId);
+  // Every post stamps slow.<uid> in the same batch: the rules check it
+  // against settings.slowMode (Firestore compares it with request.time).
+  const batch = writeBatch(db);
   if (opts.scheduleAt) {
     const at = Timestamp.fromMillis(opts.scheduleAt);
     payload.scheduledAt = at;
-    await setDoc(ref, payload);
+    batch.set(ref, payload);
     const entry = { at, senderId, preview, silent: !!opts.silent };
     if (opts.previewEnc) entry.previewEnc = opts.previewEnc;
-    await setDoc(doc(db, "groups", groupId), { scheduled: { [ref.id]: entry } }, { merge: true });
+    batch.set(groupRef, { scheduled: { [ref.id]: entry }, slow: { [senderId]: serverTimestamp() } }, { merge: true });
+    await batch.commit();
     return ref.id;
   }
 
   const others = memberUids.filter((uid) => uid && uid !== senderId);
-  await setDoc(ref, payload);
-  await setDoc(
-    doc(db, "groups", groupId),
+  batch.set(ref, payload);
+  batch.set(
+    groupRef,
     {
       lastMessage: preview,
       lastEnc: opts.previewEnc || deleteField(),
@@ -118,6 +124,7 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
       lastMessageSenderId: senderId,
       lastSilent: !!opts.silent,
       hiddenFor: [],
+      slow: { [senderId]: serverTimestamp() },
       unread: Object.fromEntries(others.map((uid) => [uid, increment(1)])),
       // Unread @mentions per member (the "@" badge in the chat list).
       ...(extra?.mentions?.length
@@ -126,6 +133,7 @@ export async function sendGroupMessage(groupId, senderId, text, attachment, repl
     },
     { merge: true }
   );
+  await batch.commit();
   return ref.id;
 }
 

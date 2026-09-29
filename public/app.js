@@ -100,6 +100,7 @@ import {
   REACTION_EMOJIS,
   uiLocale,
 } from "./utils.js";
+import { listenTools, saveToolsField } from "./tools-sync.js";
 import { uploadToCloudinary, prepareImageForUpload, uploadsConfigured } from "./upload.js";
 import {
   SPRINGS,
@@ -646,6 +647,7 @@ function listenMyLists() {
 
 function cleanupSubscriptions() {
   stopCalls();
+  stopToolsSync();
   unsubMyLists?.();
   unsubMyLists = null;
   if (unsubChats) unsubChats();
@@ -680,6 +682,7 @@ function enterApp() {
   listenGroupsList();
   listenStoriesList();
   listenMyLists();
+  startToolsSync();
   renderCustomFolderTabs();
   touchPresence(currentUser.uid);
   presenceInterval = setInterval(() => !document.hidden && touchPresence(currentUser.uid), 25000);
@@ -4073,7 +4076,8 @@ function messageOps() {
   return { edit: null, del: null, react: null };
 }
 
-const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤", "⭕", "🔺"];
+const STICKER_CAPTION = "🖼";
+const DEFAULT_CAPTIONS = ["📷", "🎬", "🎤", "⭕", "🔺", STICKER_CAPTION];
 
 // ---------- Reply-to-message ----------
 
@@ -4139,6 +4143,10 @@ function renderBubbleContent(bubble, msg) {
   bubble.innerHTML = "";
   if (msg.call) {
     renderCallBubble(bubble, msg);
+    return;
+  }
+  if (msg.sticker) {
+    renderSticker(bubble, msg);
     return;
   }
   if (msg.game) {
@@ -5267,6 +5275,7 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
       { label: isBookmarked(msg.id) ? "Убрать закладку" : "В закладки", icon: MI.pin, onClick: () => toggleBookmark(msg) },
       hasText && navigator.share && { label: "Поделиться", icon: MI.forward, onClick: () => navigator.share({ text: msg.text }).catch(() => {}) },
       { label: "Подробнее", icon: MI.eye, onClick: () => showMessageInfo(msg, isMine) },
+      msg.sticker && !myStickers().includes(msg.sticker) && { label: "Сохранить стикер", icon: MI.sparkle, onClick: () => addStickerUrl(msg.sticker) },
       { label: "Напомнить", icon: MI.bell, onClick: () => setTimeout(() => openReminderPicker(msg, x, y), 60) },
       canPinInCurrentChat() && {
         label: pinnedId === msg.id ? "Открепить" : "Закрепить",
@@ -6120,6 +6129,11 @@ async function doSendMessage(attachment, { scheduleAt = null, effect = null, sil
     return;
   }
   if (!text && !attachment) return;
+  const slowWait = !scheduleAt && slowModeWait();
+  if (slowWait) {
+    toast(`Медленный режим: следующее сообщение через ${fmtWait(slowWait)}`, { icon: "🐢" });
+    return;
+  }
   if (!currentChatId) return;
   const replyPayload = replyToMessage
     ? { id: replyToMessage.id, senderName: replySenderLabel(replyToMessage), text: replyPreviewText(replyToMessage).slice(0, 120) }
@@ -6774,6 +6788,7 @@ function openAttachMenu() {
       canPlay && { label: "Список", icon: MI.list, onClick: openChecklistCreator },
       canPlay && { label: "Контакт", icon: MI.user, onClick: openContactSharer },
       canPlay && { label: "Геопозиция", icon: MI.location, onClick: sendLocation },
+      canPlay && { label: "Стикеры", icon: MI.sparkle, onClick: openStickerPanel },
     ],
   });
   document.querySelector(".ctx-menu")?.classList.add("attach-menu");
@@ -10071,7 +10086,9 @@ function openGroupPrivacy(group) {
       <div class="settings-subhead">Кто может добавлять участников</div>
       <div class="seg" data-key="whoCanAdd"><button type="button" data-v="all">Все</button><button type="button" data-v="admins">Админы</button></div>
       <div class="settings-subhead">Кто может писать</div>
-      <div class="seg" data-key="whoCanPost"><button type="button" data-v="all">Все</button><button type="button" data-v="admins">Админы</button></div>`}
+      <div class="seg" data-key="whoCanPost"><button type="button" data-v="all">Все</button><button type="button" data-v="admins">Админы</button></div>
+      <div class="settings-subhead">Медленный режим</div>
+      <button type="button" class="small-btn secondary" data-act="slow"></button>`}
       <button type="button" class="small-btn" data-act="done">Готово</button>
     </div>`;
   document.body.appendChild(wrap);
@@ -10087,7 +10104,14 @@ function openGroupPrivacy(group) {
       ? "Любой, у кого есть ссылка, может вступить и читать без приглашения."
       : "Вступить можно только по пригласительной ссылке или если вас добавят.";
     linkEl.value = groupInviteLink(group);
+    const slowBtn = wrap.querySelector('[data-act="slow"]');
+    if (slowBtn) slowBtn.textContent = group.settings?.slowMode ? `Одно сообщение в ${fmtWait(group.settings.slowMode)}` : "Выключено";
   };
+  wrap.querySelector('[data-act="slow"]')?.addEventListener("click", (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    openSlowModePicker(group, r.left, r.bottom + 4);
+    const t = setInterval(() => (document.querySelector(".ctx-menu") ? null : (clearInterval(t), paint())), 300);
+  });
   wrap.querySelectorAll(".seg").forEach((seg) =>
     seg.addEventListener("click", async (e) => {
       const b = e.target.closest("button");
@@ -10353,6 +10377,7 @@ const saveReminders = (list) => {
   try {
     localStorage.setItem(REMINDERS_KEY, JSON.stringify(list));
   } catch (_) {}
+  pushTool(REMINDERS_KEY, list);
 };
 
 function openReminderPicker(msg, x, y) {
@@ -10463,6 +10488,7 @@ const writeLS = (key, value) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (_) {}
+  pushTool(key, value);
 };
 
 // ---------- Composer commands, templates and emoji shortcodes ----------
@@ -10875,6 +10901,231 @@ document.addEventListener("keydown", (e) => {
     showShortcutsHelp();
   }
 });
+
+// ---------- Tools synced across my devices (users/{uid}/private/tools) ----------
+const SYNCED_TOOLS = { "lm-bookmarks": "bookmarks", "lm-chat-notes": "notes", "lm-templates": "templates", "lm-reminders": "reminders", "lm-stickers": "stickers" };
+let unsubTools = null;
+let toolsSynced = false;
+function startToolsSync() {
+  unsubTools?.();
+  toolsSynced = false;
+  unsubTools = listenTools(
+    currentUser.uid,
+    (data) => {
+      Object.entries(SYNCED_TOOLS).forEach(([key, field]) => {
+        if (field in data) {
+          try {
+            localStorage.setItem(key, JSON.stringify(data[field]));
+          } catch (_) {}
+        } else if (!toolsSynced) {
+          // First sync on this account: upload what this device already has.
+          const local = readLS(key, null);
+          if (local && (Array.isArray(local) ? local.length : Object.keys(local).length)) saveToolsField(currentUser.uid, field, local).catch(() => {});
+        }
+      });
+      toolsSynced = true;
+    },
+    (err) => console.warn("tools sync:", err.code || err)
+  );
+}
+function stopToolsSync() {
+  unsubTools?.();
+  unsubTools = null;
+}
+function pushTool(key, value) {
+  const field = SYNCED_TOOLS[key];
+  if (field && currentUser) saveToolsField(currentUser.uid, field, value).catch((err) => console.warn("tools save:", err.code || err));
+}
+
+// ---------- Stickers: my own pack, sent as images without a bubble ----------
+const STICKERS_KEY = "lm-stickers";
+const MAX_STICKERS = 120;
+const myStickers = () => readLS(STICKERS_KEY, []);
+const saveStickers = (list) => writeLS(STICKERS_KEY, list.slice(0, MAX_STICKERS));
+
+// Square-ish 320px WebP with transparency kept.
+function stickerBlob(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 320 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.width * k));
+      c.height = Math.max(1, Math.round(img.height * k));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error("encode"))), "image/webp", 0.9);
+    };
+    img.onerror = () => reject(new Error("Не удалось открыть картинку"));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function addStickerFiles(files) {
+  const list = myStickers();
+  let added = 0;
+  for (const f of files) {
+    if (!f.type.startsWith("image/")) continue;
+    if (list.length >= MAX_STICKERS) {
+      toast(`Не больше ${MAX_STICKERS} стикеров`, { tone: "error" });
+      break;
+    }
+    try {
+      const blob = await stickerBlob(f);
+      const url = await uploadToCloudinary(new File([blob], "sticker.webp", { type: blob.type }), "image");
+      list.unshift(url);
+      added++;
+    } catch (err) {
+      toast(err.message || "Не удалось добавить стикер", { tone: "error" });
+    }
+  }
+  if (added) {
+    saveStickers(list);
+    toast(added === 1 ? "Стикер добавлен" : `Добавлено стикеров: ${added}`, { icon: "🖼" });
+  }
+  return added;
+}
+
+function addStickerUrl(url) {
+  const list = myStickers().filter((u) => u !== url);
+  saveStickers([url, ...list]);
+  toast("Стикер сохранён в ваш набор", { icon: "🖼" });
+}
+
+async function sendSticker(url) {
+  if (!currentChatId || currentChatType === "notifications") return;
+  const wait = slowModeWait();
+  if (wait) {
+    toast(`Медленный режим: следующее сообщение через ${fmtWait(wait)}`, { icon: "🐢" });
+    return;
+  }
+  const replyPayload = replyToMessage
+    ? { id: replyToMessage.id, senderName: replySenderLabel(replyToMessage), text: replyPreviewText(replyToMessage).slice(0, 120) }
+    : null;
+  cancelReply();
+  try {
+    await deliver({
+      type: currentChatType,
+      id: currentChatId,
+      attachment: { fields: { sticker: url }, defaultCaption: STICKER_CAPTION, previewText: "🖼 Стикер" },
+      replyTo: replyPayload,
+    });
+    // Most recently used first.
+    const list = myStickers();
+    if (list[0] !== url && list.includes(url)) saveStickers([url, ...list.filter((u) => u !== url)]);
+  } catch (err) {
+    console.error(err);
+    toast(err?.code === "permission-denied" ? "Сейчас нельзя отправить стикер" : "Не удалось отправить стикер", { tone: "error" });
+  }
+}
+
+function openStickerPanel() {
+  const box = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = "x-stickers";
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.multiple = true;
+  input.hidden = true;
+  box.append(grid, input);
+  let editing = false;
+  const paint = () => {
+    const list = myStickers();
+    grid.replaceChildren();
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "x-sticker add";
+    add.title = "Добавить стикеры";
+    add.textContent = "+";
+    add.addEventListener("click", () => input.click());
+    grid.appendChild(add);
+    list.forEach((url) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "x-sticker" + (editing ? " editing" : "");
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = "";
+      img.loading = "lazy";
+      b.appendChild(img);
+      b.addEventListener("click", () => {
+        if (editing) {
+          saveStickers(myStickers().filter((u) => u !== url));
+          paint();
+          return;
+        }
+        modal.close();
+        sendSticker(url);
+      });
+      grid.appendChild(b);
+    });
+    if (!list.length) {
+      const p = document.createElement("p");
+      p.className = "x-dim";
+      p.textContent = "Добавьте картинки (лучше PNG с прозрачным фоном) — они появятся здесь на всех ваших устройствах.";
+      box.appendChild(p);
+    } else box.querySelector("p")?.remove();
+  };
+  input.addEventListener("change", async () => {
+    const files = [...input.files];
+    input.value = "";
+    if (files.length && (await addStickerFiles(files))) paint();
+  });
+  const modal = extraModal("Стикеры", box);
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "small-btn secondary x-sticker-edit";
+  edit.textContent = "Изменить";
+  edit.addEventListener("click", () => {
+    editing = !editing;
+    edit.textContent = editing ? "Готово" : "Изменить";
+    paint();
+  });
+  modal.el.querySelector(".x-modal-head").insertBefore(edit, modal.el.querySelector(".x-modal-close"));
+  paint();
+}
+
+function renderSticker(bubble, msg) {
+  bubble.classList.add("sticker-bubble");
+  const img = document.createElement("img");
+  img.className = "sticker-img";
+  img.src = msg.sticker;
+  img.alt = "Стикер";
+  img.loading = "lazy";
+  img.draggable = false;
+  bubble.appendChild(img);
+}
+
+// ---------- Slow mode in groups (enforced by the Firestore rules too) ----------
+const SLOW_MODE_STEPS = [0, 10, 30, 60, 300, 900, 3600];
+const fmtWait = (s) => (s >= 3600 ? `${Math.round(s / 3600)} ч` : s >= 60 ? `${Math.ceil(s / 60)} мин` : `${Math.ceil(s)} с`);
+function slowModeWait() {
+  if (currentChatType !== "group") return 0;
+  const g = groups.find((x) => x.id === currentChatId) || currentGroupRef;
+  const secs = g?.settings?.slowMode || 0;
+  if (!secs || (g.admins || []).includes(currentUser.uid)) return 0;
+  const last = g.slow?.[currentUser.uid];
+  const lastMs = last?.toMillis ? last.toMillis() : 0;
+  const left = (lastMs + secs * 1000 - Date.now()) / 1000;
+  return left > 0 ? left : 0;
+}
+
+function openSlowModePicker(group, x, y) {
+  const cur = group.settings?.slowMode || 0;
+  openContextMenu({
+    x,
+    y,
+    items: SLOW_MODE_STEPS.map((s) => ({
+      label: (s === cur ? "✓ " : "") + (s ? fmtWait(s) : "Выключено"),
+      icon: MI.timer,
+      onClick: async () => {
+        await patchGroupSettings(group, { slowMode: s });
+        toast(s ? `Медленный режим: одно сообщение в ${fmtWait(s)}` : "Медленный режим выключен", { icon: "🐢" });
+      },
+    })),
+  });
+}
 
 // ---------- Settings → Security: check the call relay (TURN) ----------
 const turnCheckBtn = document.getElementById("turn-check-btn");
