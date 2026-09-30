@@ -9430,7 +9430,12 @@ async function willEncrypt(target) {
 async function sealUpload(file, target) {
   if (!(await willEncrypt(target))) return { file, mediaKey: null };
   const { blob, mediaKey } = await encryptBlob(file);
-  return { file: new File([blob], "e2e.txt", { type: "application/octet-stream" }), mediaKey };
+  // Cloudinary refuses opaque binary (format "bin"), so the ciphertext travels
+  // as base64 text; mediaKey.b64 tells openMedia to decode it first.
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { file: new File([btoa(text)], "e2e.txt", { type: "text/plain" }), mediaKey: { ...mediaKey, b64: 1 } };
 }
 
 const mediaCache = new Map(); // url -> Promise<blobURL>
@@ -9443,7 +9448,7 @@ function openMedia(url, mediaKey) {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.arrayBuffer();
         })
-        .then((buf) => decryptToBlob(buf, mediaKey))
+        .then((buf) => decryptToBlob(mediaKey.b64 ? Uint8Array.from(atob(new TextDecoder().decode(buf)), (c) => c.charCodeAt(0)) : buf, mediaKey))
         .then((blob) => URL.createObjectURL(blob))
         .catch((err) => {
           mediaCache.delete(url);
