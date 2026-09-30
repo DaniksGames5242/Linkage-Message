@@ -12163,14 +12163,17 @@ function hasBackTarget() {
 }
 let ignoreGuardPop = false;
 function armBackGuard() {
-  if (!currentUser || history.state?.lmGuard || !hasBackTarget()) return;
+  if (ignoreGuardPop || !currentUser || history.state?.lmGuard || !hasBackTarget()) return;
   try {
     history.pushState(HISTORY_GUARD, "");
   } catch (_) {}
 }
+let disarmTimer = 0;
 function disarmBackGuardSoon() {
-  setTimeout(() => {
-    if (!currentUser || !history.state?.lmGuard || hasBackTarget()) return;
+  clearTimeout(disarmTimer);
+  disarmTimer = setTimeout(() => {
+    // One step back at a time: history.state only changes once popstate lands.
+    if (ignoreGuardPop || !currentUser || !history.state?.lmGuard || hasBackTarget()) return;
     ignoreGuardPop = true;
     history.back();
   }, 450);
