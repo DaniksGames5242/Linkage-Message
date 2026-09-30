@@ -10096,6 +10096,82 @@ async function markAllChatsRead() {
   toast(unreadEntries.length || marks.length ? "Все чаты прочитаны" : "Непрочитанных нет", { icon: "✅" });
 }
 
+// Press and slide along the bar: the highlight follows the finger and the
+// tab under it opens on release. A plain tap still works as before.
+(function enableTabScrub() {
+  let start = null;
+  let scrubbing = false;
+  let hovered = null;
+  let suppressClick = false;
+  const tabs = () => [...tabbar.querySelectorAll(".tab")].filter((b) => b.offsetParent);
+  const tabAt = (x) => {
+    const list = tabs();
+    return list.find((b) => {
+      const r = b.getBoundingClientRect();
+      return x >= r.left && x < r.right;
+    }) || (x < list[0]?.getBoundingClientRect().left ? list[0] : list[list.length - 1]);
+  };
+  const follow = (x) => {
+    const bar = tabbar.getBoundingClientRect();
+    const w = tabGlider.offsetWidth || tabs()[0]?.offsetWidth || 0;
+    const left = Math.max(5, Math.min(bar.width - w - 5, x - bar.left - w / 2));
+    tabGlider.getAnimations().forEach((a) => a.cancel());
+    tabGlider.style.transform = `translateX(${left}px) scale(1.06)`;
+    const btn = tabAt(x);
+    if (btn !== hovered) {
+      hovered = btn;
+      tabbar.querySelectorAll(".tab").forEach((t) => t.classList.toggle("scrub-hover", t === btn));
+      if (navigator.vibrate) navigator.vibrate(6);
+    }
+  };
+  tabbar.addEventListener("pointerdown", (e) => {
+    if (!currentUser || e.button > 0 || !e.target.closest(".tab")) return;
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    scrubbing = false;
+    hovered = null;
+  });
+  tabbar.addEventListener("pointermove", (e) => {
+    if (!start || e.pointerId !== start.id) return;
+    if (!scrubbing) {
+      if (Math.abs(e.clientX - start.x) < 8) return;
+      scrubbing = true;
+      tabbar.classList.add("scrubbing");
+      if (activeCtx) closeContextMenu(true);
+      try {
+        tabbar.setPointerCapture(e.pointerId);
+      } catch (_) {}
+    }
+    follow(e.clientX);
+  });
+  const end = (e, commit) => {
+    if (!start || e.pointerId !== start.id) return;
+    const was = scrubbing;
+    start = null;
+    scrubbing = false;
+    tabbar.classList.remove("scrubbing");
+    tabbar.querySelectorAll(".scrub-hover").forEach((t) => t.classList.remove("scrub-hover"));
+    if (!was) return;
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false), 400);
+    const btn = hovered;
+    hovered = null;
+    if (commit && btn && btn.dataset.tab !== currentTab) btn.click();
+    else selectTab(currentTab);
+  };
+  tabbar.addEventListener("pointerup", (e) => end(e, true));
+  tabbar.addEventListener("pointercancel", (e) => end(e, false));
+  tabbar.addEventListener(
+    "click",
+    (e) => {
+      if (suppressClick && e.isTrusted) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      }
+    },
+    true
+  );
+})();
+
 tabbar.addEventListener("click", (e) => {
   const btn = e.target.closest(".tab");
   if (!btn || !currentUser) return;
@@ -12851,7 +12927,7 @@ const SWIPE_BACK_IGNORE = "#chat-dock, textarea, input, video, .vp-wave, .ring-h
 
 // Mobile: swipe sideways on the list or settings to move between the bottom
 // bar's tabs; inside a settings section a swipe right goes back to the menu.
-const TAB_SWIPE_IGNORE = "input, textarea, select, .room-item, .ctx-menu, .react-picker, .modal-overlay, .x-modal, #emoji-picker, [contenteditable]";
+const TAB_SWIPE_IGNORE = "#tabbar, input, textarea, select, .room-item, .ctx-menu, .react-picker, .modal-overlay, .x-modal, #emoji-picker, [contenteditable]";
 (function enableTabSwipe() {
   let sx = 0, sy = 0, st = 0, on = false;
   const scrollsSideways = (el) => {

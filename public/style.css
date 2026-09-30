@@ -9968,3 +9968,9 @@ html[data-bubble] .msg-row.me .bubble.sticker-bubble {
 .room-item.labeled { box-shadow: inset 4px 0 0 var(--label-color); }
 #composer-counter { position: absolute; right: 12px; top: -20px; font-size: 11px; color: var(--text-dim); pointer-events: none; }
 #composer-counter.over { color: var(--danger); font-weight: 700; }
+
+/* ---------- Tab bar: press and slide to pick a tab ---------- */
+#tabbar { touch-action: none; user-select: none; -webkit-user-select: none; }
+#tabbar.scrubbing .tab-glider { transition: none; }
+#tabbar.scrubbing .tab.scrub-hover { color: var(--accent-text); }
+#tabbar.scrubbing .tab.scrub-hover .tab-icon { transform: scale(1.12) translateY(-2px); transition: transform 0.15s var(--ease-bouncy); }
