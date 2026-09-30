@@ -9840,3 +9840,43 @@ html[data-bubble] .msg-row.me .bubble.sticker-bubble {
 
 /* A command's result, "from the system", under the command message. */
 .system-msg.cmd-result { margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+/* ---------- "@" jump to mentions ---------- */
+#mention-jump-btn {
+  position: absolute;
+  right: 22px;
+  bottom: calc(var(--dock-h) + 26px);
+  z-index: 6;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid var(--stroke-strong);
+  background: var(--glass-tint), var(--glass-strong);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  color: var(--accent-text);
+  font: 700 20px/1 inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: sendAppear 0.5s var(--ease-jelly) backwards;
+  transition: bottom 0.35s var(--ease-out);
+}
+#mention-jump-btn.stacked { bottom: calc(var(--dock-h) + 82px); }
+#mention-jump-btn.hidden { display: none; }
+#mention-jump-btn .mj-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+#mention-jump-btn .mj-badge:empty { display: none; }

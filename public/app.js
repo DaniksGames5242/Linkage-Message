@@ -2363,6 +2363,7 @@ function attachRoomSwipe(item, entry) {
 }
 
 function attachRoomMenu(item, entry) {
+  item._entry = entry;
   attachRoomSwipe(item, entry);
   onContextGesture(item, (x, y) => {
     const pinned = isChatPinned(entry.id);
@@ -6246,7 +6247,45 @@ function applyMessageSpacing() {
   }
   if (prev) prev.classList.add("grp-last");
   updateTranslateBar();
+  updateMentionJump();
 }
+
+// "@" button: jumps through messages that mention you, like Telegram.
+const seenMentions = new Set();
+const mentionJumpBtn = document.createElement("button");
+mentionJumpBtn.type = "button";
+mentionJumpBtn.id = "mention-jump-btn";
+mentionJumpBtn.className = "hidden";
+mentionJumpBtn.title = "К упоминанию";
+mentionJumpBtn.innerHTML = '<span>@</span><span class="mj-badge"></span>';
+function pendingMentions() {
+  if (!currentUser) return [];
+  const top = messagesEl.getBoundingClientRect();
+  return [...messagesEl.querySelectorAll(".msg-row:not(.me)")].filter((r) => {
+    if (!r._msg?.mentions?.includes?.(currentUser.uid) || seenMentions.has(r.dataset.msgId)) return false;
+    const b = r.getBoundingClientRect();
+    if (b.top >= top.top && b.bottom <= top.bottom) {
+      seenMentions.add(r.dataset.msgId); // on screen now: counts as seen
+      return false;
+    }
+    return true;
+  });
+}
+function updateMentionJump() {
+  if (!mentionJumpBtn.isConnected) scrollBottomBtn.before(mentionJumpBtn);
+  const list = messagesEl.classList.contains("hidden") ? [] : pendingMentions();
+  mentionJumpBtn.classList.toggle("hidden", !list.length);
+  mentionJumpBtn.classList.toggle("stacked", !scrollBottomBtn.classList.contains("hidden"));
+  mentionJumpBtn.querySelector(".mj-badge").textContent = list.length > 1 ? String(list.length) : "";
+}
+mentionJumpBtn.addEventListener("click", () => {
+  const next = pendingMentions()[0];
+  if (!next) return updateMentionJump();
+  seenMentions.add(next.dataset.msgId);
+  scrollToMessage(next.dataset.msgId);
+  setTimeout(updateMentionJump, 600);
+});
+messagesEl.addEventListener("scroll", debounce(updateMentionJump, 150), { passive: true });
 
 // "Translate this chat?" appears on its own once incoming messages are in a
 // language other than the interface one (judged by alphabet).
@@ -9737,6 +9776,24 @@ new MutationObserver(() => tabbar.classList.toggle("away", sidebar.classList.con
   attributeFilter: ["class"],
 });
 
+// Long-press the Chats tab (or right-click it): mark every chat as read.
+onContextGesture(tabbar.querySelector('.tab[data-tab="chats"]'), (x, y) =>
+  openContextMenu({
+    x,
+    y: y - 70,
+    items: [{ label: "Прочитать все", icon: MI.check, onClick: markAllChatsRead }],
+  })
+);
+async function markAllChatsRead() {
+  const me = currentUser.uid;
+  const entries = [...chatListEl.querySelectorAll(".room-item")].map((r) => r._entry).filter(Boolean);
+  const unreadEntries = entries.filter((e) => (e.data?.unread?.[me] || 0) > 0 && e.kind !== "saved");
+  const marks = userList("unreadMarks");
+  marks.forEach((id) => toggleUserList("unreadMarks", id, false));
+  await Promise.all(unreadEntries.map((e) => (e.kind === "group" ? markGroupRead : markChatRead)(e.id, me).catch(console.error)));
+  toast(unreadEntries.length || marks.length ? "Все чаты прочитаны" : "Непрочитанных нет", { icon: "✅" });
+}
+
 tabbar.addEventListener("click", (e) => {
   const btn = e.target.closest(".tab");
   if (!btn || !currentUser) return;
@@ -10949,6 +11006,7 @@ const COMMANDS_HELP = [
   ["/t имя", "вставить шаблон"],
   ["/tsave имя текст", "сохранить шаблон"],
   ["/tdel имя · /tlist", "удалить шаблон · список шаблонов"],
+  ["/remind 10m текст", "напоминание через 10 минут (m — минуты, h — часы, d — дни)"],
   [":fire: :) <3 …", "автозамена на эмодзи"],
   ["/help", "эта справка"],
 ];
@@ -10976,6 +11034,7 @@ const COMMAND_LIST = [
   ["tsave", "имя текст", "сохранить шаблон"],
   ["tdel", "имя", "удалить шаблон"],
   ["tlist", "", "список шаблонов"],
+  ["remind", "10m текст", "напомнить (m, h, d)"],
 ];
 const NO_ARG_COMMANDS = new Set(["help", "commands", "coin", "time", "date", "tlist"]);
 
@@ -11086,6 +11145,21 @@ function expandComposerText(text) {
         writeLS(TEMPLATES_KEY, templates);
         toast(`Шаблон «${arg}» удалён`, { icon: "🗑️" });
         return null;
+      case "remind": {
+        // /remind 10m текст · /remind 2h текст · /remind 1d текст
+        const mm = arg.match(/^(\d+)\s*(m|min|м|мин|h|ч|d|д)\S*\s*([\s\S]*)$/i);
+        if (!mm) {
+          toast("Формат: /remind 10m текст (m — минуты, h — часы, d — дни)", { icon: "⏰" });
+          return null;
+        }
+        const unit = /^(h|ч)/i.test(mm[2]) ? 3600e3 : /^(d|д)/i.test(mm[2]) ? 86400e3 : 60e3;
+        const at = Date.now() + Math.min(365 * 86400e3, +mm[1] * unit);
+        const what = mm[3].trim() || "Напоминание";
+        saveReminders([...loadReminders(), { at, chatId: currentChatId, kind: currentChatType, text: what.slice(0, 120) }]);
+        toast(`Напомню ${new Date(at).toLocaleString(document.documentElement.lang || "ru", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, { icon: "⏰" });
+        if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+        return null;
+      }
       case "tlist":
         showCommandsHelp();
         return null;

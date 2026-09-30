@@ -3,6 +3,12 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "К упоминанию": "Go to mention",
+  "Прочитать все": "Read all",
+  "Все чаты прочитаны": "All chats read",
+  "Непрочитанных нет": "No unread chats",
+  "напомнить (m, h, d)": "remind me (m, h, d)",
+  "Формат: /remind 10m текст (m — минуты, h — часы, d — дни)": "Format: /remind 10m text (m — minutes, h — hours, d — days)",
   "Настройки чата": "Chat settings",
   "Ещё…": "More…",
   "Перевести чат": "Translate chat",

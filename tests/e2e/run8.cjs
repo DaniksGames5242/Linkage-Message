@@ -39,6 +39,12 @@ const L = require("./lib.cjs");
   await L.check("a command mixed with other text is plain text", async () => { await send("/coin please"); await sees(/^\/coin please$/); });
   await L.check("/shrug appends", async () => { await send("/shrug ну ладно"); await sees(/ну ладно ¯\\_\(ツ\)_\/¯/); });
   await L.check("emoji shortcodes", async () => { await send("горит :fire: <3"); await sees(/горит 🔥 ❤️/); });
+  await L.check("/remind sets a reminder and sends nothing", async () => {
+    const before = await A.evaluate(() => document.querySelectorAll(".msg-row.me").length);
+    await send("/remind 10m позвонить");
+    await L.until(A, () => JSON.parse(localStorage.getItem("lm-reminders") || "[]").some((r) => r.text === "позвонить"));
+    if ((await A.evaluate(() => document.querySelectorAll(".msg-row.me").length)) !== before) throw new Error("sent");
+  });
   await L.check("/roll", async () => { await send("/roll 6"); await sees(/^\/roll 6$/); await result(/^🎲 [1-6] \(1–6\)$/); });
   await L.check("/help shows a modal and sends nothing", async () => {
     const before = await A.evaluate(() => document.querySelectorAll(".msg-row.me").length);
