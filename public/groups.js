@@ -210,14 +210,6 @@ export async function leaveGroup(groupId, uid) {
   });
 }
 
-export async function editEncryptedGroupMessage(groupId, messageId, enc) {
-  await updateDoc(doc(db, "groups", groupId, "messages", messageId), {
-    enc,
-    edited: true,
-    editedAt: serverTimestamp(),
-  });
-}
-
 // Adds wrapped message keys for more of the account's devices (history sync).
 export async function addGroupMessageKeys(groupId, messageId, entries) {
   const patch = {};
