@@ -26,7 +26,25 @@ function resourceTypeFor(file) {
 // unsigned upload preset (no backend, no secret key in client code) and
 // returns the resulting public HTTPS URL. `onProgress(0..1)` reports upload
 // progress; `signal` (AbortSignal) cancels it.
-export function uploadToCloudinary(file, resourceType, onProgress, signal) {
+// Encrypted blobs have no meaningful extension; if the preset's format
+// allow-list rejects the one we picked, try the next.
+const E2E_NAMES = ["e2e.txt", "e2e.pdf", "e2e.zip"];
+
+export async function uploadToCloudinary(file, resourceType, onProgress, signal) {
+  let last;
+  const names = E2E_NAMES.includes(file.name) ? E2E_NAMES.slice(E2E_NAMES.indexOf(file.name)) : [file.name];
+  for (const name of names) {
+    try {
+      return await uploadOnce(name === file.name ? file : new File([file], name, { type: file.type }), resourceType, onProgress, signal);
+    } catch (err) {
+      last = err;
+      if (!/not allowed|extension|format/i.test(err.message || "")) throw err;
+    }
+  }
+  throw last;
+}
+
+function uploadOnce(file, resourceType, onProgress, signal) {
   return new Promise((resolve, reject) => {
     if (!uploadsConfigured) {
       reject(new Error("Отправка файлов ещё не настроена: заполните public/cloudinary-config.js (см. README.md)"));

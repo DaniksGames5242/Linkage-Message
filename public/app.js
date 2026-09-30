@@ -52,6 +52,8 @@ import {
   removeGroupMember,
   joinGroup,
   editGroupMessage,
+  editEncryptedGroupMessage,
+  addGroupMessageKeys,
   deleteGroupMessage,
   toggleGroupReaction,
   hideGroupForMe,
@@ -736,7 +738,7 @@ function listenMyLists() {
     if (Object.keys(devs).sort().join() !== Object.keys(known).sort().join()) {
       myProfile.e2eDevices = devs;
       deviceLists.set(currentUser.uid, { devices: devs, at: Date.now() });
-      if (currentChatType === "contact" && currentChatId) {
+      if ((currentChatType === "contact" || currentChatType === "group") && currentChatId) {
         const chatId = currentChatId;
         openMessages(chatId, currentChatRawSource).catch(() => {});
       }
@@ -2840,7 +2842,7 @@ async function renderChats() {
   const previews = new Map();
   await Promise.all(
     combined
-      .filter((e) => e.kind === "contact" && e.data.lastEnc)
+      .filter((e) => (e.kind === "contact" || e.kind === "group") && e.data.lastEnc)
       .map(async (e) => {
         const p = await openPreview(e.data.id, e.data.lastEnc, e.data.lastMessageSenderId);
         if (p) previews.set(e.data.id, p);
@@ -2857,7 +2859,7 @@ async function renderChats() {
         chatId: group.id,
         avatar: groupAvatarHTML(group),
         name: group.name,
-        last: group.lastMessage ? lastPrefix + stripRich(group.lastMessage) : group.type === "channel" ? "Канал" : "Группа",
+        last: group.lastMessage ? lastPrefix + stripRich(previews.get(group.id) || group.lastMessage) : group.type === "channel" ? "Канал" : "Группа",
         lastAt: group.lastMessageAt,
         unread: unreadFor(group),
         mentioned: (group.mentions?.[me] || 0) > 0 && group.id !== currentChatId,
@@ -3255,7 +3257,7 @@ function refreshChatChrome() {
   const isContact = currentChatType === "contact";
   const isGroupish = currentChatType === "group" || currentChatType === "channel";
   const blocked = isContact && isBlocked(currentOtherUid);
-  chatSection.classList.toggle("e2e-on", isContact && isE2EChat(currentChatId));
+  chatSection.classList.toggle("e2e-on", (isContact || currentChatType === "group") && isE2EChat(currentChatId));
   callAudioBtn.classList.toggle("hidden", !isContact || blocked);
   callVideoBtn.classList.toggle("hidden", !isContact || blocked);
 
@@ -3292,7 +3294,7 @@ function renderPinnedBar() {
   const pinned = currentChatData()?.pinned;
   if (pinned?.id) {
     pinnedBarText.textContent = pinned.text || "Сообщение";
-    if (pinned.enc && currentChatType === "contact" && hasDevice()) {
+    if (pinned.enc && (currentChatType === "contact" || currentChatType === "group") && hasDevice()) {
       const chatId = currentChatId;
       openBoxFrom(chatId, pinned.enc, pinned.by)
         .then((c) => currentChatId === chatId && (pinnedBarText.textContent = c.text))
@@ -3316,7 +3318,7 @@ pinnedBarUnpin.addEventListener("click", () => setPinnedMessage(null));
 
 async function setPinnedMessage(msg) {
   let payload = msg ? { id: msg.id, text: replyPreviewText(msg).slice(0, 120), senderName: replySenderLabel(msg) } : null;
-  if (payload && currentChatType === "contact" && isE2EChat(currentChatId)) {
+  if (payload && (currentChatType === "contact" || currentChatType === "group") && isE2EChat(currentChatId)) {
     payload = { id: payload.id, text: "🔒 Сообщение", senderName: "", by: currentUser.uid, enc: await sealForChat(currentChatId, { text: payload.text }) };
   }
   try {
@@ -3906,8 +3908,9 @@ function openGroupChat(group) {
     listenGroupMessages(group.id, async (msgs) => {
       if (currentChatId !== group.id) return;
       count(msgs.length);
-      // Media forwarded from encrypted chats keeps its file key.
-      if (msgs.some((m) => m.mediaKey)) msgs = await Promise.all(msgs.map((m) => (m.mediaKey ? openPlainMedia(m) : m)));
+      currentChatRawSource = msgs;
+      // Decrypts end-to-end messages; media forwarded from encrypted chats keeps its file key.
+      if (msgs.some((m) => m.enc || m.mediaKey)) msgs = await openMessages(group.id, msgs);
       if (currentChatId !== group.id) return;
       currentChatRawMessages = msgs;
       rerenderMessages();
@@ -4231,7 +4234,13 @@ function messageOps() {
   }
   if (currentChatType === "group" || currentChatType === "channel") {
     return {
-      edit: (id, text) => editGroupMessage(currentChatId, id, text),
+      edit: async (id, text) => {
+        const msg = currentChatRawMessages.find((m) => m.id === id);
+        if (msg?._e2e) {
+          return editEncryptedGroupMessage(currentChatId, id, await sealForChat(currentChatId, { ...msg._content, text: text.trim() }));
+        }
+        return editGroupMessage(currentChatId, id, text);
+      },
       del: (id) => deleteGroupMessage(currentChatId, id),
       hide: (id) => hideGroupMessageForMe(currentChatId, id, currentUser.uid),
       react: limitReactions((id, emoji, add) => toggleGroupReaction(currentChatId, id, emoji, currentUser.uid, add)),
@@ -4385,7 +4394,7 @@ function renderBubbleContent(bubble, msg) {
     img.className = "msg-image";
     img.src = msg.imageUrl;
     img.alt = "";
-    img.loading = "lazy";
+    img.loading = lazyLoadingFor(msg);
     img.addEventListener("click", () => openLightbox(img));
     bubble.appendChild(msg.mediaSpoiler ? wrapMediaSpoiler(img, msg.id) : img);
   } else if (msg.voiceUrl) {
@@ -4410,7 +4419,7 @@ function renderBubbleContent(bubble, msg) {
       img.className = "msg-image";
       img.src = msg.fileUrl;
       img.alt = "";
-      img.loading = "lazy";
+      img.loading = lazyLoadingFor(msg);
       img.addEventListener("click", () => openLightbox(img));
       bubble.appendChild(img);
       const chip = document.createElement("a");
@@ -5180,6 +5189,14 @@ function startEditingMessage(row, msg, editFn) {
 const touchOnly = window.matchMedia("(hover: none)").matches;
 const QUICK_REACTIONS = ["❤️", "👍", "🔥", "😂", "😮", "🥰", "👏", "🤩", "💯", "🙏"];
 const quickReactionEmoji = () => (QUICK_REACTIONS.includes(myProfile?.chatPrefs?.quickReaction) ? myProfile.chatPrefs.quickReaction : "❤️");
+
+// A message that just arrived is re-rendered several times (local write,
+// server ack); a lazy <img> re-created that often can stay blank until the
+// page is reloaded, so only old history is loaded lazily.
+function lazyLoadingFor(msg) {
+  const at = msg.createdAt?.toMillis?.();
+  return !at || Date.now() - at < 120000 ? "eager" : "lazy";
+}
 
 function renderMessage(msg, isMine, senderName) {
   const ops = messageOps();
@@ -9325,7 +9342,7 @@ deleteAccountConfirmBtn.addEventListener("click", async () => {
   }
 });
 
-// ---------- End-to-end encryption (1:1 chats) ----------
+// ---------- End-to-end encryption (1:1 chats and groups) ----------
 // Automatic: every device gets its own key on first launch (see e2e.js).
 
 const deviceLists = new Map(); // uid -> { devices: {id: {pub}}, at }
@@ -9357,16 +9374,39 @@ function devicesOf(uid) {
 }
 
 const otherUidOf = (chatId) => chatId.split("_").find((u) => u && u !== currentUser.uid);
-const isE2EChat = (chatId) => hasDevice() && devicesOf(otherUidOf(chatId)).length > 0;
+const groupOf = (id) => groups.find((g) => g.id === id) || (currentGroupRef?.id === id ? currentGroupRef : null);
+// Everyone whose devices take part in a chat's encryption.
+const scopeUids = (chatId) => {
+  const g = groupOf(chatId);
+  return g ? g.members || [] : [currentUser.uid, otherUidOf(chatId)];
+};
+const E2E_MAX_GROUP = 100; // wrapping a key per device gets heavy beyond this
+const groupCanEncrypt = (g) => {
+  const others = (g?.members || []).filter((u) => u !== currentUser.uid);
+  return hasDevice() && g?.type === "group" && !!others.length && others.length < E2E_MAX_GROUP && others.every((u) => devicesOf(u).length > 0);
+};
+const isE2EChat = (chatId) => {
+  if (!hasDevice()) return false;
+  const g = groupOf(chatId);
+  return g ? groupCanEncrypt(g) : devicesOf(otherUidOf(chatId)).length > 0;
+};
+const devicesStale = (uid) => Date.now() - (deviceLists.get(uid)?.at || 0) > 30000;
 
-// Recipients = every device of the other person and all of mine.
+// Groups are encrypted when every member's app has a device key; the check
+// refreshes the members' device lists first.
+async function groupEncrypted(g) {
+  if (!g || g.type !== "group" || !hasDevice()) return false;
+  await Promise.all((g.members || []).filter((u) => u !== currentUser.uid && devicesStale(u)).map(refreshDevices));
+  return groupCanEncrypt(g);
+}
+
+// Recipients = every device of the other people in the chat and all of mine.
 async function recipientsFor(chatId) {
-  const otherUid = otherUidOf(chatId);
-  const stale = (uid) => Date.now() - (deviceLists.get(uid)?.at || 0) > 30000;
-  await Promise.all([otherUid, currentUser.uid].filter(stale).map(refreshDevices));
+  const uids = scopeUids(chatId);
+  await Promise.all([...new Set([...uids, currentUser.uid])].filter(devicesStale).map(refreshDevices));
   const mine = devicesOf(currentUser.uid);
   if (!mine.some((d) => d.id === deviceId())) mine.push({ id: deviceId(), pub: devicePublicKey() });
-  return [...devicesOf(otherUid), ...mine];
+  return [...uids.filter((u) => u !== currentUser.uid).flatMap(devicesOf), ...mine];
 }
 
 async function sealForChat(chatId, content) {
@@ -9383,7 +9423,7 @@ async function senderDevicePub(uid, devId) {
 async function sharerPub(chatId, box) {
   const by = box?.keys?.[deviceId()]?.by;
   if (!by) return null;
-  for (const uid of [currentUser.uid, otherUidOf(chatId)]) {
+  for (const uid of [currentUser.uid, ...scopeUids(chatId).filter((u) => u !== currentUser.uid)]) {
     const pub = await senderDevicePub(uid, by);
     if (pub) return pub;
   }
@@ -9412,22 +9452,29 @@ function queueKeyShare(chatId, m) {
       const senderPub = await senderDevicePub(m.senderId, m.enc.from);
       if (!senderPub) return;
       const entries = await shareKeys(chatId, m.enc, senderPub, await sharerPub(chatId, m.enc), missing);
-      await addMessageKeys(chatId, m.id, entries);
+      await (groupOf(chatId) ? addGroupMessageKeys : addMessageKeys)(chatId, m.id, entries);
     })
     .catch((err) => console.warn("key share skipped:", err?.message || err));
 }
 
 // ---------- Encrypted media ----------
 
-function willEncrypt(target) {
-  return target?.type === "contact" && hasDevice() && devicesOf(otherUidOf(target.id)).length > 0;
+async function willEncrypt(target) {
+  if (target?.type === "contact") return hasDevice() && devicesOf(otherUidOf(target.id)).length > 0;
+  if (target?.type === "group") return groupEncrypted(groupOf(target.id));
+  return false;
 }
 
 // Encrypts a file for upload when the chat is end-to-end encrypted.
 async function sealUpload(file, target) {
-  if (!willEncrypt(target)) return { file, mediaKey: null };
+  if (!(await willEncrypt(target))) return { file, mediaKey: null };
   const { blob, mediaKey } = await encryptBlob(file);
-  return { file: new File([blob], "e2e.bin", { type: "application/octet-stream" }), mediaKey };
+  // Cloudinary refuses opaque binary (format "bin"), so the ciphertext travels
+  // as base64 text; mediaKey.b64 tells openMedia to decode it first.
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { file: new File([btoa(text)], "e2e.txt", { type: "text/plain" }), mediaKey: { ...mediaKey, b64: 1 } };
 }
 
 const mediaCache = new Map(); // url -> Promise<blobURL>
@@ -9440,7 +9487,7 @@ function openMedia(url, mediaKey) {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.arrayBuffer();
         })
-        .then((buf) => decryptToBlob(buf, mediaKey))
+        .then((buf) => decryptToBlob(mediaKey.b64 ? Uint8Array.from(atob(new TextDecoder().decode(buf)), (c) => c.charCodeAt(0)) : buf, mediaKey))
         .then((blob) => URL.createObjectURL(blob))
         .catch((err) => {
           mediaCache.delete(url);
@@ -9478,7 +9525,7 @@ async function withOpenMedia(content) {
   }
   p.then(() => {
     clearTimeout(mediaRerenderTimer);
-    mediaRerenderTimer = setTimeout(() => currentChatType === "contact" && rerenderMessages(), 60);
+    mediaRerenderTimer = setTimeout(() => (currentChatType === "contact" || currentChatType === "group") && rerenderMessages(), 60);
   }).catch(() => {});
   const ready = await Promise.race([p, Promise.resolve(null)]).catch(() => null);
   return ready ? { ...content, [field]: ready } : content;
@@ -9526,7 +9573,7 @@ function onKeysChanged() {
   previewCache.clear();
   renderChats();
   refreshChatChrome();
-  if (currentChatType === "contact" && currentChatId) {
+  if ((currentChatType === "contact" || currentChatType === "group") && currentChatId) {
     const chatId = currentChatId;
     openMessages(chatId, currentChatRawSource).then((list) => {
       if (currentChatId !== chatId) return;
@@ -9567,6 +9614,25 @@ async function deliver({ type, id, text = "", attachment = null, replyTo = null,
     const mentions = await mentionedUids(text, members);
     if (mentions.length) extra = { ...(extra || {}), mentions };
     if (type === "group" && activeTopic && id === currentChatId) extra = { ...(extra || {}), topic: activeTopic };
+    const group = groups.find((g) => g.id === id) || currentGroupRef;
+    if (await groupEncrypted(group)) {
+      // Everything readable goes inside the ciphertext; only what the server
+      // must see (mention counters, topic filter, expiry) stays outside.
+      const content = { text: text || attachment?.defaultCaption || "", ...(attachment?.fields || {}), ...(extra || {}) };
+      if (replyTo) content.replyTo = replyTo;
+      const preview = attachment?.previewText || text || content.text;
+      const recipients = await recipientsFor(id);
+      const outer = { enc: await sealFor(id, recipients, content) };
+      if (extra?.mentions?.length) outer.mentions = extra.mentions;
+      if (extra?.topic) outer.topic = extra.topic;
+      return sendGroupMessage(id, me, "🔒", null, null, outer, members, {
+        scheduleAt,
+        silent,
+        plain,
+        preview: "🔒 Сообщение",
+        previewEnc: await sealFor(id, recipients, { p: preview }),
+      });
+    }
     return sendGroupMessage(id, me, text, attachment, replyTo, extra, members, { scheduleAt, silent, plain });
   }
   // 1:1 chat — encrypted whenever the other person's app has a device key.
@@ -11630,7 +11696,7 @@ async function addStickerFiles(files) {
     }
     try {
       const blob = await stickerBlob(f);
-      const url = await uploadToCloudinary(new File([blob], "sticker.webp", { type: blob.type }), "image");
+      const { url } = await uploadToCloudinary(new File([blob], "sticker.webp", { type: blob.type }), "image");
       list.unshift(url);
       added++;
     } catch (err) {
