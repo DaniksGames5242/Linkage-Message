@@ -45,7 +45,13 @@ const L = require("./lib.cjs");
     await A.mouse.click(box.x, box.y, { button: "right" });
     await L.until(A, () => !!document.querySelector(".ctx-menu"));
   };
-  const clickItem = (label) => A.evaluate((l) => [...document.querySelectorAll(".ctx-menu button, .ctx-menu [role=menuitem], .ctx-menu .ctx-item")].find((b) => b.textContent.trim() === l).click(), label);
+  const findClick = (label) => A.evaluate((l) => { const m = [...document.querySelectorAll(".ctx-menu")].pop(); const b = [...(m?.querySelectorAll("button, [role=menuitem], .ctx-item") || [])].find((b) => b.textContent.trim() === l); if (b) b.click(); return !!b; }, label);
+  const clickItem = async (label) => {
+    if (await findClick(label)) return;
+    await findClick("Ещё…");
+    await A.waitForTimeout(400);
+    if (!(await findClick(label))) throw new Error("no menu item " + label);
+  };
   await L.check("bookmark from message menu", async () => {
     await menuOnLast();
     await clickItem("В закладки");
@@ -61,6 +67,7 @@ const L = require("./lib.cjs");
   const chatMenu = async (id) => {
     await A.waitForTimeout(300);
     await A.click("#chat-menu-btn");
+    if (await A.evaluate((i) => !!document.getElementById(i).closest("#chat-menu-extra.hidden"), id)) await A.click("#chat-menu-more-btn");
     await A.click("#" + id);
   };
   await L.check("bookmarks list jumps to the message", async () => {

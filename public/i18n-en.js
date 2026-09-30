@@ -3,6 +3,11 @@
 // (static markup, menus, toasts, dialogs), while user content is left alone.
 
 export const EN = {
+  "Настройки чата": "Chat settings",
+  "Ещё…": "More…",
+  "Перевести чат": "Translate chat",
+  "Не предлагать": "Don't suggest",
+  "Можно поставить не больше 3 реакций": "You can add up to 3 reactions",
   "Расшифровка голосовых": "Transcribe voice messages",
   "Пока вы записываете голосовое, браузер распознаёт речь, и к сообщению прикладывается текст (кнопка «Aa»). В Chrome звук для распознавания отправляется в Google.": "While you record a voice message, the browser recognises speech and attaches the text (the “Aa” button). In Chrome the audio is sent to Google for recognition.",
   "Показать текст": "Show text",

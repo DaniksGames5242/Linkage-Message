@@ -4005,6 +4005,11 @@ scheduleOverlay.addEventListener("click", (e) => {
 });
 // Long-press (touch) or right-click on the send button: effects, silent, later.
 onContextGesture(sendBtn, (x, y) => openSendOptions(x, y));
+// Keep the textarea focused (no keyboard collapse / relayout that would close
+// the menu) and never start a text selection from a long press on send.
+sendBtn.addEventListener("mousedown", (e) => e.preventDefault());
+sendBtn.addEventListener("selectstart", (e) => e.preventDefault());
+sendBtn.addEventListener("touchstart", () => window.getSelection()?.removeAllRanges?.(), { passive: true });
 
 function openSendOptions(x, y) {
   if (!msgInput.value.trim()) return;
@@ -4061,6 +4066,26 @@ backToListBtn.addEventListener("click", () => {
 
 // Returns {edit, del, react} functions bound to the currently open chat, or
 // nulls where an action isn't supported (e.g. read-only Notifications feed).
+// One person may leave at most this many different reactions on a message.
+const MAX_MY_REACTIONS = 3;
+function limitReactions(react) {
+  return (id, emoji, add) => {
+    if (add) {
+      const row = messagesEl.querySelector(`[data-msg-id="${CSS.escape(id)}"]`);
+      let rx = {};
+      try {
+        rx = JSON.parse(row?.dataset.rx || "{}");
+      } catch (_) {}
+      const mine = Object.entries(rx).filter(([e, uids]) => e !== emoji && (uids || []).includes(currentUser.uid)).length;
+      if (mine >= MAX_MY_REACTIONS) {
+        toast("Можно поставить не больше 3 реакций", { icon: "✋" });
+        return Promise.resolve();
+      }
+    }
+    return react(id, emoji, add);
+  };
+}
+
 function messageOps() {
   if (currentChatType === "saved") {
     return {
@@ -4074,7 +4099,7 @@ function messageOps() {
       edit: (id, text) => editGroupMessage(currentChatId, id, text),
       del: (id) => deleteGroupMessage(currentChatId, id),
       hide: (id) => hideGroupMessageForMe(currentChatId, id, currentUser.uid),
-      react: (id, emoji, add) => toggleGroupReaction(currentChatId, id, emoji, currentUser.uid, add),
+      react: limitReactions((id, emoji, add) => toggleGroupReaction(currentChatId, id, emoji, currentUser.uid, add)),
       vote: (id, choices) => voteGroupPoll(currentChatId, id, currentUser.uid, choices),
       check: (id, idx, on) => setGroupChecklistItem(currentChatId, id, idx, on ? currentUser.uid : null),
     };
@@ -4090,7 +4115,7 @@ function messageOps() {
       },
       del: (id) => deleteMessage(currentChatId, id),
       hide: (id) => hideMessageForMe(currentChatId, id, currentUser.uid),
-      react: (id, emoji, add) => toggleReaction(currentChatId, id, emoji, currentUser.uid, add),
+      react: limitReactions((id, emoji, add) => toggleReaction(currentChatId, id, emoji, currentUser.uid, add)),
       vote: (id, choices) => votePoll(currentChatId, id, currentUser.uid, choices),
       check: (id, idx, on) => setChecklistItem(currentChatId, id, idx, on ? currentUser.uid : null),
     };
@@ -4907,7 +4932,9 @@ function buildReactionsBar(msg, reactFn) {
     pill.type = "button";
     pill.className = "reaction-pill" + (mine ? " mine" : "");
     pill.dataset.emoji = emoji;
-    pill.textContent = `${emoji} ${uids.length}`;
+    pill.innerHTML = '<span class="rx-emoji"></span><span class="rx-count"></span>';
+    pill.firstChild.textContent = emoji;
+    pill.lastChild.textContent = uids.length > 999 ? Math.floor(uids.length / 1000) + "K" : String(uids.length);
     pill.addEventListener("click", (e) => {
       if (!mine) emojiEffect(emoji, e.clientX, e.clientY, 90);
       reactFn(msg.id, emoji, !mine);
@@ -5110,6 +5137,13 @@ function renderMessage(msg, isMine, senderName) {
     timeEl.prepend(tag);
   }
 
+  // Plain text: the time sits inside the bubble, bottom-right, like Telegram.
+  const bubbleEl = row.querySelector(".bubble");
+  if (bubbleEl.children.length === 1 && bubbleEl.firstElementChild.classList.contains("bubble-text")) {
+    timeEl.classList.add("in-bubble");
+    bubbleEl.appendChild(timeEl);
+  }
+
   if (canReact) {
     row.querySelector(".msg-group").appendChild(buildReactionsBar(msg, ops.react));
   }
@@ -5292,13 +5326,6 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
     reactions,
     items: [
       canReply && { label: "Ответить", icon: MI.reply, onClick: () => startReply(msg) },
-      isMine && currentChatType === "group" && seenByItem(msg, x, y),
-      { label: "Выбрать", icon: MI.check, onClick: () => enterSelectMode(msg.id) },
-      msg.effect && EFFECTS[msg.effect] && {
-        label: "Повторить эффект",
-        icon: MI.sparkle,
-        onClick: () => playEffect(msg.effect, centerOfPoint(row.querySelector(".bubble"))),
-      },
       hasText && {
         label: "Копировать",
         icon: MI.copy,
@@ -5308,22 +5335,40 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
             .then(() => toast("Текст скопирован", { icon: "📋" }))
             .catch(() => toast("Не удалось скопировать", { tone: "error" })),
       },
-      !msg.call && { label: "Переслать", icon: MI.forward, onClick: () => openForward(msg) },
-      hasText && "speechSynthesis" in window && { label: speakingMsgId === msg.id ? "Остановить чтение" : "Прочитать вслух", icon: MI.music, onClick: () => speakMessage(msg) },
-      hasText && { label: "Перевести", icon: MI.link, onClick: () => translateMessage(msg) },
-      hasText && { label: "Копировать как цитату", icon: MI.copy, onClick: () => copyAsQuote(msg, isMine) },
-      { label: isBookmarked(msg.id) ? "Убрать закладку" : "В закладки", icon: MI.pin, onClick: () => toggleBookmark(msg) },
-      hasText && navigator.share && { label: "Поделиться", icon: MI.forward, onClick: () => navigator.share({ text: msg.text }).catch(() => {}) },
-      { label: "Подробнее", icon: MI.eye, onClick: () => showMessageInfo(msg, isMine) },
-      msg.sticker && !myStickers().includes(msg.sticker) && { label: "Сохранить стикер", icon: MI.sparkle, onClick: () => addStickerUrl(msg.sticker) },
-      { label: "Напомнить", icon: MI.bell, onClick: () => setTimeout(() => openReminderPicker(msg, x, y), 60) },
       canPinInCurrentChat() && {
         label: pinnedId === msg.id ? "Открепить" : "Закрепить",
         icon: MI.pin,
         onClick: () => setPinnedMessage(pinnedId === msg.id ? null : msg),
       },
+      !msg.call && { label: "Переслать", icon: MI.forward, onClick: () => openForward(msg) },
       canEdit && hasText && { label: "Изменить", icon: MI.edit, onClick: () => startEditingMessage(row, msg, ops.edit) },
+      { label: "Выбрать", icon: MI.check, onClick: () => enterSelectMode(msg.id) },
+      { label: "Ещё…", icon: MI.sparkle, onClick: () => setTimeout(() => openMessageMoreMenu(row, msg, isMine, hasText, x, y), 60) },
       canDelete && { label: "Удалить", icon: MI.trash, danger: true, onClick: () => askDeleteMessage(row, msg, ops, isMine, x, y) },
+    ],
+  });
+}
+
+// Less frequent message actions, one tap away from the main menu.
+function openMessageMoreMenu(row, msg, isMine, hasText, x, y) {
+  openContextMenu({
+    x,
+    y,
+    items: [
+      isMine && currentChatType === "group" && seenByItem(msg, x, y),
+      msg.effect && EFFECTS[msg.effect] && {
+        label: "Повторить эффект",
+        icon: MI.sparkle,
+        onClick: () => playEffect(msg.effect, centerOfPoint(row.querySelector(".bubble"))),
+      },
+      hasText && { label: "Перевести", icon: MI.link, onClick: () => translateMessage(msg) },
+      hasText && "speechSynthesis" in window && { label: speakingMsgId === msg.id ? "Остановить чтение" : "Прочитать вслух", icon: MI.music, onClick: () => speakMessage(msg) },
+      hasText && { label: "Копировать как цитату", icon: MI.copy, onClick: () => copyAsQuote(msg, isMine) },
+      { label: isBookmarked(msg.id) ? "Убрать закладку" : "В закладки", icon: MI.pin, onClick: () => toggleBookmark(msg) },
+      { label: "Напомнить", icon: MI.bell, onClick: () => setTimeout(() => openReminderPicker(msg, x, y), 60) },
+      hasText && navigator.share && { label: "Поделиться", icon: MI.forward, onClick: () => navigator.share({ text: msg.text }).catch(() => {}) },
+      msg.sticker && !myStickers().includes(msg.sticker) && { label: "Сохранить стикер", icon: MI.sparkle, onClick: () => addStickerUrl(msg.sticker) },
+      { label: "Подробнее", icon: MI.eye, onClick: () => showMessageInfo(msg, isMine) },
     ],
   });
 }
@@ -6030,6 +6075,90 @@ function renderMessageList(msgs, render) {
     render(msg);
   });
 }
+
+// Telegram-style spacing: consecutive messages from one sender sent close
+// together form a group (tight gap, tail only on the last bubble, one sender
+// name); a new sender or a long pause opens a wider gap.
+const GROUP_GAP_MS = 5 * 60 * 1000;
+let spacingFrame = 0;
+function applyMessageSpacing() {
+  spacingFrame = 0;
+  let prev = null;
+  for (const el of messagesEl.children) {
+    if (!el.classList.contains("msg-row")) {
+      if (prev) prev.classList.add("grp-last");
+      prev = null;
+      continue;
+    }
+    const sender = el._msg?.senderId || (el.classList.contains("me") ? "me" : "");
+    const ts = Number(el.dataset.ts) || Date.now();
+    const joined = !!prev && prev._grpSender === sender && ts - prev._grpTs < GROUP_GAP_MS;
+    el._grpSender = sender;
+    el._grpTs = ts;
+    el.classList.toggle("grp-cont", joined);
+    el.classList.toggle("grp-far", !!prev && !joined && ts - prev._grpTs > 60 * 60 * 1000);
+    el.classList.remove("grp-last");
+    if (prev) prev.classList.toggle("grp-last", !joined);
+    prev = el;
+  }
+  if (prev) prev.classList.add("grp-last");
+  updateTranslateBar();
+}
+
+// "Translate this chat?" appears on its own once incoming messages are in a
+// language other than the interface one (judged by alphabet).
+const TRANSLATE_OFF_KEY = "lm-translate-off";
+let translateBar = null;
+function isForeignText(text) {
+  const letters = (text || "").match(/\p{L}/gu) || [];
+  if (letters.length < 8) return false;
+  const en = document.documentElement.lang === "en";
+  const native = letters.filter((c) => (en ? /[a-z]/i.test(c) : /[\u0400-\u04FF]/.test(c))).length;
+  return native / letters.length < 0.3;
+}
+function foreignMessages() {
+  const out = [];
+  for (const el of messagesEl.querySelectorAll(".msg-row:not(.me)")) {
+    const t = el._msg?.text;
+    if (t && !el._msg.call && isForeignText(t)) out.push(t);
+  }
+  return out.slice(-30);
+}
+function updateTranslateBar() {
+  let off = [];
+  try {
+    off = JSON.parse(localStorage.getItem(TRANSLATE_OFF_KEY)) || [];
+  } catch (_) {}
+  const show = !!currentChatId && !off.includes(currentChatId) && foreignMessages().length > 0;
+  if (!show) {
+    translateBar?.classList.add("hidden");
+    return;
+  }
+  if (!translateBar) {
+    translateBar = document.createElement("div");
+    translateBar.id = "translate-bar";
+    translateBar.className = "glass";
+    translateBar.innerHTML = `<button type="button" class="translate-bar-go">${MI.link}<span>Перевести чат</span></button><button type="button" class="icon-btn translate-bar-close" title="Не предлагать">✕</button>`;
+    translateBar.querySelector(".translate-bar-go").addEventListener("click", () => {
+      const tl = document.documentElement.lang === "en" ? "en" : "ru";
+      const text = foreignMessages().join("\n\n").slice(0, 4500);
+      window.open(`https://translate.google.com/?sl=auto&tl=${tl}&op=translate&text=${encodeURIComponent(text)}`, "_blank", "noopener");
+    });
+    translateBar.querySelector(".translate-bar-close").addEventListener("click", () => {
+      try {
+        let list = JSON.parse(localStorage.getItem(TRANSLATE_OFF_KEY)) || [];
+        list = [...list.filter((id) => id !== currentChatId), currentChatId].slice(-200);
+        localStorage.setItem(TRANSLATE_OFF_KEY, JSON.stringify(list));
+      } catch (_) {}
+      translateBar.classList.add("hidden");
+    });
+    messagesEl.before(translateBar);
+  }
+  translateBar.classList.remove("hidden");
+}
+new MutationObserver(() => {
+  if (!spacingFrame) spacingFrame = requestAnimationFrame(applyMessageSpacing);
+}).observe(messagesEl, { childList: true });
 
 // ---------- Call log bubbles ----------
 
@@ -7775,9 +7904,25 @@ aliasSaveBtn.addEventListener("click", async () => {
 
 // ---------- Chat menu: clear history / delete chat (per-user, non-destructive) ----------
 
+const chatMenuMoreBtn = document.getElementById("chat-menu-more-btn");
+const chatMenuExtra = document.getElementById("chat-menu-extra");
+const setChatMenuExtra = (open) => {
+  chatMenuExtra.classList.toggle("hidden", !open);
+  chatMenuMoreBtn.setAttribute("aria-expanded", String(open));
+  // Nothing to expand (e.g. every extra is hidden for this chat type).
+  chatMenuMoreBtn.classList.toggle("hidden", !chatMenuExtra.querySelector(".dropdown-item:not(.hidden)"));
+};
+chatMenuMoreBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const open = chatMenuExtra.classList.contains("hidden");
+  setChatMenuExtra(open);
+  if (open) stagger(chatMenuExtra.querySelectorAll(".dropdown-item:not(.hidden)"), { x: -8, y: 0, blur: 0, step: 20, spring: "smooth" });
+});
+
 chatMenuBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   if (chatMenuDropdown.classList.contains("hidden") || chatMenuDropdown.classList.contains("is-closing")) {
+    setChatMenuExtra(false);
     showPopover(chatMenuDropdown, { originX: "right" });
   } else {
     hidePopover(chatMenuDropdown);

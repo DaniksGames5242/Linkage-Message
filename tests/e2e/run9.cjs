@@ -47,6 +47,7 @@ const path = require("path");
     await A.press("#msg-input", "Enter");
     await A.waitForTimeout(300);
     await A.click("#chat-menu-btn");
+    await A.click("#chat-menu-more-btn");
     await A.click("#chat-menu-note-btn");
     await A.fill(".x-modal textarea", "синхронная заметка");
     await A.waitForTimeout(700);

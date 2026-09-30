@@ -110,7 +110,9 @@ async function startChat(P, username, expectName) {
     await H.seeText(B, "кто прочитал?", false);
     await B.waitForTimeout(1500);
     await H.msgMenu(A, "кто прочитал?", null);
-    const label = await A.evaluate(() => [...document.querySelectorAll(".ctx-menu .ctx-item")].map((i) => i.textContent.trim()).find((t) => t.startsWith("Прочитали") || t.startsWith("Ещё не")));
+    await A.evaluate(() => [...document.querySelectorAll(".ctx-menu .ctx-item")].find((x) => x.textContent.trim() === "Ещё…")?.click());
+    await A.waitForTimeout(400);
+    const label = await A.evaluate(() => [...[...document.querySelectorAll(".ctx-menu")].pop().querySelectorAll(".ctx-item")].map((i) => i.textContent.trim()).find((t) => t.startsWith("Прочитали") || t.startsWith("Ещё не")));
     await A.keyboard.press("Escape");
     if (!/Прочитали: [12]/.test(label || "")) throw new Error("label: " + label);
   });

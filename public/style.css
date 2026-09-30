@@ -9566,3 +9566,114 @@ html[data-bubble] .msg-row.me .bubble.sticker-bubble {
 .voice-transcript-text { font-size: 14px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
 .voice-transcript-text.hidden { display: none; }
 .setting-row.disabled { opacity: 0.5; }
+
+/* ---------- Telegram-style message spacing ---------- */
+/* Rows are spaced by applyMessageSpacing(): one sender within 5 minutes is a
+   group (tight gap, one tail, one name); otherwise a wider gap. */
+#messages { gap: 0; }
+#messages .msg-row,
+#messages.compact .msg-row { margin-bottom: 0; margin-top: 10px; }
+#messages .msg-row.grp-cont { margin-top: 2px; }
+#messages .msg-row.grp-far { margin-top: 16px; }
+#messages .date-sep + .msg-row { margin-top: 6px; }
+.msg-row.grp-cont .msg-sender { display: none; }
+.msg-row:not(.grp-last) .bubble { border-bottom-left-radius: var(--bubble-r, 22px); }
+.msg-row.me:not(.grp-last) .bubble { border-bottom-right-radius: var(--bubble-r, 22px); }
+
+/* Time inside a plain text bubble, bottom-right. */
+.bubble .msg-time.in-bubble {
+  position: absolute;
+  right: 10px;
+  bottom: 5px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.75;
+  color: inherit;
+  pointer-events: auto;
+}
+.msg-row:not(.me) .bubble .msg-time.in-bubble { color: var(--text-faint); opacity: 1; }
+.msg-row.me .bubble .msg-time.in-bubble .msg-tick { color: inherit; }
+.bubble:has(> .msg-time.in-bubble) .bubble-text::after {
+  content: "";
+  display: inline-block;
+  width: 42px;
+  height: 1em;
+}
+.msg-row.me .bubble:has(> .msg-time.in-bubble) .bubble-text::after { width: 58px; }
+.bubble:has(> .msg-time.in-bubble .msg-edited-tag) .bubble-text::after { width: 96px; }
+.bubble:has(> .msg-time.in-bubble .msg-effect-tag) .bubble-text::after { width: 80px; }
+
+/* Long-pressing send must not select text or pop the iOS callout: that
+   stole focus and closed the send-options menu right after it opened. */
+#send-btn,
+.ctx-menu,
+.ctx-backdrop {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+/* ---------- Telegram-style reactions ---------- */
+.msg-reactions { gap: 4px; margin-top: 4px; }
+.reaction-pill {
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px 0 6px;
+  border: 0;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-text);
+  box-shadow: none;
+}
+.reaction-pill .rx-emoji { font-size: 17px; line-height: 1; }
+.reaction-pill .rx-count { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.reaction-pill:hover { transform: none; filter: brightness(1.08); }
+.reaction-pill.mine {
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  box-shadow: none;
+}
+.msg-row.me .reaction-pill:not(.mine) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* ---------- Chat menu: rarely used items folded under "Chat settings" ---------- */
+.dd-chevron { margin-left: auto; font-size: 18px; line-height: 1; opacity: 0.6; transition: transform 0.3s var(--ease-out); }
+#chat-menu-more-btn[aria-expanded="true"] .dd-chevron { transform: rotate(90deg); }
+.chat-menu-extra {
+  margin: 2px 0 2px 10px;
+  padding-left: 4px;
+  border-left: 2px solid var(--stroke);
+}
+#chat-menu-dropdown { max-height: calc(100dvh - 120px); overflow-y: auto; }
+
+/* ---------- Auto "Translate chat" suggestion ---------- */
+#translate-bar {
+  position: absolute;
+  top: 82px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 18px;
+  animation: sendAppear 0.5s var(--ease-jelly) backwards;
+}
+#pinned-bar:not(.hidden) ~ #translate-bar { top: 136px; }
+#translate-bar > * { position: relative; z-index: 2; }
+#translate-bar.hidden { display: none; }
+.translate-bar-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: 0;
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 650;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.translate-bar-go svg { width: 16px; height: 16px; }
