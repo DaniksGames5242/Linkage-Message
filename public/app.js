@@ -11047,6 +11047,41 @@ function openChatNote() {
   setTimeout(() => ta.focus(), 50);
 }
 
+// Shared by the HTML and PDF exports. Images come from the rendered rows, so
+// encrypted photos and stickers (already decrypted to blob: URLs) work too.
+function buildExportBody(rows, { print = false } = {}) {
+  let lastDay = "";
+  let lastSender = null;
+  return rows
+    .map((r) => {
+      const { msg, isMine } = r._ctx;
+      const d = msgDate(msg);
+      const day = d ? d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "";
+      const sep = day && day !== lastDay ? `<div class="day">${escapeHtmlX(day)}</div>` : "";
+      const showName = !!sep || msg.senderId !== lastSender;
+      lastSender = msg.senderId;
+      if (day) lastDay = day;
+      let text = msg.poll
+        ? `${msg.poll.quiz ? "❓" : "📊"} ${msg.poll.q} — ${msg.poll.options.join(" / ")}`
+        : msg.text && !DEFAULT_CAPTIONS.includes(msg.text)
+        ? stripRich(msg.text)
+        : "";
+      if (msg.location) text += ` 📍 https://www.openstreetmap.org/?mlat=${msg.location.lat}&mlon=${msg.location.lng}`;
+      if (msg.transcript) text += (text ? "\n" : "") + `🎤 «${msg.transcript}»`;
+      else if (msg.voiceUrl && !text) text = "🎤 Голосовое сообщение";
+      if (msg.videoNoteUrl && !text) text = "⭕ Видеосообщение";
+      if (msg.call && !text) text = "📞 Звонок";
+      const shown = r.querySelector(".bubble img.msg-image, .bubble img.sticker-img");
+      const src = shown?.currentSrc || shown?.src || (msg.imageUrl && !msg.enc ? msg.imageUrl : "") || (msg.sticker && !msg.enc ? msg.sticker : "");
+      const img = src ? `<img class="${msg.sticker ? "st" : ""}" src="${escapeHtmlX(src)}" alt="">` : "";
+      const media = msg.fileUrl || (!print && (msg.voiceUrl || msg.videoNoteUrl));
+      const link = media && !img ? (print ? `<div class="f">📎 ${escapeHtmlX(msg.fileName || "Вложение")}</div>` : `<a href="${escapeHtmlX(media)}">${escapeHtmlX(msg.fileName || "Вложение")}</a>`) : "";
+      const time = d ? d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
+      return `${sep}<div class="m ${isMine ? "me" : ""}"><div class="b${msg.sticker ? " bare" : ""}">${showName ? `<div class="n">${escapeHtmlX(senderNameX(msg, isMine))}</div>` : ""}${img}${link}${text ? `<div class="t">${escapeHtmlX(text)}</div>` : ""}<div class="w">${time}${msg.edited ? " · изм." : ""}</div></div></div>`;
+    })
+    .join("\n");
+}
+
 function exportCurrentChatHtml() {
   const rows = loadedRows();
   if (!rows.length) {
@@ -11054,26 +11089,12 @@ function exportCurrentChatHtml() {
     return;
   }
   const title = chatTitle.textContent.trim() || "Чат";
-  let lastDay = "";
-  const body = rows
-    .map((r) => {
-      const { msg, isMine } = r._ctx;
-      const d = msgDate(msg);
-      const day = d ? d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "";
-      const sep = day && day !== lastDay ? `<div class="day">${escapeHtmlX(day)}</div>` : "";
-      if (day) lastDay = day;
-      let text = msg.poll ? `📊 ${msg.poll.q} — ${msg.poll.options.join(" / ")}` : stripRich(msg.text || "");
-      const media = msg.imageUrl || msg.fileUrl || msg.voiceUrl || msg.videoNoteUrl;
-      const img = msg.imageUrl && !msg.enc ? `<img src="${escapeHtmlX(msg.imageUrl)}" alt="">` : "";
-      const link = media && !img ? `<a href="${escapeHtmlX(media)}">${escapeHtmlX(msg.fileName || "Вложение")}</a>` : "";
-      return `${sep}<div class="m ${isMine ? "me" : ""}"><div class="b"><div class="n">${escapeHtmlX(senderNameX(msg, isMine))}</div>${img}${link}<div class="t">${escapeHtmlX(text)}</div><div class="w">${d ? d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : ""}</div></div></div>`;
-    })
-    .join("\n");
+  const body = buildExportBody(rows);
   const html = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtmlX(title)}</title><style>
 body{margin:0;background:#120e0b;color:#f7efe5;font:15px/1.45 system-ui,sans-serif}main{max-width:760px;margin:0 auto;padding:16px}
 h1{font-size:20px}.day{text-align:center;color:#a99;margin:18px 0 8px;font-size:13px}.m{display:flex;margin:4px 0}.m.me{justify-content:flex-end}
-.b{max-width:75%;background:#2a211b;border-radius:16px;padding:8px 12px}.me .b{background:#ff8a1a;color:#1f1100}.n{font-size:12px;font-weight:600;opacity:.75}
-.t{white-space:pre-wrap;word-wrap:break-word}.w{font-size:11px;opacity:.6;text-align:right}img{max-width:100%;border-radius:10px;display:block;margin:4px 0}a{color:inherit}
+.b{max-width:75%;background:#2a211b;border-radius:16px;padding:8px 12px}.me .b{background:#ff8a1a;color:#1f1100}.b.bare{background:none}.n{font-size:12px;font-weight:600;opacity:.75}
+.t{white-space:pre-wrap;word-wrap:break-word}.w{font-size:11px;opacity:.6;text-align:right}img{max-width:100%;border-radius:10px;display:block;margin:4px 0}img.st{width:140px}a{color:inherit}
 </style></head><body><main><h1>${escapeHtmlX(title)}</h1><p style="color:#a99">Экспорт Linkage Message · ${escapeHtmlX(new Date().toLocaleString("ru-RU"))}</p>${body}</main></body></html>`;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
@@ -11085,8 +11106,103 @@ h1{font-size:20px}.day{text-align:center;color:#a99;margin:18px 0 8px;font-size:
   toast(`Сохранено сообщений: ${rows.length}`, { icon: "💾" });
 }
 
+// Pulls the whole history of the open chat (not just the last page) and
+// waits until every row has been rendered (and decrypted).
+async function loadFullHistory(progress, isCancelled) {
+  const chatId = currentChatId;
+  if (!historyResub) return true;
+  let stable = 0;
+  let last = -1;
+  for (let i = 0; i < 400; i++) {
+    if (isCancelled() || currentChatId !== chatId) return false;
+    if (historyCount >= historySize) {
+      historySize += HISTORY_PAGE * 4;
+      historyResub(historySize);
+      stable = 0;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    const n = loadedRows().length;
+    progress(n, historyCount < historySize);
+    if (historyCount < historySize && n === last) stable++;
+    else stable = 0;
+    last = n;
+    if (stable >= 4) return true;
+  }
+  return true;
+}
+
+let pdfExporting = false;
+async function exportCurrentChatPdf() {
+  if (pdfExporting) return;
+  pdfExporting = true;
+  let cancelled = false;
+  const t = progressToast("Загружаем всю переписку…", { onCancel: () => (cancelled = true) });
+  try {
+    const ok = await loadFullHistory(
+      (n, complete) => {
+        t.update(complete ? 0.9 : Math.min(0.85, 0.1 + n / Math.max(historySize, 1)));
+        t.setText(`Загружено сообщений: ${n}`);
+      },
+      () => cancelled
+    );
+    if (!ok) {
+      t.fail?.();
+      return;
+    }
+    const rows = loadedRows();
+    if (!rows.length) {
+      t.done();
+      toast("В этом чате пока нечего сохранять", { icon: "📄" });
+      return;
+    }
+    const title = chatTitle.textContent.trim() || "Чат";
+    const first = msgDate(rows[0]._ctx.msg);
+    const lastD = msgDate(rows[rows.length - 1]._ctx.msg);
+    const range = first && lastD ? `${first.toLocaleDateString("ru-RU")} — ${lastD.toLocaleDateString("ru-RU")}` : "";
+    const html = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Linkage-${escapeHtmlX(translit(title))}-${new Date().toISOString().slice(0, 10)}</title><style>
+@page{size:A4;margin:14mm 12mm}
+*{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;color:#1c1612;font:11.5pt/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{border-bottom:2px solid #ff8a1a;padding-bottom:8px;margin-bottom:10px}
+h1{font-size:18pt;margin:0 0 2px}.meta{color:#7a6d63;font-size:9.5pt}
+.day{text-align:center;color:#7a6d63;margin:14px 0 6px;font-size:9.5pt;font-weight:600;break-after:avoid}
+.m{display:flex;margin:3px 0;break-inside:avoid}.m.me{justify-content:flex-end}
+.b{max-width:78%;background:#f1ece7;border-radius:12px;padding:6px 10px}.me .b{background:#ffe0bf}.b.bare{background:none}
+.n{font-size:8.5pt;font-weight:700;color:#b25a00}.t{white-space:pre-wrap;overflow-wrap:anywhere}.f{font-size:10pt;color:#5a4d43}
+.w{font-size:8pt;color:#8a7d73;text-align:right}img{max-width:60mm;max-height:70mm;border-radius:8px;display:block;margin:3px 0}img.st{width:32mm}
+</style></head><body><header><h1>${escapeHtmlX(title)}</h1><div class="meta">Linkage Message · сообщений: ${rows.length}${range ? " · " + escapeHtmlX(range) : ""} · выгружено ${escapeHtmlX(new Date().toLocaleString("ru-RU"))}</div></header>${buildExportBody(rows, { print: true })}</body></html>`;
+    t.update(1);
+    t.done();
+    const frame = document.createElement("iframe");
+    frame.className = "print-frame";
+    frame.setAttribute("aria-hidden", "true");
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument;
+    doc.open();
+    doc.write(html);
+    doc.close();
+    // Images must be loaded before printing, or they come out blank.
+    await Promise.race([
+      Promise.all([...doc.images].map((im) => (im.complete ? null : new Promise((r) => (im.onload = im.onerror = r))))),
+      new Promise((r) => setTimeout(r, 8000)),
+    ]);
+    toast("Выберите «Сохранить как PDF» в окне печати", { icon: "📄", duration: 5000 });
+    window.__lastPdfExport = { rows: rows.length, html };
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+    setTimeout(() => frame.remove(), 60000);
+  } catch (err) {
+    console.error(err);
+    t.fail?.();
+    toast("Не удалось выгрузить PDF", { tone: "error" });
+  } finally {
+    pdfExporting = false;
+  }
+}
+
 [
   ["chat-menu-export-html-btn", exportCurrentChatHtml],
+  ["chat-menu-export-pdf-btn", exportCurrentChatPdf],
   ["chat-menu-date-btn", openJumpToDate],
   ["chat-menu-bookmarks-btn", showBookmarks],
   ["chat-menu-stats-btn", showChatStats],

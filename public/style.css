@@ -9677,3 +9677,4 @@ html[data-bubble] .msg-row.me .bubble.sticker-bubble {
   cursor: pointer;
 }
 .translate-bar-go svg { width: 16px; height: 16px; }
+.print-frame { position: fixed; right: 0; bottom: 0; width: 0; height: 0; border: 0; visibility: hidden; }
