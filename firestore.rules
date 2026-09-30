@@ -304,7 +304,7 @@ service cloud.firestore {
           && attachmentsOk();
         allow update: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members
-          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe() || isChecklistEdit());
+          && (isMessageTextEdit() || isMessageReactionEdit() || isPollVote() || isHideForMe() || isChecklistEdit() || isKeyShare());
         allow delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
     }

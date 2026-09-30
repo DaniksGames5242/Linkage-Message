@@ -210,6 +210,21 @@ export async function leaveGroup(groupId, uid) {
   });
 }
 
+export async function editEncryptedGroupMessage(groupId, messageId, enc) {
+  await updateDoc(doc(db, "groups", groupId, "messages", messageId), {
+    enc,
+    edited: true,
+    editedAt: serverTimestamp(),
+  });
+}
+
+// Adds wrapped message keys for more of the account's devices (history sync).
+export async function addGroupMessageKeys(groupId, messageId, entries) {
+  const patch = {};
+  for (const [id, v] of Object.entries(entries)) patch[`enc.keys.${id}`] = v;
+  if (Object.keys(patch).length) await updateDoc(doc(db, "groups", groupId, "messages", messageId), patch);
+}
+
 export async function editGroupMessage(groupId, messageId, newText) {
   const trimmed = (newText || "").trim();
   if (!trimmed) throw new Error("Сообщение не может быть пустым");
