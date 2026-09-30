@@ -179,6 +179,26 @@ const chatOpen = (p) => p.evaluate(() => document.getElementById("sidebar").clas
     await A.evaluate(() => document.getElementById("turn-check-btn").click());
     await L.until(A, () => /Не настроен/.test(document.getElementById("turn-check-status").textContent), null, 12000);
   });
+  section("swipe navigation");
+  await L.check("swipe right leaves a settings section, then goes to the Chats tab", async () => {
+    const W = await A.evaluate(() => innerWidth);
+    await T.swipe(W * 0.25, 400, W * 0.8, 405); await A.waitForTimeout(900);
+    await L.until(A, () => !document.getElementById("settings-menu").classList.contains("hidden"));
+    await T.swipe(W * 0.25, 400, W * 0.8, 405); await A.waitForTimeout(900);
+    await L.until(A, () => document.querySelector('#tabbar .tab.active, #tabbar .tab[aria-selected="true"]')?.dataset.tab === "chats" || document.getElementById("settings-overlay").classList.contains("hidden"));
+  });
+  await L.check("swipe left on the list opens the next tab", async () => {
+    const W = await A.evaluate(() => innerWidth);
+    // Rows keep their own swipe-left (archive): swipe on the header area.
+    const y = await A.evaluate(() => { for (let y = 20; y < 300; y += 6) { const e = document.elementFromPoint(innerWidth / 2, y); if (e && !e.closest("input, textarea, .room-item, button") && e.closest("#sidebar")) return y; } return 30; });
+    await T.swipe(W * 0.8, y, W * 0.2, y + 4); await A.waitForTimeout(900);
+    await L.until(A, () => !document.getElementById("settings-overlay").classList.contains("hidden"));
+    await A.evaluate(() => document.querySelector('#tabbar .tab[data-tab="chats"]').click()); await A.waitForTimeout(800);
+  });
+  await L.check("no Back guard left on the plain chat list", async () => {
+    await A.evaluate(() => document.body.click()); await A.waitForTimeout(700);
+    if (await A.evaluate(() => !!history.state?.lmGuard)) throw new Error("guard still armed");
+  });
 
   console.log("\nerrors:\n" + [...A.errors, ...B.errors].join("\n"));
   console.log(`\n${L.passed()} passed, ${L.failures.length} failed`);

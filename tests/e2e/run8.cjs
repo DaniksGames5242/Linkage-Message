@@ -21,6 +21,13 @@ const L = require("./lib.cjs");
   const lastMine = () => A.evaluate(() => [...document.querySelectorAll(".msg-row.me .bubble-text")].pop()?.textContent || "");
   const sees = (re) => L.until(A, (s) => new RegExp(s).test([...document.querySelectorAll(".msg-row.me .bubble-text")].pop()?.textContent || ""), re.source);
   const result = (re) => L.until(A, (s) => new RegExp(s).test([...document.querySelectorAll("#messages .cmd-result")].pop()?.textContent || ""), re.source);
+  await L.check("emoji search finds Russian words", async () => {
+    await A.click("#emoji-btn");
+    await A.fill("#emoji-picker .ep-search input", "огонь");
+    await L.until(A, () => [...document.querySelectorAll("#emoji-picker .ep-results .emoji-option")].some((b) => b.dataset.emoji === "🔥"));
+    await A.fill("#emoji-picker .ep-search input", "");
+    await A.click("#emoji-btn");
+  });
   await L.check("typing / lists the commands", async () => {
     await A.fill("#msg-input", "/");
     await L.until(A, () => !document.getElementById("cmd-suggest").classList.contains("hidden") && document.querySelectorAll("#cmd-suggest .cmd-item").length > 10);

@@ -5360,6 +5360,12 @@ function renderMessage(msg, isMine, senderName) {
   }
 
   messagesEl.appendChild(row);
+  if (typeof msg.cmdResult === "string" && msg.cmdResult) {
+    const res = document.createElement("div");
+    res.className = "system-msg cmd-result";
+    res.textContent = msg.cmdResult;
+    messagesEl.appendChild(res);
+  }
 }
 
 // Swipe a bubble to the left to reply to it.
@@ -6356,6 +6362,66 @@ composer.addEventListener("submit", async (e) => {
   await doSendMessage();
 });
 
+// ---------- "/" command suggestions ----------
+const cmdSuggest = document.createElement("div");
+cmdSuggest.id = "cmd-suggest";
+cmdSuggest.className = "glass hidden";
+cmdSuggest.setAttribute("role", "listbox");
+document.getElementById("composer").before(cmdSuggest);
+function hideCommandSuggest() {
+  cmdSuggest.classList.add("hidden");
+}
+function updateCommandSuggest() {
+  const v = msgInput.value;
+  const m = v.match(/^\/([a-z]*)$/i);
+  if (!m || currentChatType === "notifications") return hideCommandSuggest();
+  const q = m[1].toLowerCase();
+  const list = COMMAND_LIST.filter(([c]) => c.startsWith(q));
+  if (!list.length) return hideCommandSuggest();
+  cmdSuggest.replaceChildren(
+    ...list.map(([c, args, desc]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "cmd-item";
+      b.dataset.cmd = c;
+      b.innerHTML = '<span class="cmd-name"></span><span class="cmd-args"></span><span class="cmd-desc"></span>';
+      b.children[0].textContent = "/" + c;
+      b.children[1].textContent = args;
+      b.children[2].textContent = desc;
+      return b;
+    })
+  );
+  const wasHidden = cmdSuggest.classList.contains("hidden");
+  cmdSuggest.classList.remove("hidden");
+  if (wasHidden) stagger(cmdSuggest.querySelectorAll(".cmd-item"), { y: 8, blur: 0, step: 12, spring: "smooth" });
+}
+msgInput.addEventListener("input", updateCommandSuggest);
+msgInput.addEventListener("blur", () => setTimeout(() => document.activeElement !== msgInput && !cmdSuggest.matches(":hover") && hideCommandSuggest(), 150));
+// Keep the keyboard up while picking.
+cmdSuggest.addEventListener("pointerdown", (e) => e.preventDefault());
+cmdSuggest.addEventListener("click", (e) => {
+  const b = e.target.closest(".cmd-item");
+  if (!b) return;
+  const [c, args] = COMMAND_LIST.find(([x]) => x === b.dataset.cmd);
+  msgInput.value = "/" + c + (args ? " " : "");
+  hideCommandSuggest();
+  msgInput.focus();
+  msgInput.dispatchEvent(new Event("input"));
+  if (!args) doSendMessage();
+});
+msgInput.addEventListener("keydown", (e) => {
+  if (cmdSuggest.classList.contains("hidden")) return;
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    hideCommandSuggest();
+  } else if (e.key === "Tab") {
+    e.preventDefault();
+    const [c, args] = COMMAND_LIST.find(([x]) => x === cmdSuggest.querySelector(".cmd-item").dataset.cmd);
+    msgInput.value = "/" + c + (args ? " " : "");
+    msgInput.dispatchEvent(new Event("input"));
+  }
+});
+
 // Keyed by physical key so the shortcuts also work in the Russian layout.
 const FORMAT_KEYS = { KeyB: "**", KeyI: "__", "shift+KeyX": "~~", "shift+KeyP": "||", "shift+KeyM": "`" };
 msgInput.addEventListener("keydown", (e) => {
@@ -6426,7 +6492,10 @@ let lastTypingPing = 0;
 const saveDraftSoon = debounce(() => writeDraft(currentChatId, msgInput.value), 400);
 
 async function doSendMessage(attachment, { scheduleAt = null, effect = null, silent = false } = {}) {
-  const text = expandComposerText(msgInput.value.trim());
+  const expanded = expandComposerText(msgInput.value.trim());
+  const cmdResult = expanded && typeof expanded === "object" ? expanded.cmdResult : null;
+  const text = cmdResult ? expanded.text : expanded;
+  hideCommandSuggest();
   if (text === null) {
     msgInput.value = "";
     msgInput.style.height = "auto";
@@ -6468,8 +6537,9 @@ async function doSendMessage(attachment, { scheduleAt = null, effect = null, sil
   try {
     const extra = {};
     // 🎲 🎯 🏀 🎰 on their own become a mini game with a result rolled here.
-    if (!attachment && gameForText(text) && currentChatType !== "notifications") extra.game = rollGame(text);
+    if (!attachment && !cmdResult && gameForText(text) && currentChatType !== "notifications") extra.game = rollGame(text);
     if (effect) extra.effect = effect;
+    if (cmdResult) extra.cmdResult = cmdResult;
     const lp = !attachment && !extra.game ? takeLinkPreview(text) : null;
     if (lp) extra.linkPreview = lp;
     await deliver({
@@ -6599,12 +6669,12 @@ function buildEmojiPicker() {
     { passive: true }
   );
   search.addEventListener("input", () => {
-    const q = search.value.trim().toLowerCase();
+    const q = search.value.trim().toLowerCase().replace(/ё/g, "е");
     body.querySelectorAll(".ep-section:not(.ep-results)").forEach((sec) => sec.classList.toggle("filtered", !!q));
     results.classList.toggle("hidden", !q);
     if (!q) return;
     const hits = EMOJI_GROUPS.flatMap((g) => g.items)
-      .filter(([emoji, kw]) => kw.toLowerCase().includes(q) || emoji === q)
+      .filter(([emoji, kw]) => kw.toLowerCase().replace(/ё/g, "е").includes(q) || emoji === q)
       .map((i) => i[0])
       .slice(0, 120);
     const grid = results.querySelector(".ep-grid");
@@ -10883,6 +10953,32 @@ const COMMANDS_HELP = [
   ["/help", "эта справка"],
 ];
 
+// Shown as a list when "/" is typed into an empty composer.
+const COMMAND_LIST = [
+  ["help", "", "список команд"],
+  ["roll", "N", "случайное число от 1 до N"],
+  ["coin", "", "орёл или решка"],
+  ["choose", "а, б, в", "случайный выбор"],
+  ["calc", "2*(3+4)", "калькулятор"],
+  ["time", "", "текущее время"],
+  ["date", "", "сегодняшняя дата"],
+  ["me", "текст", "от третьего лица"],
+  ["shrug", "", "¯\\_(ツ)_/¯"],
+  ["tableflip", "", "(╯°□°)╯︵ ┻━┻"],
+  ["unflip", "", "┬─┬ノ( º _ ºノ)"],
+  ["lenny", "", "( ͡° ͜ʖ ͡°)"],
+  ["upper", "текст", "ПРОПИСНЫМИ"],
+  ["lower", "текст", "строчными"],
+  ["reverse", "текст", "задом наперёд"],
+  ["mock", "текст", "пРыГаЮщИе БуКвЫ"],
+  ["spoiler", "текст", "скрыть под спойлер"],
+  ["t", "имя", "вставить шаблон"],
+  ["tsave", "имя текст", "сохранить шаблон"],
+  ["tdel", "имя", "удалить шаблон"],
+  ["tlist", "", "список шаблонов"],
+];
+const NO_ARG_COMMANDS = new Set(["help", "commands", "coin", "time", "date", "tlist"]);
+
 function safeCalc(expr) {
   const src = expr.replace(/,/g, ".").replace(/\^/g, "**").replace(/×/g, "*").replace(/÷/g, "/");
   if (!/^[\d\s+\-*/().%]+$/.test(src)) return null;
@@ -10907,10 +11003,13 @@ function showCommandsHelp() {
 // Returns the text to send, or null when the command was handled here.
 function expandComposerText(text) {
   if (!text) return text;
-  const m = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
-  if (m) {
+  // A command counts only when it is the whole message: one line, starting with "/".
+  const m = text.match(/^\/([a-z]+)(?:[ \t]+([^\n]*))?$/i);
+  if (m && !(NO_ARG_COMMANDS.has(m[1].toLowerCase()) && (m[2] || "").trim())) {
     const cmd = m[1].toLowerCase();
     const arg = (m[2] || "").trim();
+    // These send the command itself; the result follows as a system line.
+    const result = (r) => (r === null ? null : { text, cmdResult: r });
     const templates = readLS(TEMPLATES_KEY, {});
     switch (cmd) {
       case "help":
@@ -10929,17 +11028,17 @@ function expandComposerText(text) {
         return arg ? `* ${myProfile?.displayName || "Я"} ${arg}` : null;
       case "roll": {
         const n = Math.max(2, Math.min(1e9, parseInt(arg, 10) || 100));
-        return `🎲 ${1 + Math.floor(Math.random() * n)} (1–${n})`;
+        return result(`🎲 ${1 + Math.floor(Math.random() * n)} (1–${n})`);
       }
       case "coin":
-        return `🪙 ${Math.random() < 0.5 ? "Орёл" : "Решка"}`;
+        return result(`🪙 ${Math.random() < 0.5 ? "Орёл" : "Решка"}`);
       case "choose": {
         const opts = arg.split(/[,;|]| или /).map((x) => x.trim()).filter(Boolean);
         if (opts.length < 2) {
           toast("Укажите варианты через запятую", { icon: "🤔" });
           return null;
         }
-        return `🤔 ${opts.join(" / ")} → ${opts[Math.floor(Math.random() * opts.length)]}`;
+        return result(`🤔 ${opts[Math.floor(Math.random() * opts.length)]}`);
       }
       case "calc": {
         const v = safeCalc(arg);
@@ -10947,12 +11046,12 @@ function expandComposerText(text) {
           toast("Не удалось посчитать", { tone: "error" });
           return null;
         }
-        return `🧮 ${arg} = ${v}`;
+        return result(`🧮 ${arg} = ${v}`);
       }
       case "time":
-        return `🕒 ${new Date().toLocaleTimeString(document.documentElement.lang || "ru", { hour: "2-digit", minute: "2-digit" })}`;
+        return result(`🕒 ${new Date().toLocaleTimeString(document.documentElement.lang || "ru", { hour: "2-digit", minute: "2-digit" })}`);
       case "date":
-        return `📅 ${new Date().toLocaleDateString(document.documentElement.lang || "ru", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`;
+        return result(`📅 ${new Date().toLocaleDateString(document.documentElement.lang || "ru", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`);
       case "upper":
         return arg.toUpperCase() || null;
       case "lower":
@@ -12046,13 +12145,41 @@ syncOnline();
 // The guard is (re)armed from a user gesture: Chrome skips history entries
 // pushed without one when going back.
 const HISTORY_GUARD = { lmGuard: 1 };
+// The guard exists only while Back has something to close. A guard left on the
+// plain chat list let iOS Safari's own edge swipe "go back" to an identical
+// snapshot of the list, over and over.
+function hasBackTarget() {
+  return (
+    (isMobileLayout() && sidebar.classList.contains("chat-open")) ||
+    !!activeCtx ||
+    selection.active ||
+    !!document.querySelector(".modal-overlay.open, .x-modal") ||
+    !lightboxEl.classList.contains("hidden") ||
+    !chatSearchBar.classList.contains("hidden") ||
+    !storyViewerOverlay.classList.contains("hidden") ||
+    !!topOverlay() ||
+    !chatMenuDropdown.classList.contains("hidden")
+  );
+}
+let ignoreGuardPop = false;
 function armBackGuard() {
-  if (!currentUser || history.state?.lmGuard) return;
+  if (!currentUser || history.state?.lmGuard || !hasBackTarget()) return;
   try {
     history.pushState(HISTORY_GUARD, "");
   } catch (_) {}
 }
+function disarmBackGuardSoon() {
+  setTimeout(() => {
+    if (!currentUser || !history.state?.lmGuard || hasBackTarget()) return;
+    ignoreGuardPop = true;
+    history.back();
+  }, 450);
+}
 ["pointerdown", "keydown"].forEach((t) => window.addEventListener(t, armBackGuard, { capture: true, passive: true }));
+// After the tap has opened (or closed) something.
+["click", "touchend", "keyup"].forEach((t) =>
+  window.addEventListener(t, () => (setTimeout(armBackGuard, 0), disarmBackGuardSoon()), { passive: true })
+);
 let chatClosedAt = 0;
 let chatWasOpen = false;
 new MutationObserver(() => {
@@ -12062,6 +12189,10 @@ new MutationObserver(() => {
 }).observe(sidebar, { attributes: true, attributeFilter: ["class"] });
 window.addEventListener("popstate", () => {
   if (!currentUser) return;
+  if (ignoreGuardPop) {
+    ignoreGuardPop = false;
+    return;
+  }
   let handled = closeTopLayer();
   if (!handled && isMobileLayout() && sidebar.classList.contains("chat-open")) {
     backToListBtn.click();
@@ -12149,4 +12280,57 @@ const SWIPE_BACK_IGNORE = "#chat-dock, textarea, input, video, .vp-wave, .ring-h
   };
   chatSection.addEventListener("touchend", end, { passive: true });
   chatSection.addEventListener("touchcancel", end, { passive: true });
+})();
+
+// Mobile: swipe sideways on the list or settings to move between the bottom
+// bar's tabs; inside a settings section a swipe right goes back to the menu.
+const TAB_SWIPE_IGNORE = "input, textarea, select, .room-item, .ctx-menu, .react-picker, .modal-overlay, .x-modal, #emoji-picker, [contenteditable]";
+(function enableTabSwipe() {
+  let sx = 0, sy = 0, st = 0, on = false;
+  const scrollsSideways = (el) => {
+    for (; el && el !== document.body; el = el.parentElement) {
+      if (el.scrollWidth > el.clientWidth + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowX)) return true;
+    }
+    return false;
+  };
+  document.addEventListener(
+    "touchstart",
+    (e) => {
+      on = false;
+      if (!currentUser || !isMobileLayout() || e.touches.length !== 1 || sidebar.classList.contains("chat-open")) return;
+      if (activeCtx || document.querySelector(".modal-overlay.open, .x-modal") || !lightboxEl.classList.contains("hidden") || !storyViewerOverlay.classList.contains("hidden")) return;
+      const t = e.touches[0];
+      // Leave the screen edges to the system's own back/forward swipes.
+      if (t.clientX < 24 || t.clientX > window.innerWidth - 24) return;
+      if (e.target.closest(TAB_SWIPE_IGNORE) || scrollsSideways(e.target)) return;
+      const top = topOverlay();
+      if (top && top !== settingsOverlay) return;
+      sx = t.clientX;
+      sy = t.clientY;
+      st = performance.now();
+      on = true;
+    },
+    { passive: true }
+  );
+  document.addEventListener(
+    "touchend",
+    (e) => {
+      if (!on) return;
+      on = false;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2 || performance.now() - st > 1200) return;
+      const settingsOpen = !settingsOverlay.classList.contains("hidden") && !settingsOverlay.classList.contains("is-closing");
+      if (dx > 0 && settingsOpen && currentTab === "settings" && !settingsBackBtn.classList.contains("hidden")) {
+        settingsBackBtn.click();
+        return;
+      }
+      const tabs = [...tabbar.querySelectorAll(".tab")].filter((b) => b.offsetParent);
+      const i = tabs.findIndex((b) => b.dataset.tab === currentTab);
+      const next = tabs[i + (dx < 0 ? 1 : -1)];
+      if (i >= 0 && next) next.click();
+    },
+    { passive: true }
+  );
 })();
