@@ -7152,7 +7152,7 @@ async function buildFileAttachment(original, { asFile = false, progress = null, 
   let url;
   const sealed = await sealUpload(file, target);
   try {
-    const resourceType = sealed.mediaKey ? "raw" : kind === "image" ? "image" : kind === "file" ? "raw" : "video"; // Cloudinary files audio under "video"
+    const resourceType = sealed.mediaKey ? sealed.resourceType : kind === "image" ? "image" : kind === "file" ? "raw" : "video"; // Cloudinary files audio under "video"
     ({ url } = await uploadToCloudinary(sealed.file, resourceType, progress.update, progress.signal));
     if (own) progress.done();
   } catch (err) {
@@ -8117,7 +8117,7 @@ async function sendVoice(blob, duration, wave, target, transcript = "") {
   const progress = pendingUpload({ target, kind: "voice", file, duration, wave, retry: () => sendVoice(blob, duration, wave, target, transcript) });
   try {
     const sealed = await sealUpload(file, target);
-    const { url } = await uploadToCloudinary(sealed.file, sealed.mediaKey ? "raw" : "video", progress.update, progress.signal); // Cloudinary files audio under "video"
+    const { url } = await uploadToCloudinary(sealed.file, sealed.mediaKey ? sealed.resourceType : "video", progress.update, progress.signal); // Cloudinary files audio under "video"
     progress.sending();
     // Served as MP3 so Safari can play recordings made in Chrome (webm/opus).
     // Encrypted recordings can't be transcoded by the server and play as recorded.
@@ -8146,7 +8146,7 @@ async function sendCircle(result, target, shape = "circle") {
   const progress = pendingUpload({ target, kind: "circle", file, shape, retry: () => sendCircle(result, target, shape) });
   try {
     const sealed = await sealUpload(file, target);
-    const { url } = await uploadToCloudinary(sealed.file, sealed.mediaKey ? "raw" : "video", progress.update, progress.signal);
+    const { url } = await uploadToCloudinary(sealed.file, sealed.mediaKey ? sealed.resourceType : "video", progress.update, progress.signal);
     progress.sending();
     // Cloudinary serves a square H.264 MP4 of it, which every browser plays
     // (encrypted recordings are stored as-is and cropped by CSS).
@@ -9623,16 +9623,72 @@ async function willEncrypt(target) {
   return false;
 }
 
+// Ciphertext packed into the pixels of a lossless PNG: the upload preset
+// accepts images even when it refuses raw files, and pixels survive any
+// re-encoding Cloudinary might do. Layout: 4-byte length, then data, 3 bytes
+// per pixel (RGB, alpha always 255 so nothing gets premultiplied).
+const PNG_PACK_MAX = 9 * 1024 * 1024;
+async function packIntoPng(bytes) {
+  const total = bytes.length + 4;
+  const px = Math.ceil(total / 3);
+  const w = Math.min(2048, Math.max(1, Math.ceil(Math.sqrt(px))));
+  const h = Math.ceil(px / w);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const img = ctx.createImageData(w, h);
+  const src = new Uint8Array(total);
+  new DataView(src.buffer).setUint32(0, bytes.length);
+  src.set(bytes, 4);
+  const d = img.data;
+  for (let i = 0, j = 0; i < d.length; i += 4) {
+    d[i] = src[j++] || 0;
+    d[i + 1] = src[j++] || 0;
+    d[i + 2] = src[j++] || 0;
+    d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  if (!blob) throw new Error("png pack failed");
+  return blob;
+}
+async function unpackFromPng(buf) {
+  const bmp = await createImageBitmap(new Blob([buf], { type: "image/png" }), { premultiplyAlpha: "none", colorSpaceConversion: "none" });
+  const canvas = document.createElement("canvas");
+  canvas.width = bmp.width;
+  canvas.height = bmp.height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bmp, 0, 0);
+  const d = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+  const out = new Uint8Array((d.length / 4) * 3);
+  for (let i = 0, j = 0; i < d.length; i += 4) {
+    out[j++] = d[i];
+    out[j++] = d[i + 1];
+    out[j++] = d[i + 2];
+  }
+  const len = new DataView(out.buffer).getUint32(0);
+  return out.subarray(4, 4 + len);
+}
+
 // Encrypts a file for upload when the chat is end-to-end encrypted.
 async function sealUpload(file, target) {
   if (!(await willEncrypt(target))) return { file, mediaKey: null };
   const { blob, mediaKey } = await encryptBlob(file);
+  if (blob.size <= PNG_PACK_MAX) {
+    try {
+      const png = await packIntoPng(new Uint8Array(await blob.arrayBuffer()));
+      return { file: new File([png], "e2e.png", { type: "image/png" }), mediaKey: { ...mediaKey, png: 1 }, resourceType: "image" };
+    } catch (err) {
+      console.warn("png pack failed, uploading as text", err);
+    }
+  }
   // Cloudinary refuses opaque binary (format "bin"), so the ciphertext travels
   // as base64 text; mediaKey.b64 tells openMedia to decode it first.
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let text = "";
   for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return { file: new File([btoa(text)], "e2e.txt", { type: "text/plain" }), mediaKey: { ...mediaKey, b64: 1 } };
+  return { file: new File([btoa(text)], "e2e.txt", { type: "text/plain" }), mediaKey: { ...mediaKey, b64: 1 }, resourceType: "raw" };
 }
 
 const mediaCache = new Map(); // url -> Promise<blobURL>
@@ -9645,7 +9701,7 @@ function openMedia(url, mediaKey) {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.arrayBuffer();
         })
-        .then((buf) => decryptToBlob(mediaKey.b64 ? Uint8Array.from(atob(new TextDecoder().decode(buf)), (c) => c.charCodeAt(0)) : buf, mediaKey))
+        .then(async (buf) => decryptToBlob(mediaKey.png ? await unpackFromPng(buf) : mediaKey.b64 ? Uint8Array.from(atob(new TextDecoder().decode(buf)), (c) => c.charCodeAt(0)) : buf, mediaKey))
         .then((blob) => URL.createObjectURL(blob))
         .catch((err) => {
           mediaCache.delete(url);
