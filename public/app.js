@@ -2383,6 +2383,7 @@ function attachRoomSwipe(item, entry) {
 
 function attachRoomMenu(item, entry) {
   item._entry = entry;
+  paintChatLabel(item, entry.id);
   item.dataset.chatId = entry.id;
   if (chatSel.ids.has(entry.id)) {
     chatSel.entries.set(entry.id, entry);
@@ -2420,6 +2421,7 @@ function attachRoomMenu(item, entry) {
               },
             }
           : entry.id !== currentChatId && { label: "Пометить как непрочитанное", icon: MI.unread, onClick: () => toggleUserList("unreadMarks", entry.id, true) },
+        { label: chatLabelOf(entry.id) ? "Сменить метку" : "Цветная метка", icon: MI.sparkle, onClick: () => setTimeout(() => openChatLabelPicker(entry.id, x, y), 60) },
         customFolders().length > 0 && { label: "Добавить в папку", icon: MI.folder, onClick: () => setTimeout(() => openFolderPicker(entry.id, x, y), 60) },
         {
           label: "Удалить чат",
@@ -4490,6 +4492,14 @@ function renderBubbleContent(bubble, msg) {
     renderSticker(bubble, msg);
     return;
   }
+  if (msg.ttt?.board) {
+    bubble.classList.add("poll-bubble", "ttt-bubble");
+    bubble.appendChild(renderTicTacToe(msg));
+    return;
+  }
+  if (msg.capsule) {
+    if (renderCapsule(bubble, msg)) return;
+  }
   if (msg.game) {
     bubble.classList.add("game-bubble");
     bubble.appendChild(gameNode(msg));
@@ -5398,6 +5408,7 @@ function renderMessage(msg, isMine, senderName) {
   }
 
   renderBubbleContent(row.querySelector(".bubble"), msg);
+  decorateMessageRow(row, msg, isMine);
 
   const timeEl = row.querySelector(".msg-time");
   timeEl.textContent = msg._scheduled ? `📅 ${fmtScheduleTime(msg.createdAt)}` : fmtTime(msg.createdAt);
@@ -5624,7 +5635,7 @@ function openMessageMenu({ row, msg, isMine, ops, canEdit, canDelete, canReact, 
     });
     return;
   }
-  const hasText = !!msg.text && !msg.call && !msg.poll && !msg.game && !msg.location && !msg.checklist && !msg.contactCard && !DEFAULT_CAPTIONS.includes(msg.text);
+  const hasText = !!msg.text && !msg.call && !msg.poll && !msg.game && !msg.location && !msg.checklist && !msg.contactCard && !msg.ttt && !msg.capsule && !DEFAULT_CAPTIONS.includes(msg.text);
   const pinnedId = currentChatData()?.pinned?.id;
   const reactions = canReact
     ? {
@@ -5683,6 +5694,9 @@ function openMessageMoreMenu(row, msg, isMine, hasText, x, y) {
       hasText && { label: "Копировать как цитату", icon: MI.copy, onClick: () => copyAsQuote(msg, isMine) },
       { label: isBookmarked(msg.id) ? "Убрать закладку" : "В закладки", icon: MI.pin, onClick: () => toggleBookmark(msg) },
       { label: "Напомнить", icon: MI.bell, onClick: () => setTimeout(() => openReminderPicker(msg, x, y), 60) },
+      { label: msgLabelOf(msg.id) ? "Сменить метку" : "Цветная метка", icon: MI.sparkle, onClick: () => setTimeout(() => openMsgLabelPicker(row, msg, x, y), 60) },
+      hasText && { label: "Копировать без форматирования", icon: MI.copy, onClick: () => copyPlain(msg) },
+      hasText && { label: "В заметку чата", icon: MI.edit, onClick: () => appendToChatNote(msg, isMine) },
       hasText && navigator.share && { label: "Поделиться", icon: MI.forward, onClick: () => navigator.share({ text: msg.text }).catch(() => {}) },
       msg.sticker && !myStickers().includes(msg.sticker) && { label: "Сохранить стикер", icon: MI.sparkle, onClick: () => addStickerUrl(msg.sticker) },
       { label: "Подробнее", icon: MI.eye, onClick: () => showMessageInfo(msg, isMine) },
@@ -7381,6 +7395,9 @@ function openAttachMenu() {
       canPlay && { label: "Контакт", icon: MI.user, onClick: openContactSharer },
       canPlay && { label: "Геопозиция", icon: MI.location, onClick: sendLocation },
       canPlay && { label: "Стикеры", icon: MI.sparkle, onClick: openStickerPanel },
+      canPlay && { label: "Рисунок", icon: MI.edit, onClick: openDoodle },
+      social && { label: "Крестики-нолики", icon: MI.plus, onClick: startTicTacToe },
+      canPlay && { label: "Капсула времени", icon: MI.clock, onClick: openCapsuleCreator },
     ],
   });
   document.querySelector(".ctx-menu")?.classList.add("attach-menu");
@@ -8487,7 +8504,7 @@ function playNotifSound(name = "chime") {
   }
 }
 
-const chime = () => playNotifSound(myProfile?.notifications?.soundName);
+const chime = () => !focusActive() && playNotifSound(myProfile?.notifications?.soundName);
 
 const minutesOf = (hhmm) => {
   const [h, m] = String(hhmm || "").split(":").map(Number);
@@ -8518,6 +8535,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 }
 
 async function systemNotify(title, body, data = {}) {
+  if (focusActive()) return false;
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
   const options = {
     body,
@@ -11295,6 +11313,11 @@ const COMMANDS_HELP = [
   ["/tsave имя текст", "сохранить шаблон"],
   ["/tdel имя · /tlist", "удалить шаблон · список шаблонов"],
   ["/remind 10m текст", "напоминание через 10 минут (m — минуты, h — часы, d — дни)"],
+  ["/8ball вопрос · /rps", "магический шар · камень-ножницы-бумага"],
+  ["/flip · /morse · /leet текст", "перевернуть · азбука Морзе · 1337"],
+  ["/days ДД.ММ.ГГГГ", "сколько дней до даты (или прошло)"],
+  ["/pass [N] · /wc текст", "пароль в буфер · посчитать слова"],
+  ["/ttt · /draw · /focus [мин]", "крестики-нолики · рисунок · фокус-режим"],
   [":fire: :) <3 …", "автозамена на эмодзи"],
   ["/help", "эта справка"],
 ];
@@ -11323,8 +11346,19 @@ const COMMAND_LIST = [
   ["tdel", "имя", "удалить шаблон"],
   ["tlist", "", "список шаблонов"],
   ["remind", "10m текст", "напомнить (m, h, d)"],
+  ["8ball", "вопрос", "магический шар"],
+  ["rps", "", "камень, ножницы, бумага"],
+  ["flip", "текст", "перевернуть текст"],
+  ["morse", "текст", "азбука Морзе"],
+  ["leet", "текст", "1337-язык"],
+  ["days", "31.12.2026", "сколько дней до даты"],
+  ["pass", "16", "пароль в буфер обмена"],
+  ["wc", "текст", "посчитать слова"],
+  ["ttt", "", "крестики-нолики"],
+  ["draw", "", "рисунок"],
+  ["focus", "25", "фокус-режим"],
 ];
-const NO_ARG_COMMANDS = new Set(["help", "commands", "coin", "time", "date", "tlist"]);
+const NO_ARG_COMMANDS = new Set(["help", "commands", "coin", "time", "date", "tlist", "rps", "ttt", "draw"]);
 
 function safeCalc(expr) {
   const src = expr.replace(/,/g, ".").replace(/\^/g, "**").replace(/×/g, "*").replace(/÷/g, "/");
@@ -11451,6 +11485,18 @@ function expandComposerText(text) {
       case "tlist":
         showCommandsHelp();
         return null;
+      case "8ball":
+      case "rps":
+      case "flip":
+      case "morse":
+      case "leet":
+      case "days":
+      case "pass":
+      case "wc":
+      case "ttt":
+      case "draw":
+      case "focus":
+        return extraCommand(cmd, arg, result);
       default:
         break; // unknown "/…" is sent as is
     }
@@ -11987,6 +12033,10 @@ function showShortcutsHelp() {
     ["Ctrl + Shift + X / M / P", "зачёркнутый / код / спойлер"],
     ["Esc", "закрыть меню, окно или чат"],
     ["/help в поле ввода", "команды и шаблоны"],
+    ["Alt + R", "ответить на последнее входящее"],
+    ["Ctrl + Shift + G", "медиатека чата"],
+    ["Ctrl + Shift + D", "рисунок"],
+    ["Ctrl + = / − / 0", "масштаб сообщений"],
   ];
   extraModal("Горячие клавиши", `<table class="x-table">${list.map(([k, d]) => `<tr><td><kbd>${escapeHtmlX(k)}</kbd></td><td>${escapeHtmlX(d)}</td></tr>`).join("")}</table>`);
 }
@@ -12850,4 +12900,790 @@ const TAB_SWIPE_IGNORE = "input, textarea, select, .room-item, .ctx-menu, .react
     },
     { passive: true }
   );
+})();
+
+// =====================================================================
+// ---------- Extras: drawing, tic-tac-toe, media library, time capsules,
+// focus mode, message/chat labels, keywords, slideshow and more ----------
+// =====================================================================
+
+const LANG = () => document.documentElement.lang || "ru";
+const chatTarget = () => ({ type: currentChatType, id: currentChatId });
+const centerScreen = () => ({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+
+// ---------- Drawing: a canvas sent as a photo ----------
+function openDoodle() {
+  if (!currentChatId || currentChatType === "notifications") return;
+  const target = chatTarget();
+  const COLORS = ["#1c1612", "#ffffff", "#ff5f57", "#ffa41b", "#ffd60a", "#5ee6a0", "#3aa0ff", "#a86bff"];
+  const box = document.createElement("div");
+  box.className = "doodle";
+  box.innerHTML = `<canvas class="doodle-canvas" width="720" height="720"></canvas>
+    <div class="doodle-bar">
+      <div class="doodle-colors">${COLORS.map((c, i) => `<button type="button" class="doodle-color${i === 0 ? " on" : ""}" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join("")}</div>
+      <input type="range" class="doodle-size" min="2" max="40" value="6" title="Толщина" />
+      <button type="button" class="small-btn" data-act="eraser" title="Ластик">🧽</button>
+      <button type="button" class="small-btn" data-act="bg" title="Фон">🎨</button>
+      <button type="button" class="small-btn" data-act="undo" title="Отменить">↶</button>
+      <button type="button" class="small-btn" data-act="clear" title="Очистить">🗑</button>
+    </div>
+    <button type="button" class="small-btn doodle-send">Отправить рисунок</button>`;
+  const canvas = box.querySelector("canvas");
+  const ctx = canvas.getContext("2d");
+  const BGS = ["#ffffff", "#fff4e0", "#1c1612", "#e8f4ff", "transparent"];
+  let bg = 0;
+  let color = COLORS[0];
+  let eraser = false;
+  const strokes = [];
+  const redraw = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (BGS[bg] !== "transparent") {
+      ctx.fillStyle = BGS[bg];
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    strokes.forEach((s) => {
+      ctx.save();
+      ctx.lineCap = ctx.lineJoin = "round";
+      ctx.lineWidth = s.size;
+      if (s.erase) ctx.globalCompositeOperation = "destination-out";
+      ctx.strokeStyle = s.color;
+      ctx.beginPath();
+      s.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      if (s.pts.length === 1) ctx.lineTo(s.pts[0][0] + 0.1, s.pts[0][1]);
+      ctx.stroke();
+      ctx.restore();
+    });
+    if (BGS[bg] !== "transparent") {
+      // The eraser cuts to transparency; put the paper back underneath.
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-over";
+      ctx.fillStyle = BGS[bg];
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+  };
+  redraw();
+  const pos = (e) => {
+    const r = canvas.getBoundingClientRect();
+    return [((e.clientX - r.left) / r.width) * canvas.width, ((e.clientY - r.top) / r.height) * canvas.height];
+  };
+  let cur = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    cur = { color, size: +box.querySelector(".doodle-size").value * 1.6, erase: eraser, pts: [pos(e)] };
+    strokes.push(cur);
+    redraw();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!cur) return;
+    cur.pts.push(pos(e));
+    redraw();
+  });
+  const up = () => (cur = null);
+  canvas.addEventListener("pointerup", up);
+  canvas.addEventListener("pointercancel", up);
+  box.querySelectorAll(".doodle-color").forEach((b) =>
+    b.addEventListener("click", () => {
+      color = b.dataset.c;
+      eraser = false;
+      box.querySelectorAll(".doodle-color").forEach((x) => x.classList.toggle("on", x === b));
+      box.querySelector('[data-act="eraser"]').classList.remove("on");
+    })
+  );
+  box.querySelector('[data-act="eraser"]').addEventListener("click", (e) => {
+    eraser = !eraser;
+    e.currentTarget.classList.toggle("on", eraser);
+  });
+  box.querySelector('[data-act="bg"]').addEventListener("click", () => {
+    bg = (bg + 1) % BGS.length;
+    redraw();
+  });
+  box.querySelector('[data-act="undo"]').addEventListener("click", () => {
+    strokes.pop();
+    redraw();
+  });
+  box.querySelector('[data-act="clear"]').addEventListener("click", () => {
+    strokes.length = 0;
+    redraw();
+  });
+  const modal = extraModal("Рисунок", box, { wide: true });
+  box.querySelector(".doodle-send").addEventListener("click", () => {
+    if (!strokes.length) return toast("Нарисуйте что-нибудь", { icon: "🎨" });
+    canvas.toBlob(async (blob) => {
+      if (!blob) return toast("Не удалось сохранить рисунок", { tone: "error" });
+      modal.close();
+      try {
+        const attachment = await buildFileAttachment(new File([blob], "drawing.png", { type: "image/png" }), { target });
+        await deliver({ ...target, text: "", attachment });
+      } catch (err) {
+        console.error(err);
+        toast(err.message || "Не удалось отправить рисунок", { tone: "error" });
+      }
+    }, "image/png");
+  });
+}
+
+// ---------- Tic-tac-toe: every move is a new message ----------
+const TTT_LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+function tttWinner(board) {
+  for (const [a, b, c] of TTT_LINES) if (board[a] !== "-" && board[a] === board[b] && board[a] === board[c]) return { side: board[a], line: [a, b, c] };
+  return board.includes("-") ? null : { side: "draw", line: [] };
+}
+async function startTicTacToe() {
+  if (!currentChatId || !["contact", "group", "channel"].includes(currentChatType)) {
+    toast("Сыграть можно в личном чате или группе", { icon: "❌" });
+    return;
+  }
+  try {
+    await deliver({ ...chatTarget(), text: "❌⭕ Крестики-нолики", extra: { ttt: { board: "---------", x: currentUser.uid, o: null, turn: "x", prev: null, n: 0 } } });
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось начать игру", { tone: "error" });
+  }
+}
+function renderTicTacToe(msg) {
+  const g = msg.ttt;
+  const me = currentUser?.uid;
+  const board = String(g.board).padEnd(9, "-").slice(0, 9);
+  const win = tttWinner(board);
+  const wrap = document.createElement("div");
+  wrap.className = "ttt";
+  const status = document.createElement("div");
+  status.className = "ttt-status";
+  const myTurn = !win && (g.turn === "x" ? g.x === me : g.o ? g.o === me : g.x !== me);
+  status.textContent = win
+    ? win.side === "draw"
+      ? "🤝 Ничья"
+      : (win.side === "x" ? g.x : g.o) === me
+      ? "🏆 Вы победили!"
+      : `🏁 Победил ${win.side === "x" ? "❌" : "⭕"}`
+    : myTurn
+    ? `Ваш ход: ${g.turn === "x" ? "❌" : "⭕"}`
+    : `Ходит ${g.turn === "x" ? "❌" : "⭕"}`;
+  const grid = document.createElement("div");
+  grid.className = "ttt-grid";
+  [...board].forEach((c, i) => {
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "ttt-cell" + (win?.line.includes(i) ? " win" : "");
+    cell.textContent = c === "x" ? "❌" : c === "o" ? "⭕" : "";
+    cell.disabled = !myTurn || c !== "-";
+    cell.addEventListener("click", (e) => {
+      e.stopPropagation();
+      tttMove(msg, i);
+    });
+    grid.appendChild(cell);
+  });
+  wrap.append(status, grid);
+  if (win) {
+    const again = document.createElement("button");
+    again.type = "button";
+    again.className = "small-btn ttt-again";
+    again.textContent = "Реванш";
+    again.addEventListener("click", (e) => {
+      e.stopPropagation();
+      startTicTacToe();
+    });
+    wrap.appendChild(again);
+  }
+  return wrap;
+}
+async function tttMove(msg, i) {
+  const g = msg.ttt;
+  // Only the newest board of a game takes a move.
+  if (loadedRows().some((r) => r._ctx.msg.ttt?.prev === msg.id)) {
+    toast("Этот ход уже сделан — смотрите доску ниже", { icon: "❌" });
+    return;
+  }
+  const board = [...String(g.board)];
+  if (board[i] !== "-") return;
+  board[i] = g.turn;
+  const next = { ...g, board: board.join(""), turn: g.turn === "x" ? "o" : "x", prev: msg.id, n: (g.n || 0) + 1 };
+  if (g.turn === "o" && !g.o) next.o = currentUser.uid;
+  const win = tttWinner(next.board);
+  const text = win ? (win.side === "draw" ? "❌⭕ Ничья!" : `❌⭕ Победа ${win.side === "x" ? "❌" : "⭕"}!`) : `❌⭕ Ход ${g.turn === "x" ? "❌" : "⭕"}`;
+  try {
+    await deliver({ ...chatTarget(), text, extra: { ttt: next } });
+    if (win && win.side !== "draw") playEffect("confetti", centerScreen());
+  } catch (err) {
+    console.error(err);
+    toast("Не удалось сделать ход", { tone: "error" });
+  }
+}
+
+// ---------- Time capsule: a message that opens on a set date ----------
+function openCapsuleCreator() {
+  if (!currentChatId || currentChatType === "notifications") return;
+  const target = chatTarget();
+  const box = document.createElement("div");
+  const d = new Date(Date.now() + 86400e3);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  box.innerHTML = `<p class="x-dim">Собеседник увидит текст только в выбранный момент. До этого — запечатанная капсула с обратным отсчётом.</p>
+    <textarea class="x-input" rows="5" maxlength="2000" placeholder="Письмо в будущее…"></textarea>
+    <input type="datetime-local" class="x-input" value="${d.toISOString().slice(0, 16)}" />
+    <button type="button" class="small-btn x-go">Запечатать ⏳</button>`;
+  const modal = extraModal("Капсула времени", box);
+  box.querySelector(".x-go").addEventListener("click", async () => {
+    const text = box.querySelector("textarea").value.trim();
+    const openAt = new Date(box.querySelector("input").value).getTime();
+    if (!text) return toast("Напишите текст", { icon: "⏳" });
+    if (!(openAt > Date.now() + 30e3)) return toast("Выберите время в будущем", { icon: "⏳" });
+    modal.close();
+    try {
+      await deliver({ ...target, text: "⏳ Капсула времени", extra: { capsule: { openAt, text } } });
+      toast(`Капсула откроется ${new Date(openAt).toLocaleString(LANG(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, { icon: "⏳" });
+    } catch (err) {
+      console.error(err);
+      toast("Не удалось отправить капсулу", { tone: "error" });
+    }
+  });
+  setTimeout(() => box.querySelector("textarea").focus(), 50);
+}
+function fmtLeft(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  const dd = Math.floor(s / 86400), hh = Math.floor((s % 86400) / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+  return dd ? `${dd} д ${hh} ч` : hh ? `${hh} ч ${mm} мин` : `${mm}:${String(ss).padStart(2, "0")}`;
+}
+// Returns false once the capsule is open: the bubble then renders as usual.
+function renderCapsule(bubble, msg) {
+  const c = msg.capsule;
+  const openAt = +c.openAt || 0;
+  const isMine = msg.senderId === currentUser?.uid;
+  if (Date.now() >= openAt) {
+    const body = { ...msg, capsule: null, text: String(c.text || "") };
+    renderBubbleContent(bubble, body);
+    const tag = document.createElement("div");
+    tag.className = "capsule-opened";
+    tag.textContent = `⏳ Капсула от ${new Date(msg.createdAt?.toMillis?.() || Date.now()).toLocaleDateString(LANG())}`;
+    bubble.prepend(tag);
+    return true;
+  }
+  bubble.classList.add("poll-bubble", "capsule-bubble");
+  const card = document.createElement("div");
+  card.className = "capsule";
+  card.innerHTML = `<div class="capsule-icon">⏳</div><div><b>Капсула времени</b><div class="capsule-when"></div><div class="capsule-left"></div>${isMine ? '<div class="capsule-mine"></div>' : ""}</div>`;
+  card.querySelector(".capsule-when").textContent = "Откроется " + new Date(openAt).toLocaleString(LANG(), { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  if (isMine) card.querySelector(".capsule-mine").textContent = "Ваш текст: " + String(c.text || "").slice(0, 200);
+  const left = card.querySelector(".capsule-left");
+  const tick = () => {
+    if (!bubble.isConnected) return clearInterval(timer);
+    const ms = openAt - Date.now();
+    if (ms <= 0) {
+      clearInterval(timer);
+      renderBubbleContent(bubble, msg);
+      if (!isMine) playEffect("fireworks", centerScreen());
+      return;
+    }
+    left.textContent = "Осталось: " + fmtLeft(ms);
+  };
+  const timer = setInterval(tick, 1000);
+  bubble.appendChild(card);
+  tick();
+  return true;
+}
+
+// ---------- Media library: photos, videos, files, links, voice ----------
+function collectChatMedia() {
+  const out = { photo: [], video: [], file: [], link: [], voice: [] };
+  loadedRows().forEach((r) => {
+    const { msg } = r._ctx;
+    const id = r.dataset.msgId;
+    const when = msgDate(msg);
+    r.querySelectorAll(".bubble img").forEach((im) => {
+      if (!im.classList.contains("sticker-img") && im.src && !im.closest(".link-preview, .emoji-bubble, .contact-bubble")) out.photo.push({ id, src: im.src, when });
+    });
+    if (msg.fileUrl && /^video\//.test(msg.fileType || "")) out.video.push({ id, name: msg.fileName || "Видео", when });
+    else if (msg.fileUrl) out.file.push({ id, name: msg.fileName || "Файл", size: msg.fileSize, when });
+    if (msg.videoNoteUrl) out.video.push({ id, name: "Видеосообщение", when });
+    if (msg.voiceUrl) out.voice.push({ id, name: `Голосовое${msg.duration ? " · " + fmtDuration(msg.duration) : ""}`, when });
+    (String(msg.text || "").match(/https?:\/\/[^\s<>()]+/g) || []).forEach((url) => out.link.push({ id, url, when }));
+  });
+  return out;
+}
+function openMediaLibrary() {
+  if (!currentChatId) return;
+  const media = collectChatMedia();
+  const TABS = [["photo", "Фото"], ["video", "Видео"], ["file", "Файлы"], ["link", "Ссылки"], ["voice", "Голосовые"]];
+  const box = document.createElement("div");
+  box.innerHTML = `<div class="x-tabs">${TABS.map(([k, l]) => `<button type="button" class="x-tab" data-k="${k}">${l} <small>${media[k].length}</small></button>`).join("")}</div><div class="x-media"></div><p class="x-dim">По загруженным сообщениям. Прокрутите чат вверх, чтобы найти больше.</p>`;
+  const list = box.querySelector(".x-media");
+  const modal = extraModal("Медиатека", box, { wide: true });
+  const go = (id) => {
+    modal.close();
+    scrollToMessage(id);
+  };
+  const date = (d) => (d ? d.toLocaleDateString(LANG(), { day: "numeric", month: "short" }) : "");
+  const show = (k) => {
+    box.querySelectorAll(".x-tab").forEach((b) => b.classList.toggle("on", b.dataset.k === k));
+    list.className = "x-media" + (k === "photo" ? " grid" : "");
+    list.innerHTML = "";
+    if (!media[k].length) list.innerHTML = '<p class="x-dim">Пока пусто</p>';
+    media[k]
+      .slice()
+      .reverse()
+      .forEach((it) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        if (k === "photo") {
+          b.className = "x-media-thumb";
+          b.innerHTML = `<img alt="" loading="lazy">`;
+          b.querySelector("img").src = it.src;
+        } else {
+          b.className = "x-list-item";
+          b.innerHTML = `<span></span><small></small>`;
+          b.querySelector("span").textContent = k === "link" ? it.url : it.name;
+          b.querySelector("small").textContent = [date(it.when), it.size ? fmtFileSize(it.size) : ""].filter(Boolean).join(" · ");
+        }
+        b.addEventListener("click", () => go(it.id));
+        list.appendChild(b);
+      });
+  };
+  box.querySelectorAll(".x-tab").forEach((b) => b.addEventListener("click", () => show(b.dataset.k)));
+  show(TABS.find(([k]) => media[k].length)?.[0] || "photo");
+}
+
+// ---------- Photo slideshow ----------
+function openSlideshow() {
+  const photos = collectChatMedia().photo;
+  if (!photos.length) return toast("В загруженных сообщениях нет фото", { icon: "🖼" });
+  let i = photos.length - 1;
+  let playing = true;
+  const box = document.createElement("div");
+  box.className = "x-slides";
+  box.innerHTML = `<img alt=""><div class="x-slides-bar"><button type="button" class="small-btn" data-a="prev">‹</button><button type="button" class="small-btn" data-a="play">⏸</button><span></span><button type="button" class="small-btn" data-a="next">›</button></div>`;
+  const img = box.querySelector("img");
+  const label = box.querySelector("span");
+  const paint = () => {
+    img.src = photos[i].src;
+    label.textContent = `${i + 1} / ${photos.length}`;
+    animate(img, [{ opacity: 0, transform: "scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 300 });
+  };
+  const step = (d) => {
+    i = (i + d + photos.length) % photos.length;
+    paint();
+  };
+  const timer = setInterval(() => playing && box.isConnected && step(1), 3000);
+  box.querySelector('[data-a="prev"]').addEventListener("click", () => step(-1));
+  box.querySelector('[data-a="next"]').addEventListener("click", () => step(1));
+  box.querySelector('[data-a="play"]').addEventListener("click", (e) => {
+    playing = !playing;
+    e.currentTarget.textContent = playing ? "⏸" : "▶";
+  });
+  const onKey = (e) => {
+    if (!box.isConnected) return document.removeEventListener("keydown", onKey);
+    if (e.key === "ArrowLeft") step(-1);
+    if (e.key === "ArrowRight") step(1);
+  };
+  document.addEventListener("keydown", onKey);
+  const modal = extraModal("Слайд-шоу", box, { wide: true });
+  new MutationObserver((_, obs) => {
+    if (!modal.el.isConnected) {
+      clearInterval(timer);
+      document.removeEventListener("keydown", onKey);
+      obs.disconnect();
+    }
+  }).observe(document.body, { childList: true });
+  paint();
+}
+
+// ---------- Word cloud ----------
+const STOP_WORDS = new Set("это как что так вот для его она они оно тебя тебе меня мне было быть есть уже только когда тоже если или ещё еще просто очень чтобы тут там где кто мой моя твой всё все всех нет даже потом этот эта эти этого with that this have from what your just like about will http https www".split(" "));
+function showWordCloud() {
+  const words = new Map();
+  loadedRows().forEach((r) => {
+    const t = r._ctx.msg.text && !DEFAULT_CAPTIONS.includes(r._ctx.msg.text) ? stripRich(r._ctx.msg.text).toLowerCase() : "";
+    (t.replace(/https?:\/\/\S+/g, "").match(/[\p{L}]{3,}/gu) || []).forEach((w) => !STOP_WORDS.has(w) && words.set(w, (words.get(w) || 0) + 1));
+  });
+  const top = [...words.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60);
+  if (!top.length) return toast("Слишком мало слов для облака", { icon: "☁️" });
+  const max = top[0][1];
+  const min = top[top.length - 1][1];
+  top.sort(() => Math.random() - 0.5);
+  extraModal(
+    "Облако слов",
+    `<div class="x-cloud">${top
+      .map(([w, n]) => {
+        const k = max === min ? 0.5 : (n - min) / (max - min);
+        return `<span style="font-size:${(13 + k * 26).toFixed(0)}px;opacity:${(0.55 + k * 0.45).toFixed(2)}" title="${n}">${escapeHtmlX(w)}</span>`;
+      })
+      .join(" ")}</div>`,
+    { wide: true }
+  );
+}
+
+// ---------- Random message ----------
+function jumpToRandomMessage() {
+  const rows = loadedRows();
+  if (!rows.length) return toast("Сообщений пока нет", { icon: "🎲" });
+  scrollToMessage(rows[Math.floor(Math.random() * rows.length)].dataset.msgId);
+}
+
+// ---------- Read the latest incoming messages aloud ----------
+function speakRecent() {
+  if (!("speechSynthesis" in window)) return toast("Озвучка не поддерживается браузером", { tone: "error" });
+  if (speechSynthesis.speaking) {
+    speechSynthesis.cancel();
+    return toast("Чтение остановлено", { icon: "🔇" });
+  }
+  const rows = loadedRows()
+    .filter((r) => !r._ctx.isMine && r._ctx.msg.text && !DEFAULT_CAPTIONS.includes(r._ctx.msg.text))
+    .slice(-10);
+  if (!rows.length) return toast("Нечего читать", { icon: "🔈" });
+  rows.forEach((r) => {
+    const u = new SpeechSynthesisUtterance(`${senderNameX(r._ctx.msg, false)}: ${stripRich(r._ctx.msg.text)}`);
+    u.lang = LANG() === "en" ? "en-US" : "ru-RU";
+    speechSynthesis.speak(u);
+  });
+  toast(`Читаю сообщений: ${rows.length}`, { icon: "🔈" });
+}
+
+[
+  ["chat-menu-media-btn", openMediaLibrary],
+  ["chat-menu-slides-btn", openSlideshow],
+  ["chat-menu-cloud-btn", showWordCloud],
+  ["chat-menu-random-btn", jumpToRandomMessage],
+  ["chat-menu-speak-btn", speakRecent],
+].forEach(([id, fn]) =>
+  document.getElementById(id)?.addEventListener("click", () => {
+    hidePopover(chatMenuDropdown);
+    if (currentChatId) fn();
+  })
+);
+
+// ---------- Focus mode (pomodoro): silences sounds and notifications ----------
+const FOCUS_KEY = "lm-focus";
+const FOCUS_STATS_KEY = "lm-focus-stats";
+const focusState = () => readLS(FOCUS_KEY, null);
+function focusActive() {
+  const f = focusState();
+  return !!f && f.until > Date.now() && f.phase === "work";
+}
+const focusPill = document.createElement("button");
+focusPill.type = "button";
+focusPill.id = "focus-pill";
+focusPill.className = "hidden";
+document.body.appendChild(focusPill);
+focusPill.addEventListener("click", openFocusPanel);
+function startFocus(minutes, phase = "work") {
+  const m = Math.max(1, Math.min(180, Math.round(minutes) || 25));
+  writeLS(FOCUS_KEY, { until: Date.now() + m * 60e3, minutes: m, phase, started: Date.now() });
+  toast(phase === "work" ? `Фокус на ${m} мин: уведомления на паузе` : `Перерыв ${m} мин`, { icon: phase === "work" ? "🎯" : "☕" });
+  tickFocus();
+}
+function stopFocus() {
+  writeLS(FOCUS_KEY, null);
+  tickFocus();
+}
+function tickFocus() {
+  const f = focusState();
+  if (!f) {
+    focusPill.classList.add("hidden");
+    return;
+  }
+  const left = f.until - Date.now();
+  if (left <= 0) {
+    writeLS(FOCUS_KEY, null);
+    focusPill.classList.add("hidden");
+    if (f.phase === "work") {
+      const stats = readLS(FOCUS_STATS_KEY, {});
+      const day = new Date().toISOString().slice(0, 10);
+      stats[day] = { min: (stats[day]?.min || 0) + f.minutes, n: (stats[day]?.n || 0) + 1 };
+      writeLS(FOCUS_STATS_KEY, stats);
+      playEffect("confetti", centerScreen());
+      toast("Фокус-сессия завершена! Время для перерыва ☕", { icon: "🎯", duration: 5000 });
+      if ("Notification" in window && Notification.permission === "granted") systemNotify("Linkage — фокус", "Сессия завершена, сделайте перерыв");
+    } else {
+      toast("Перерыв окончен", { icon: "☕" });
+    }
+    return;
+  }
+  focusPill.classList.remove("hidden");
+  focusPill.classList.toggle("break", f.phase !== "work");
+  focusPill.textContent = `${f.phase === "work" ? "🎯" : "☕"} ${fmtLeft(left)}`;
+}
+setInterval(tickFocus, 1000);
+tickFocus();
+function openFocusPanel() {
+  const f = focusState();
+  const stats = readLS(FOCUS_STATS_KEY, {});
+  const day = new Date().toISOString().slice(0, 10);
+  const week = Object.entries(stats).filter(([d]) => Date.now() - new Date(d).getTime() < 7 * 86400e3);
+  const weekMin = week.reduce((a, [, v]) => a + v.min, 0);
+  let streak = 0;
+  for (let d = new Date(); stats[d.toISOString().slice(0, 10)]; d.setDate(d.getDate() - 1)) streak++;
+  const box = document.createElement("div");
+  box.innerHTML = `<p class="x-dim">Пока идёт фокус, звуки и системные уведомления о сообщениях отключены. Сообщения по-прежнему приходят.</p>
+    <div class="x-chips">${[15, 25, 45, 60, 90].map((m) => `<button type="button" class="small-btn" data-m="${m}">${m} мин</button>`).join("")}<button type="button" class="small-btn" data-b="5">☕ 5 мин</button></div>
+    ${f ? `<button type="button" class="small-btn danger x-stop">Остановить (${fmtLeft(f.until - Date.now())})</button>` : ""}
+    <div class="x-stats"><div><b>${stats[day]?.min || 0}</b><span>мин сегодня</span></div><div><b>${weekMin}</b><span>мин за неделю</span></div><div><b>${streak}</b><span>дней подряд</span></div></div>`;
+  const modal = extraModal("Фокус-режим", box);
+  box.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => (modal.close(), startFocus(+b.dataset.m))));
+  box.querySelector("[data-b]").addEventListener("click", () => (modal.close(), startFocus(5, "break")));
+  box.querySelector(".x-stop")?.addEventListener("click", () => (modal.close(), stopFocus(), toast("Фокус остановлен", { icon: "🎯" })));
+}
+
+// ---------- Colour labels for messages and chats (this device) ----------
+const LABEL_COLORS = { red: "#ff5f57", orange: "#ffa41b", yellow: "#ffd60a", green: "#5ee6a0", blue: "#3aa0ff", purple: "#a86bff" };
+const LABEL_NAMES = { red: "Красная", orange: "Оранжевая", yellow: "Жёлтая", green: "Зелёная", blue: "Синяя", purple: "Фиолетовая" };
+const MSG_LABELS_KEY = "lm-msg-labels";
+const CHAT_LABELS_KEY = "lm-chat-labels";
+const msgLabelOf = (id) => readLS(MSG_LABELS_KEY, {})[id] || null;
+const chatLabelOf = (id) => readLS(CHAT_LABELS_KEY, {})[id] || null;
+function labelPicker(current, x, y, onPick) {
+  openContextMenu({
+    x,
+    y,
+    items: [
+      ...Object.keys(LABEL_COLORS).map((c) => ({
+        label: (current === c ? "✓ " : "") + LABEL_NAMES[c],
+        icon: `<span class="x-dot" style="background:${LABEL_COLORS[c]}"></span>`,
+        onClick: () => onPick(c),
+      })),
+      current && { label: "Убрать метку", icon: MI.trash, onClick: () => onPick(null) },
+    ],
+  });
+}
+function setLabel(key, id, color) {
+  const all = readLS(key, {});
+  if (color) all[id] = color;
+  else delete all[id];
+  writeLS(key, all);
+}
+function openMsgLabelPicker(row, msg, x, y) {
+  labelPicker(msgLabelOf(msg.id), x, y, (c) => {
+    setLabel(MSG_LABELS_KEY, msg.id, c);
+    paintMsgLabel(row, msg.id);
+  });
+}
+function paintMsgLabel(row, id) {
+  const c = msgLabelOf(id);
+  row.classList.toggle("labeled", !!c);
+  row.style.setProperty("--label-color", c ? LABEL_COLORS[c] : "");
+}
+function openChatLabelPicker(chatId, x, y) {
+  labelPicker(chatLabelOf(chatId), x, y, (c) => {
+    setLabel(CHAT_LABELS_KEY, chatId, c);
+    chatListEl.querySelectorAll(".room-item").forEach((it) => it._entry && paintChatLabel(it, it._entry.id));
+  });
+}
+function paintChatLabel(item, id) {
+  const c = chatLabelOf(id);
+  item.classList.toggle("labeled", !!c);
+  item.style.setProperty("--label-color", c ? LABEL_COLORS[c] : "");
+}
+
+// ---------- Keywords: highlight messages that contain my words ----------
+const KEYWORDS_KEY = "lm-keywords";
+const myKeywords = () => readLS(KEYWORDS_KEY, []).filter(Boolean);
+function openKeywords() {
+  const box = document.createElement("div");
+  box.innerHTML = `<p class="x-dim">Входящие сообщения с этими словами подсвечиваются. По одному слову или фразе в строке.</p><textarea class="x-input" rows="6" placeholder="созвон&#10;дедлайн&#10;моё имя"></textarea><button type="button" class="small-btn x-go">Сохранить</button>`;
+  const ta = box.querySelector("textarea");
+  ta.value = myKeywords().join("\n");
+  const modal = extraModal("Ключевые слова", box);
+  box.querySelector(".x-go").addEventListener("click", () => {
+    writeLS(KEYWORDS_KEY, [...new Set(ta.value.split("\n").map((w) => w.trim().toLowerCase()).filter(Boolean))].slice(0, 50));
+    modal.close();
+    loadedRows().forEach((r) => decorateMessageRow(r, r._ctx.msg, r._ctx.isMine));
+    toast("Ключевые слова сохранены", { icon: "🔔" });
+  });
+}
+
+// Per-row extras: labels, keyword highlight, easter-egg effects.
+const EASTER_EGGS = [
+  [/с (днём|днем) рождения|happy birthday|с др\b/i, "confetti"],
+  [/с новым годом|happy new year/i, "snow"],
+  [/люблю тебя|love you/i, "hearts"],
+  [/поздравляю|congrat/i, "fireworks"],
+];
+const eggsPlayed = new Set();
+function decorateMessageRow(row, msg, isMine) {
+  paintMsgLabel(row, msg.id);
+  const text = String(msg.text || "").toLowerCase();
+  const hit = !isMine && text && myKeywords().some((w) => text.includes(w));
+  row.classList.toggle("kw-hit", hit);
+  const fresh = Date.now() - (msg.createdAt?.toMillis?.() || 0) < 15e3;
+  if (fresh && !eggsPlayed.has(msg.id) && readLS("lm-eggs", true)) {
+    const egg = EASTER_EGGS.find(([re]) => re.test(text));
+    if (egg) {
+      eggsPlayed.add(msg.id);
+      setTimeout(() => playEffect(egg[1], centerScreen()), 250);
+    }
+  }
+}
+
+// ---------- Message tools ----------
+function copyPlain(msg) {
+  navigator.clipboard
+    ?.writeText(stripRich(msg.text))
+    .then(() => toast("Текст скопирован без форматирования", { icon: "📋" }))
+    .catch(() => toast("Не удалось скопировать", { tone: "error" }));
+}
+function appendToChatNote(msg, isMine) {
+  const all = readLS(NOTES_KEY, {});
+  const d = msgDate(msg);
+  const line = `• ${senderNameX(msg, isMine)}${d ? " (" + d.toLocaleDateString(LANG()) + ")" : ""}: ${stripRich(msg.text)}`;
+  all[currentChatId] = ((all[currentChatId] || "").trim() + "\n" + line).trim().slice(0, 4000);
+  writeLS(NOTES_KEY, all);
+  toast("Добавлено в заметку чата", { icon: "📝" });
+}
+
+// ---------- Message zoom: Ctrl + = / − / 0 inside a chat ----------
+const ZOOM_KEY = "lm-msg-zoom";
+function applyMsgZoom(z) {
+  const v = Math.max(0.8, Math.min(1.5, Math.round(z * 10) / 10));
+  writeLS(ZOOM_KEY, v);
+  document.documentElement.style.setProperty("--lm-msg-zoom", String(v));
+  return v;
+}
+applyMsgZoom(readLS(ZOOM_KEY, 1));
+
+// ---------- Extra keyboard shortcuts ----------
+document.addEventListener("keydown", (e) => {
+  if (!currentUser) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.shiftKey && e.code === "KeyG" && currentChatId) {
+    e.preventDefault();
+    openMediaLibrary();
+  } else if (mod && e.shiftKey && e.code === "KeyD" && currentChatId) {
+    e.preventDefault();
+    openDoodle();
+  } else if (e.altKey && !mod && e.code === "KeyR" && currentChatId) {
+    const last = loadedRows().filter((r) => !r._ctx.isMine && r._ctx.canReply).pop();
+    if (last) {
+      e.preventDefault();
+      startReply(last._ctx.msg);
+      msgInput.focus();
+    }
+  } else if (mod && !e.shiftKey && currentChatId && ["Equal", "Minus", "Digit0"].includes(e.code) && !messagesEl.classList.contains("hidden")) {
+    e.preventDefault();
+    const z = applyMsgZoom(e.code === "Digit0" ? 1 : readLS(ZOOM_KEY, 1) + (e.code === "Equal" ? 0.1 : -0.1));
+    toast(`Масштаб сообщений: ${Math.round(z * 100)}%`, { icon: "🔍", duration: 1200 });
+  }
+});
+
+// ---------- Composer: character counter and Caps Lock hint ----------
+const composerCounter = document.createElement("div");
+composerCounter.id = "composer-counter";
+composerCounter.className = "hidden";
+if (msgInput.parentElement) {
+  if (getComputedStyle(msgInput.parentElement).position === "static") msgInput.parentElement.style.position = "relative";
+  msgInput.parentElement.appendChild(composerCounter);
+}
+const MAX_MSG_LEN = 4096;
+function updateComposerCounter(caps = false) {
+  const n = msgInput.value.length;
+  const show = n > 300 || caps;
+  composerCounter.classList.toggle("hidden", !show);
+  composerCounter.classList.toggle("over", n > MAX_MSG_LEN);
+  composerCounter.textContent = [caps ? "⇪ Caps Lock" : "", n > 300 ? `${n}/${MAX_MSG_LEN}` : ""].filter(Boolean).join(" · ");
+}
+msgInput.addEventListener("input", () => updateComposerCounter());
+msgInput.addEventListener("keyup", (e) => updateComposerCounter(!!e.getModifierState?.("CapsLock")));
+
+// ---------- Extra slash commands ----------
+const FLIP_MAP = Object.fromEntries(
+  [..."abcdefghijklmnopqrstuvwxyz.,!?'()[]{}<>_&"].map((c, i) => [c, [..."ɐqɔpǝɟƃɥᴉɾʞlɯuodbɹsʇnʌʍxʎz˙'¡¿,)(][}{><‾⅋"][i]])
+);
+const MORSE = { a: ".-", b: "-...", c: "-.-.", d: "-..", e: ".", f: "..-.", g: "--.", h: "....", i: "..", j: ".---", k: "-.-", l: ".-..", m: "--", n: "-.", o: "---", p: ".--.", q: "--.-", r: ".-.", s: "...", t: "-", u: "..-", v: "...-", w: ".--", x: "-..-", y: "-.--", z: "--..", а: ".-", б: "-...", в: ".--", г: "--.", д: "-..", е: ".", ё: ".", ж: "...-", з: "--..", и: "..", й: ".---", к: "-.-", л: ".-..", м: "--", н: "-.", о: "---", п: ".--.", р: ".-.", с: "...", т: "-", у: "..-", ф: "..-.", х: "....", ц: "-.-.", ч: "---.", ш: "----", щ: "--.-", ъ: "--.--", ы: "-.--", ь: "-..-", э: "..-..", ю: "..--", я: ".-.-", 0: "-----", 1: ".----", 2: "..---", 3: "...--", 4: "....-", 5: ".....", 6: "-....", 7: "--...", 8: "---..", 9: "----." };
+const EIGHT_BALL = ["Бесспорно", "Предрешено", "Никаких сомнений", "Определённо да", "Можешь быть уверен", "Мне кажется — да", "Вероятнее всего", "Хорошие перспективы", "Да", "Пока не ясно, попробуй снова", "Спроси позже", "Лучше не рассказывать", "Сейчас нельзя предсказать", "Даже не думай", "Мой ответ — нет", "Весьма сомнительно", "Перспективы не очень"];
+function extraCommand(cmd, arg, result) {
+  switch (cmd) {
+    case "8ball":
+      return result(`🎱 ${EIGHT_BALL[Math.floor(Math.random() * EIGHT_BALL.length)]}`);
+    case "rps": {
+      const all = ["🪨 Камень", "✂️ Ножницы", "📄 Бумага"];
+      return result(all[Math.floor(Math.random() * 3)]);
+    }
+    case "flip":
+      return [...arg.toLowerCase()].map((c) => FLIP_MAP[c] || c).reverse().join("") || null;
+    case "morse":
+      return arg ? [...arg.toLowerCase()].map((c) => (c === " " ? "/" : MORSE[c] || "")).filter(Boolean).join(" ") : null;
+    case "leet":
+      return arg.replace(/[aeiostlbgz]/gi, (c) => ({ a: "4", e: "3", i: "1", o: "0", s: "5", t: "7", l: "1", b: "8", g: "9", z: "2" })[c.toLowerCase()]) || null;
+    case "days": {
+      const m = arg.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?$/);
+      if (!m) {
+        toast("Формат: /days ДД.ММ.ГГГГ", { icon: "📅" });
+        return null;
+      }
+      const now = new Date();
+      const y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : now.getFullYear();
+      let d = new Date(y, +m[2] - 1, +m[1]);
+      if (!m[3] && d < new Date(now.getFullYear(), now.getMonth(), now.getDate())) d = new Date(y + 1, +m[2] - 1, +m[1]);
+      const diff = Math.round((d - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400e3);
+      const ds = d.toLocaleDateString(LANG(), { day: "numeric", month: "long", year: "numeric" });
+      return result(diff === 0 ? `📅 ${ds} — это сегодня!` : diff > 0 ? `📅 До ${ds}: ${diff} дн.` : `📅 С ${ds} прошло ${-diff} дн.`);
+    }
+    case "pass": {
+      const n = Math.max(6, Math.min(64, parseInt(arg, 10) || 16));
+      const abc = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*?";
+      const rnd = crypto.getRandomValues(new Uint32Array(n));
+      const pw = [...rnd].map((v) => abc[v % abc.length]).join("");
+      navigator.clipboard?.writeText(pw).then(
+        () => toast(`Пароль из ${n} символов скопирован`, { icon: "🔑" }),
+        () => toast(pw, { icon: "🔑", duration: 8000 })
+      );
+      return null;
+    }
+    case "wc": {
+      const t = arg || "";
+      const words = t.trim() ? t.trim().split(/\s+/).length : 0;
+      toast(`Слов: ${words} · символов: ${t.length} · без пробелов: ${t.replace(/\s/g, "").length}`, { icon: "🔢", duration: 4000 });
+      return null;
+    }
+    case "ttt":
+      startTicTacToe();
+      return null;
+    case "draw":
+      openDoodle();
+      return null;
+    case "focus":
+      if (arg === "off" || arg === "stop") stopFocus();
+      else if (arg) startFocus(parseInt(arg, 10));
+      else openFocusPanel();
+      return null;
+  }
+  return null;
+}
+
+// ---------- Settings → Tools: one place for the device-only extras ----------
+function openToolsHub() {
+  const eggs = readLS("lm-eggs", true);
+  const box = document.createElement("div");
+  box.innerHTML = `<button type="button" class="x-list-item" data-t="focus"><span>🎯 Фокус-режим</span><small>Помодоро-таймер, уведомления на паузе</small></button>
+    <button type="button" class="x-list-item" data-t="kw"><span>🔔 Ключевые слова</span><small>Подсветка сообщений с вашими словами</small></button>
+    <button type="button" class="x-list-item" data-t="eggs"><span>🎉 Пасхалки: ${eggs ? "вкл" : "выкл"}</span><small>«С днём рождения», «С Новым годом»… запускают эффекты</small></button>
+    <button type="button" class="x-list-item" data-t="zoom"><span>🔍 Масштаб сообщений: ${Math.round(readLS(ZOOM_KEY, 1) * 100)}%</span><small>Нажмите, чтобы сбросить; в чате — Ctrl + = / −</small></button>
+    <button type="button" class="x-list-item" data-t="labels"><span>🏷 Сбросить цветные метки</span><small>Метки сообщений и чатов на этом устройстве</small></button>`;
+  const modal = extraModal("Инструменты", box);
+  box.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-t]")?.dataset.t;
+    if (!t) return;
+    modal.close();
+    if (t === "focus") openFocusPanel();
+    if (t === "kw") openKeywords();
+    if (t === "eggs") {
+      writeLS("lm-eggs", !eggs);
+      toast(eggs ? "Пасхалки выключены" : "Пасхалки включены", { icon: "🎉" });
+    }
+    if (t === "zoom") applyMsgZoom(1);
+    if (t === "labels" && confirm("Убрать все цветные метки?")) {
+      writeLS(MSG_LABELS_KEY, {});
+      writeLS(CHAT_LABELS_KEY, {});
+      loadedRows().forEach((r) => paintMsgLabel(r, r.dataset.msgId));
+      chatListEl.querySelectorAll(".room-item").forEach((it) => it._entry && paintChatLabel(it, it._entry.id));
+    }
+  });
+}
+(() => {
+  const anchor = settingsMenu.querySelector('.settings-menu-item[data-section="folders"]');
+  if (!anchor) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "settings-menu-item";
+  btn.id = "settings-tools-btn";
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg><span>Инструменты</span><svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`;
+  btn.addEventListener("click", openToolsHub);
+  anchor.after(btn);
 })();
