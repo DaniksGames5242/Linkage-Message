@@ -385,7 +385,7 @@
         <div class="field avatar-upload-field">
           <div class="avatar-upload" id="new-chat-group-avatar-upload">
             <div class="avatar avatar-xl" id="new-chat-group-avatar-preview">?</div>
-            <button type="button" class="avatar-camera-btn" id="new-chat-group-avatar-pick-btn" title="Загрузить фото">
+            <button type="button" class="avatar-camera-btn" id="new-chat-group-avatar-pick-btn" title="Добавить фото или видео">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="14" r="3.5"/></svg>
             </button>
           </div>
@@ -626,7 +626,8 @@
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="14" r="3.5"/></svg>
               </button>
             </div>
-            <input type="file" id="settings-avatar-input" accept="image/*" class="hidden" />
+            <input type="file" id="settings-avatar-input" accept="image/*,video/*" multiple class="hidden" />
+            <div class="avatar-strip" id="settings-avatar-strip" hidden></div>
             <button type="button" class="link-btn" id="settings-avatar-remove-btn" hidden>Удалить фото</button>
           </div>
           <div class="field">
