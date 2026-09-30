@@ -6074,6 +6074,9 @@ function renderMessageList(msgs, render) {
     }
     render(msg);
   });
+  // Spacing now, before the caller restores the scroll position.
+  cancelAnimationFrame(spacingFrame);
+  applyMessageSpacing();
 }
 
 // Telegram-style spacing: consecutive messages from one sender sent close

@@ -134,7 +134,7 @@ const chatOpen = (p) => p.evaluate(() => document.getElementById("sidebar").clas
     const m = document.getElementById("messages"); const b = m.getBoundingClientRect();
     const rows = [...document.querySelectorAll(".msg-row[data-msg-id]")];
     const top = rows.find((x) => x.getBoundingClientRect().bottom > b.top + 1);
-    return { rows: rows.length, last: rows.at(-1)?.querySelector(".bubble").textContent.trim(), top: top?.querySelector(".bubble").textContent.trim(), off: top ? Math.round(top.getBoundingClientRect().top - b.top) : 0 };
+    return { rows: rows.length, last: rows.at(-1)?.querySelector(".bubble-text").textContent.trim(), top: top?.querySelector(".bubble-text").textContent.trim(), off: top ? Math.round(top.getBoundingClientRect().top - b.top) : 0 };
   });
   await L.check("650 old messages: the newest are shown, a new one still arrives", async () => {
     const names = await L.adminQuery("usernames");

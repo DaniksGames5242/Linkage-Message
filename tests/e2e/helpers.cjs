@@ -34,20 +34,14 @@ const H = {
     }, text);
     await page.waitForTimeout(450);
     if (label === null) return;
-    const direct = await page.evaluate((l) => [...document.querySelectorAll(".ctx-menu .ctx-item")].some((x) => x.textContent.trim().startsWith(l)), label);
-    if (!direct && label !== "Ещё…") {
-      await page.evaluate(() => [...document.querySelectorAll(".ctx-menu .ctx-item")].find((x) => x.textContent.trim() === "Ещё…")?.click());
-      await page.waitForTimeout(400);
-    }
-    await page.evaluate((l) => {
-      const menu = [...document.querySelectorAll(".ctx-menu")].pop();
-      const it = [...(menu?.querySelectorAll(".ctx-item") || [])].find((x) => x.textContent.trim().startsWith(l));
-      if (!it) throw new Error("no menu item " + l + " in: " + [...document.querySelectorAll(".ctx-menu .ctx-item")].map((x) => x.textContent.trim()).join(","));
-      it.click();
-    }, label);
-    await page.waitForTimeout(500);
+    await H.ctxItem(page, label);
   },
   async ctxItem(page, label) {
+    const direct = await page.evaluate((l) => [...([...document.querySelectorAll(".ctx-menu")].pop()?.querySelectorAll(".ctx-item") || [])].some((x) => x.textContent.trim().startsWith(l)), label);
+    if (!direct && label !== "Ещё…") {
+      await page.evaluate(() => [...([...document.querySelectorAll(".ctx-menu")].pop()?.querySelectorAll(".ctx-item") || [])].find((x) => x.textContent.trim() === "Ещё…")?.click());
+      await page.waitForTimeout(400);
+    }
     await page.evaluate((l) => {
       const menu = [...document.querySelectorAll(".ctx-menu")].pop();
       const it = [...(menu?.querySelectorAll(".ctx-item") || [])].find((x) => x.textContent.trim().startsWith(l));
