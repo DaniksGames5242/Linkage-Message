@@ -2152,6 +2152,17 @@ const MI = {
 };
 
 let activeCtx = null;
+let fingerDown = false;
+let fingerUpAt = 0;
+window.addEventListener("touchstart", () => (fingerDown = true), { passive: true, capture: true });
+["touchend", "touchcancel"].forEach((t) =>
+  window.addEventListener(t, (e) => {
+    if (!e.touches.length) {
+      fingerDown = false;
+      fingerUpAt = performance.now();
+    }
+  }, { passive: true, capture: true })
+);
 
 function closeContextMenu(instant = false) {
   const ctxState = activeCtx;
@@ -2217,10 +2228,15 @@ function openContextMenu({ x, y, reactions = null, items }) {
     });
     menu.appendChild(b);
   });
-  backdrop.addEventListener("click", () => closeContextMenu());
+  // A menu opened by a long press appears under the finger: the lift and
+  // whatever the browser synthesizes from it (click, contextmenu) must not
+  // close it. The backdrop only starts listening once the finger is up.
+  const openedAt = performance.now();
+  const armed = () => !fingerDown && performance.now() - openedAt > 350 && performance.now() - fingerUpAt > 300;
+  backdrop.addEventListener("click", () => armed() && closeContextMenu());
   backdrop.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    closeContextMenu();
+    if (armed()) closeContextMenu();
   });
   document.body.append(backdrop, menu);
   animate(backdrop, [{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: "ease-out" });
@@ -2233,7 +2249,7 @@ function openContextMenu({ x, y, reactions = null, items }) {
   menu.style.left = left + "px";
   menu.style.top = top + "px";
   menu.style.transformOrigin = `${x - left}px ${y - top}px`;
-  activeCtx = { menu, backdrop };
+  activeCtx = { menu, backdrop, at: performance.now() };
   // Transform/opacity only: animating a blur on a backdrop-filtered surface
   // is expensive on weak GPUs.
   animate(menu, [{ opacity: 0, transform: "scale(.3)" }, { opacity: 1, transform: "none" }], { spring: "bouncy" });
@@ -2249,13 +2265,14 @@ function onContextGesture(el, handler) {
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     // Android fires its own contextmenu on a long press too: one menu only.
+    const touch = !!timer;
     if (timer) {
       clearTimeout(timer);
       timer = null;
       touchMenuAt = Date.now();
       el._suppressClick = true;
     } else if (Date.now() - touchMenuAt < 1500) return;
-    handler(e.clientX, e.clientY);
+    handler(e.clientX, e.clientY, touch);
   });
   el.addEventListener(
     "touchstart",
@@ -2268,7 +2285,7 @@ function onContextGesture(el, handler) {
         touchMenuAt = Date.now();
         el._suppressClick = true;
         if (navigator.vibrate) navigator.vibrate(12);
-        handler(start.x, start.y);
+        handler(start.x, start.y, true);
       }, 480);
     },
     { passive: true }
@@ -2366,8 +2383,15 @@ function attachRoomSwipe(item, entry) {
 
 function attachRoomMenu(item, entry) {
   item._entry = entry;
+  item.dataset.chatId = entry.id;
+  if (chatSel.ids.has(entry.id)) {
+    chatSel.entries.set(entry.id, entry);
+    item.classList.add("selected");
+  }
   attachRoomSwipe(item, entry);
-  onContextGesture(item, (x, y) => {
+  onContextGesture(item, (x, y, touch) => {
+    // Long press selects the chat; its actions move to the top bar.
+    if (touch || chatSel.active) return toggleChatSelected(item, entry);
     const pinned = isChatPinned(entry.id);
     const muted = isChatMuted(entry.id);
     const unread = entry.data.unread?.[currentUser.uid] || 0;
@@ -2437,6 +2461,130 @@ function pinnedItemHTML(id, iconSvg, title, subtitle) {
 const ARCHIVE_ICON =
   '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="5" rx="1.5"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5"/><line x1="10" y1="12.5" x2="14" y2="12.5"/></svg>';
 let showingArchive = false;
+
+// ---------- Selecting several chats ----------
+
+const chatSel = { active: false, ids: new Set(), entries: new Map() };
+let chatSelBar = null;
+const sidebarEl = document.getElementById("sidebar");
+
+function buildChatSelBar() {
+  chatSelBar = document.createElement("div");
+  chatSelBar.className = "chat-select-top glass hidden";
+  chatSelBar.innerHTML = `
+    <button type="button" class="icon-btn" data-act="cancel" title="Отмена">✕</button>
+    <div class="select-count"></div>
+    <div class="chat-select-actions">
+      <button type="button" class="icon-btn" data-act="pin"></button>
+      <button type="button" class="icon-btn" data-act="mute"></button>
+      <button type="button" class="icon-btn" data-act="read"></button>
+      <button type="button" class="icon-btn" data-act="archive"></button>
+      <button type="button" class="icon-btn danger" data-act="delete" title="Удалить">${MI.trash}</button>
+    </div>`;
+  sidebarEl.appendChild(chatSelBar);
+  chatSelBar.addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act) chatSelAction(act);
+  });
+}
+
+function toggleChatSelected(item, entry) {
+  if (!chatSel.active) {
+    if (!chatSelBar) buildChatSelBar();
+    chatSel.active = true;
+    sidebarEl.classList.add("chat-select-mode");
+    reveal(chatSelBar);
+  }
+  const on = !chatSel.ids.has(entry.id);
+  if (on) {
+    chatSel.ids.add(entry.id);
+    chatSel.entries.set(entry.id, entry);
+  } else {
+    chatSel.ids.delete(entry.id);
+    chatSel.entries.delete(entry.id);
+  }
+  item.classList.toggle("selected", on);
+  animate(item, [{ transform: "scale(.97)" }, { transform: "scale(1)" }], { spring: "jelly" });
+  updateChatSelBar();
+}
+
+function exitChatSelect() {
+  if (!chatSel.active) return;
+  chatSel.active = false;
+  chatSel.ids.clear();
+  chatSel.entries.clear();
+  sidebarEl.classList.remove("chat-select-mode");
+  chatListEl.querySelectorAll(".room-item.selected").forEach((r) => r.classList.remove("selected"));
+  conceal(chatSelBar);
+}
+
+function updateChatSelBar() {
+  const n = chatSel.ids.size;
+  if (!n) return exitChatSelect();
+  morphText(chatSelBar.querySelector(".select-count"), String(n), 1);
+  const ids = [...chatSel.ids];
+  const allPinned = ids.every(isChatPinned);
+  const allMuted = ids.every(isChatMuted);
+  const allArchived = ids.every(isChatArchived);
+  const set = (act, icon, title) => {
+    const b = chatSelBar.querySelector(`[data-act="${act}"]`);
+    b.innerHTML = icon;
+    b.title = title;
+  };
+  set("pin", MI.pin, allPinned ? "Открепить" : "Закрепить");
+  chatSelBar.querySelector('[data-act="pin"]').classList.toggle("on", allPinned);
+  set("mute", allMuted ? MI.bell : MI.bellOff, allMuted ? "Включить уведомления" : "Без звука");
+  set("read", MI.check, "Отметить прочитанным");
+  set("archive", allArchived ? MI.unarchive : MI.archive, allArchived ? "Вернуть из архива" : "В архив");
+}
+
+async function chatSelAction(act) {
+  if (act === "cancel") return exitChatSelect();
+  const entries = [...chatSel.entries.values()];
+  const ids = entries.map((e) => e.id);
+  if (act === "pin") {
+    const pin = !ids.every(isChatPinned);
+    for (const id of ids) await toggleUserList("pinnedChats", id, pin);
+  } else if (act === "mute") {
+    const mute = !ids.every(isChatMuted);
+    for (const id of ids) await toggleUserList("mutedChats", id, mute);
+  } else if (act === "read") {
+    for (const e of entries) {
+      if (isMarkedUnread(e.id)) await toggleUserList("unreadMarks", e.id, false);
+      if ((e.data.unread?.[currentUser.uid] || 0) > 0) (e.kind === "group" ? markGroupRead : markChatRead)(e.id, currentUser.uid).catch(console.error);
+    }
+  } else if (act === "archive") {
+    const archive = !ids.every(isChatArchived);
+    for (const id of ids) await toggleUserList("archivedChats", id, archive);
+    toast(archive ? "Чаты перемещены в архив" : "Чаты возвращены из архива");
+  } else if (act === "delete") {
+    if (!confirm(`Удалить ${ids.length} ${pluralRu(ids.length, "чат", "чата", "чатов")} из списка? Они вернутся, если придёт новое сообщение.`)) return;
+    try {
+      for (const e of entries) {
+        if (e.kind === "group") await hideGroupForMe(e.id, currentUser.uid);
+        else await hideChatForMe(e.id, currentUser.uid);
+        if (currentChatId === e.id) closeCurrentChatView();
+      }
+    } catch (err) {
+      console.error(err);
+      toast("Не удалось удалить чат", { tone: "error" });
+    }
+  }
+  exitChatSelect();
+}
+
+// While chats are selected a tap toggles a chat instead of opening it.
+chatListEl.addEventListener(
+  "click",
+  (e) => {
+    if (!chatSel.active) return;
+    const item = e.target.closest(".room-item");
+    e.stopPropagation();
+    e.preventDefault();
+    if (item?._entry && !item._suppressClick) toggleChatSelected(item, item._entry);
+  },
+  true
+);
 
 function setArchived(chatId, archive, itemEl = null) {
   const doIt = () =>
@@ -3484,7 +3632,7 @@ messagesEl.addEventListener("scroll", () => {
       if (performance.now() - userScrollAt < 250) stickBottom = distanceFromBottom() < 80;
       maybeLoadOlder();
     });
-  if (activeCtx && performance.now() - userScrollAt < 200) closeContextMenu();
+  if (activeCtx && performance.now() - userScrollAt < 200 && performance.now() - activeCtx.at > 400) closeContextMenu();
 }, { passive: true });
 scrollBottomBtn.addEventListener("click", () => {
   messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
@@ -5309,7 +5457,16 @@ function renderMessage(msg, isMine, senderName) {
     openMessageMenu(menuCtx, r.left, r.bottom + 6);
   });
   const bubbleArea = row.querySelector(".msg-group");
-  onContextGesture(bubbleArea, (x, y) => openMessageMenu(menuCtx, x, y));
+  // Long press selects the message (the tap already opens its menu);
+  // right-click with a mouse still opens the menu.
+  onContextGesture(bubbleArea, (x, y, touch) => {
+    if (touch && !msg._scheduled && !row.classList.contains("pending-upload")) {
+      if (selection.active) toggleSelected(row);
+      else enterSelectMode(msg.id);
+      return;
+    }
+    openMessageMenu(menuCtx, x, y);
+  });
   // Double tap / double click = ❤️, like in Telegram and Instagram.
   const quickReact = (x, y) => {
     if (selection.active) return;
@@ -5687,7 +5844,8 @@ messagesEl.addEventListener(
     const row = e.target.closest(".msg-row");
     e.stopPropagation();
     e.preventDefault();
-    if (row) toggleSelected(row);
+    // The click a long press leaves behind already did its job.
+    if (row && !row.querySelector(".msg-group")?._suppressClick) toggleSelected(row);
   },
   true
 );
@@ -10855,6 +11013,10 @@ new ResizeObserver(() => {
 function closeTopLayer() {
   if (activeCtx) {
     closeContextMenu();
+    return true;
+  }
+  if (chatSel.active) {
+    exitChatSelect();
     return true;
   }
   // Dialogs built in JS (list, contact, folder, privacy) close like the rest.
