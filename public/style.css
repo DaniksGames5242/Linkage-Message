@@ -9911,3 +9911,16 @@ html[data-bubble] .msg-row.me .bubble.sticker-bubble {
 @media (max-width: 720px) {
   .chat-select-top { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; }
 }
+
+/* ---------- Settings → Folders & bookmarks ---------- */
+.org-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.org-row { display: flex; align-items: center; gap: 8px; padding: 8px 6px 8px 12px; border-radius: 14px; }
+.org-row.clickable { cursor: pointer; }
+.org-row.clickable:hover { background: var(--accent-soft); }
+.org-main { flex: 1; min-width: 0; }
+.org-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-sub { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.org-actions .icon-btn:disabled { opacity: 0.3; }
+.org-actions .icon-btn.danger { color: #ff5a5f; }
+.org-group-head { font-size: 13px; font-weight: 800; color: var(--accent); padding: 8px 12px 2px; }

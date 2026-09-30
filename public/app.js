@@ -2768,6 +2768,7 @@ async function saveFolders(list) {
   myProfile.folders = list;
   renderCustomFolderTabs();
   renderChats();
+  refreshOrganizer();
   try {
     await updateProfileFields(currentUser.uid, { folders: list });
   } catch (err) {
@@ -2775,6 +2776,7 @@ async function saveFolders(list) {
     myProfile.folders = before;
     renderCustomFolderTabs();
     renderChats();
+    refreshOrganizer();
     toast("Не удалось сохранить папку", { tone: "error" });
   }
 }
@@ -8952,6 +8954,7 @@ function SETTINGS_SECTION_TITLES(section) {
     appearance: "Чаты и оформление",
     security: "Безопасность",
     data: "Данные и память",
+    folders: "Папки и закладки",
     profile: t("menu_profile"),
     privacy: t("menu_privacy"),
     notifications: t("menu_notifications"),
@@ -8989,6 +8992,7 @@ function showSettingsSection(section) {
   if (section === "chats" || section === "appearance") renderAppearance();
   if (section === "security") renderSecurity();
   if (section === "data") renderStorage();
+  if (section === "folders") renderOrganizer();
   const outgoing = visibleSettingsView();
   const panel = document.querySelector(`.settings-tab-panel[data-spanel="${section}"]`);
   const mutate = () => {
@@ -11522,6 +11526,158 @@ function showBookmarks() {
   });
   modal = extraModal("Закладки", box);
 }
+
+// ---------- Settings → Folders & bookmarks ----------
+// One place to manage chat folders, every bookmark and every chat note.
+
+const orgPanel = document.querySelector('.settings-tab-panel[data-spanel="folders"]');
+function refreshOrganizer() {
+  if (orgPanel && !orgPanel.classList.contains("hidden")) renderOrganizer();
+}
+
+function orgChatInfo(chatId) {
+  if (chatId === SAVED_ID) return { name: "Избранное", kind: "saved" };
+  const g = groups.find((x) => x.id === chatId);
+  if (g) return { name: g.name, kind: g.type === "channel" ? "channel" : "group" };
+  const c = folderCandidates().find((x) => x.id === chatId);
+  return { name: c?.name || "Чат", kind: "contact" };
+}
+
+function orgOpenChat(chatId, kind, then) {
+  hideOverlay(settingsOverlay);
+  if (kind === "saved") openSavedChat();
+  else openChatById(chatId, kind);
+  if (!then) return;
+  // Messages arrive asynchronously: wait for the row to appear.
+  let tries = 0;
+  const tick = () => {
+    if (currentChatId === chatId && then()) return;
+    if (++tries < 30) setTimeout(tick, 200);
+  };
+  setTimeout(tick, 300);
+}
+
+function orgRow(title, sub, actions) {
+  const row = document.createElement("div");
+  row.className = "org-row";
+  row.innerHTML = `<div class="org-main"><div class="org-title"></div><div class="org-sub x-dim"></div></div><div class="org-actions"></div>`;
+  row.querySelector(".org-title").textContent = title;
+  row.querySelector(".org-sub").textContent = sub || "";
+  if (!sub) row.querySelector(".org-sub").remove();
+  actions.filter(Boolean).forEach(({ icon, title: t, danger, onClick, disabled }) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "icon-btn" + (danger ? " danger" : "");
+    b.title = t;
+    b.innerHTML = icon;
+    b.disabled = !!disabled;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    row.querySelector(".org-actions").appendChild(b);
+  });
+  return row;
+}
+
+const ORG_UP = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg>';
+const ORG_DOWN = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+
+function renderOrganizer() {
+  if (!orgPanel || !currentUser) return;
+  // Folders
+  const fBox = document.getElementById("org-folders");
+  fBox.replaceChildren();
+  const folders = customFolders();
+  if (!folders.length) fBox.innerHTML = '<p class="x-dim">Папок пока нет. Папка — это отдельная вкладка над списком чатов.</p>';
+  const move = (i, d) => {
+    const list = [...folders];
+    [list[i], list[i + d]] = [list[i + d], list[i]];
+    saveFolders(list);
+  };
+  folders.forEach((f, i) => {
+    const n = (f.chats || []).length;
+    fBox.appendChild(
+      orgRow(f.name, `${n} ${pluralRu(n, "чат", "чата", "чатов")}`, [
+        { icon: ORG_UP, title: "Выше", disabled: i === 0, onClick: () => move(i, -1) },
+        { icon: ORG_DOWN, title: "Ниже", disabled: i === folders.length - 1, onClick: () => move(i, 1) },
+        { icon: MI.edit, title: "Изменить", onClick: () => openFolderEditor(f) },
+        { icon: MI.trash, title: "Удалить", danger: true, onClick: () => deleteFolder(f) },
+      ])
+    );
+  });
+
+  // Bookmarks, grouped by chat
+  const bBox = document.getElementById("org-bookmarks");
+  bBox.replaceChildren();
+  const all = allBookmarks();
+  const chatIds = Object.keys(all).filter((id) => all[id]?.length);
+  if (!chatIds.length) bBox.innerHTML = '<p class="x-dim">Закладок нет. Меню сообщения → «В закладки».</p>';
+  chatIds.forEach((chatId) => {
+    const info = orgChatInfo(chatId);
+    const head = document.createElement("div");
+    head.className = "org-group-head";
+    head.textContent = info.name;
+    bBox.appendChild(head);
+    all[chatId]
+      .slice()
+      .sort((a, b) => a.at - b.at)
+      .forEach((b) => {
+        const when = new Date(b.at).toLocaleString(document.documentElement.lang || "ru", { dateStyle: "short", timeStyle: "short" });
+        const row = orgRow(b.text, when, [
+          {
+            icon: MI.trash,
+            title: "Убрать",
+            danger: true,
+            onClick: () => {
+              const now = allBookmarks();
+              now[chatId] = (now[chatId] || []).filter((x) => x.id !== b.id);
+              if (!now[chatId].length) delete now[chatId];
+              writeLS(BOOKMARKS_KEY, now);
+              renderOrganizer();
+            },
+          },
+        ]);
+        row.classList.add("clickable");
+        row.addEventListener("click", () =>
+          orgOpenChat(chatId, info.kind, () => {
+            if (!messagesEl.querySelector(`[data-msg-id="${CSS.escape(b.id)}"]`)) return false;
+            scrollToMessage(b.id);
+            return true;
+          })
+        );
+        bBox.appendChild(row);
+      });
+  });
+
+  // Chat notes
+  const nBox = document.getElementById("org-notes");
+  nBox.replaceChildren();
+  const notes = readLS(NOTES_KEY, {});
+  const noteIds = Object.keys(notes).filter((id) => notes[id]?.trim());
+  if (!noteIds.length) nBox.innerHTML = '<p class="x-dim">Заметок нет. Меню чата → «Заметка».</p>';
+  noteIds.forEach((chatId) => {
+    const info = orgChatInfo(chatId);
+    const row = orgRow(info.name, notes[chatId].replace(/\s+/g, " ").slice(0, 120), [
+      {
+        icon: MI.trash,
+        title: "Удалить заметку",
+        danger: true,
+        onClick: () => {
+          if (!confirm(`Удалить заметку к «${info.name}»?`)) return;
+          const now = readLS(NOTES_KEY, {});
+          delete now[chatId];
+          writeLS(NOTES_KEY, now);
+          renderOrganizer();
+        },
+      },
+    ]);
+    row.classList.add("clickable");
+    row.addEventListener("click", () => orgOpenChat(chatId, info.kind, () => (openChatNote(), true)));
+    nBox.appendChild(row);
+  });
+}
+document.getElementById("org-folder-add")?.addEventListener("click", () => openFolderEditor(null));
 
 // ---------- Chat tools: jump to date, stats, note, HTML export ----------
 function openJumpToDate() {
