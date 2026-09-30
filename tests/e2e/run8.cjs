@@ -20,10 +20,19 @@ const L = require("./lib.cjs");
   };
   const lastMine = () => A.evaluate(() => [...document.querySelectorAll(".msg-row.me .bubble-text")].pop()?.textContent || "");
   const sees = (re) => L.until(A, (s) => new RegExp(s).test([...document.querySelectorAll(".msg-row.me .bubble-text")].pop()?.textContent || ""), re.source);
-  await L.check("/calc computes", async () => { await send("/calc 2*(3+4)^2"); await sees(/= 98$/); });
+  const result = (re) => L.until(A, (s) => new RegExp(s).test([...document.querySelectorAll("#messages .cmd-result")].pop()?.textContent || ""), re.source);
+  await L.check("typing / lists the commands", async () => {
+    await A.fill("#msg-input", "/");
+    await L.until(A, () => !document.getElementById("cmd-suggest").classList.contains("hidden") && document.querySelectorAll("#cmd-suggest .cmd-item").length > 10);
+    await A.fill("#msg-input", "/ro");
+    await L.until(A, () => [...document.querySelectorAll("#cmd-suggest .cmd-item")].map((b) => b.dataset.cmd).join() === "roll");
+    await A.fill("#msg-input", "");
+  });
+  await L.check("/calc sends the command, then the result from the system", async () => { await send("/calc 2*(3+4)^2"); await sees(/^\/calc 2\*\(3\+4\)\^2$/); await result(/= 98$/); });
+  await L.check("a command mixed with other text is plain text", async () => { await send("/coin please"); await sees(/^\/coin please$/); });
   await L.check("/shrug appends", async () => { await send("/shrug ну ладно"); await sees(/ну ладно ¯\\_\(ツ\)_\/¯/); });
   await L.check("emoji shortcodes", async () => { await send("горит :fire: <3"); await sees(/горит 🔥 ❤️/); });
-  await L.check("/roll", async () => { await send("/roll 6"); await sees(/^🎲 [1-6] \(1–6\)$/); });
+  await L.check("/roll", async () => { await send("/roll 6"); await sees(/^\/roll 6$/); await result(/^🎲 [1-6] \(1–6\)$/); });
   await L.check("/help shows a modal and sends nothing", async () => {
     const before = await A.evaluate(() => document.querySelectorAll(".msg-row.me").length);
     await send("/help");
